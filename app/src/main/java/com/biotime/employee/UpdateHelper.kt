@@ -20,33 +20,35 @@ object UpdateHelper {
     private const val FILE_DIR = "update"
 
     /** Скачивает APK во временную папку приложения. Имя с versionCode, чтобы не кэшировать старое. */
-    fun download(context: Context, apkUrl: String, versionCode: Int): File? = try {
-        val dir = File(context.filesDir, FILE_DIR).apply { mkdirs() }
-        val target = File(dir, "biotime-${versionCode}.apk")
-        if (target.exists()) return target
+    fun download(context: Context, apkUrl: String, versionCode: Int): File? {
+        try {
+            val dir = File(context.filesDir, FILE_DIR).apply { mkdirs() }
+            val target = File(dir, "biotime-${versionCode}.apk")
+            if (target.exists()) return target
 
-        val tmp = File(dir, "biotime-${versionCode}.apk.part")
-        val conn = URL(apkUrl).openConnection() as HttpURLConnection
-        conn.connectTimeout = 20_000
-        conn.readTimeout = 30_000
-        conn.setRequestProperty("Accept", "application/vnd.android.package-archive")
-        conn.connect()
-        if (conn.responseCode !in 200..299) return null
+            val tmp = File(dir, "biotime-${versionCode}.apk.part")
+            val conn = URL(apkUrl).openConnection() as HttpURLConnection
+            conn.connectTimeout = 20_000
+            conn.readTimeout = 30_000
+            conn.setRequestProperty("Accept", "application/vnd.android.package-archive")
+            conn.connect()
+            if (conn.responseCode !in 200..299) return null
 
-        conn.inputStream.use { input ->
-            FileOutputStream(tmp).use { out ->
-                val buf = ByteArray(64 * 1024)
-                var n: Int
-                while (input.read(buf).also { n = it } != -1) {
-                    out.write(buf, 0, n)
+            conn.inputStream.use { input ->
+                FileOutputStream(tmp).use { out ->
+                    val buf = ByteArray(64 * 1024)
+                    var n: Int
+                    while (input.read(buf).also { n = it } != -1) {
+                        out.write(buf, 0, n)
+                    }
                 }
             }
-        }
-        conn.disconnect()
+            conn.disconnect()
 
-        if (tmp.exists() && tmp.length() > 0 && tmp.renameTo(target)) target else tmp
-    } catch (_: Exception) {
-        null
+            return if (tmp.exists() && tmp.length() > 0 && tmp.renameTo(target)) target else tmp
+        } catch (_: Exception) {
+            return null
+        }
     }
 
     /** Открывает системный установщик для скачанного APK. */
