@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Личный кабинет сотрудника</string>
+    <string name="app_name">Личный кабинет ПрофМаркетСистем</string>
 
     <string name="tracking_channel_name">Трекинг местоположения</string>
     <string name="tracking_channel_desc">PMS определяет ваше местоположение во время работы, чтобы админ видел маршрут</string>
