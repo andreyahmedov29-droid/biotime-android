@@ -6,6 +6,8 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -79,6 +81,21 @@ class MainActivity : AppCompatActivity() {
         webView.webViewClient = object : WebViewClient() {
             // Оставляем навигацию внутри WebView (не открываем системный браузер).
             override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean = false
+            // При загрузке основного документа шлюз платформы может вернуть
+            // 401/403 (BH_LOGIN_REQUIRED) — типично при включённом VPN, когда
+            // сессия не проходит через туннель. Показываем понятное сообщение
+            // вместо «сырого» JSON-ответа на чёрном экране.
+            override fun onReceivedHttpError(
+                view: WebView?,
+                request: WebResourceRequest?,
+                errorResponse: WebResourceResponse?
+            ) {
+                super.onReceivedHttpError(view, request, errorResponse)
+                val code = errorResponse?.statusCode ?: 0
+                if (request?.isForMainFrame == true && (code == 401 || code == 403)) {
+                    view?.post { showLoginRequiredDialog() }
+                }
+            }
         }
 
         // Мост, через который веб-код передаёт активный routeId нативному трекеру.
@@ -88,6 +105,26 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadApp() {
         webView.loadUrl(APP_URL)
+    }
+
+    // Понятное сообщение вместо «чёрного экрана с JSON», когда шлюз платформы
+    // не пускает приложение (BH_LOGIN_REQUIRED) — чаще всего из-за включённого VPN,
+    // который меняет маршрут и «сбрасывает» авторизацию.
+    private fun showLoginRequiredDialog() {
+        if (isFinishing || isDestroyed) return
+        AlertDialog.Builder(this)
+            .setTitle("Требуется вход в приложение")
+            .setMessage(
+                "Не удалось подтвердить вход на платформе. Частая причина — включённый VPN: " +
+                "он меняет сетевой маршрут и блокирует авторизацию приложения.\n\n" +
+                "Отключите VPN и нажмите «Повторить»."
+            )
+            .setCancelable(false)
+            .setPositiveButton("Повторить") { _: DialogInterface?, _: Int ->
+                webView.loadUrl(APP_URL)
+            }
+            .setNegativeButton("Закрыть", null)
+            .show()
     }
 
     private fun requestPermissionsIfNeeded() {
