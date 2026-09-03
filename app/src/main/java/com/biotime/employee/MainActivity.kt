@@ -214,6 +214,16 @@ class MainActivity : AppCompatActivity() {
         fun setRouteId(routeId: String) {
             LocationTrackingService.setActiveRouteId(this@MainActivity, routeId)
         }
+
+        // Установленная версия APK (versionCode), которую веб-интерфейс сравнивает
+        // с /api/app/update-info. Веб идёт через сессию шлюза, поэтому он видит
+        // актуальную версию сервера, а нативный код сообщает версию устройства.
+        @android.webkit.JavascriptInterface
+        fun getVersionCode(): Int = try {
+            packageManager.getPackageInfo(packageName, 0).versionCode
+        } catch (_: Exception) {
+            0
+        }
     }
 
     override fun onBackPressed() {
