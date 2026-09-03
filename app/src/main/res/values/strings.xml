@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Личный кабинет сотрудника</string>
+
+    <string name="tracking_channel_name">Трекинг местоположения</string>
+    <string name="tracking_channel_desc">BIOTIME определяет ваше местоположение во время работы, чтобы админ видел маршрут</string>
+    <string name="tracking_notif_title">BIOTIME</string>
+    <string name="tracking_notif_text">Отслеживание маршрута активно</string>
+
+    <string name="perm_rationale">Чтобы админ видел ваш маршрут на карте даже при свёрнутом приложении, разрешите доступ к местоположению</string>
+    <string name="perm_rationale_bg">Для фонового трекинга нужен доступ к местоположению «всегда». Включите его в настройках.</string>
+    <string name="battery_rationale">Разрешите BIOTIME работать в фоне (исключение из энергосбережения), иначе система остановит трекинг</string>
+</resources>

@@ -1,0 +1,12 @@
+# Промежуточные файлы сборки и локальная конфигурация — не должны попадать в git/CI
+*.iml
+.gradle/
+.idea/
+local.properties
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+output.json

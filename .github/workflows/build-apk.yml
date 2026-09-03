@@ -1,0 +1,38 @@
+name: Build APK
+
+# Собирает отладочный и (по желанию) release APK каждый раз при пуше и по кнопке.
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch: # ручной запуск: вкладка Actions ▸ "Build APK" ▸ Run workflow
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout репозитория
+        uses: actions/checkout@v4
+
+      - name: Установить JDK 17 (нужен для Kotlin 1.9 / AGP 8.x)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Включить кэш Gradle (ускоряет пересборки)
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Собрать отладочный APK
+        run: ./gradlew assembleDebug
+
+      - name: Собрать release APK (подписан отладочным ключом — можно сразу ставить)
+        run: ./gradlew assembleRelease
+
+      - name: Выгрузить APK как артефакт
+        uses: actions/upload-artifact@v4
+        with:
+          name: biotime-apk
+          path: |
+            app/build/outputs/apk/debug/*.apk
+            app/build/outputs/apk/release/*.apk
+          if-no-files-found: warn
