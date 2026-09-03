@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Пути, которые FileProvider разрешает отдавать наружу (для установки APK-обновления) -->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <files-path name="update" path="update/" />
+</paths>

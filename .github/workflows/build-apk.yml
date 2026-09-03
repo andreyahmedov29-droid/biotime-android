@@ -1,6 +1,7 @@
 name: Build APK
 
-# Собирает отладочный и (по желанию) release APK каждый раз при пуше и по кнопке.
+# Собирает APK по кнопке (workflow_dispatch) и при пуше в main/master,
+# публикует APK в GitHub Release для self-update.
 on:
   push:
     branches: [main, master]
@@ -11,28 +12,47 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout репозитория
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Установить JDK 17 (нужен для Kotlin 1.9 / AGP 8.x)
-        uses: actions/setup-java@v4
+      - name: Установить JDK 17
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Включить кэш Gradle (ускоряет пересборки)
+      - name: Кэш Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Собрать отладочный APK
+      - name: Права на gradlew (Linux)
+        run: chmod +x gradlew
+
+      - name: Собрать debug APK
         run: ./gradlew assembleDebug
 
-      - name: Собрать release APK (подписан отладочным ключом — можно сразу ставить)
+      - name: Собрать release APK
         run: ./gradlew assembleRelease
 
       - name: Выгрузить APK как артефакт
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: biotime-apk
           path: |
             app/build/outputs/apk/debug/*.apk
             app/build/outputs/apk/release/*.apk
           if-no-files-found: warn
+
+      # Публикуем release-APK в GitHub Release «biotime-apk-latest» — у него будет
+      # прямая ссылка, которую приложение использует для self-update:
+      #   https://github.com/<owner>/<repo>/releases/download/biotime-apk-latest/app-release.apk
+      # Эту ссылку затем впишите в APP_UPDATE_APK_URL на сервере (см. README).
+      - name: Опубликовать APK в GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: biotime-apk-latest
+          name: BIOTIME APK (latest)
+          body: |
+            Автоматическая сборка APK.
+            Ссылка для self-update:
+            https://github.com/${{ github.repository }}/releases/download/biotime-apk-latest/app-release.apk
+          files: app/build/outputs/apk/release/*.apk
+          token: ${{ secrets.GITHUB_TOKEN }}

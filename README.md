@@ -29,6 +29,8 @@ android/
     src/main/AndroidManifest.xml
     src/main/java/com/biotime/employee/
       MainActivity.kt                 — WebView-обёртка + мост routeId
+      UpdateChecker.kt                — проверка новой версии (self-update)
+      UpdateHelper.kt                 — скачивание и установка нового APK
       tracking/LocationTrackingService.kt  — фоновый трекер
       tracking/BootReceiver.kt        — перезапуск после загрузки устройства
       tracking/GpsReceiver.kt         — перезапуск после включения GPS
@@ -112,3 +114,38 @@ release-APK подписан отладочным ключом (см. `build.gra
   например `ru.company.biotime`, и обновите namespace — это меняется в
   `app/build.gradle.kts` и в путях Kotlin-файлов.
 - Замените иконку-заглушку на фирменную (drawable/ic_launcher_foreground.xml).
+
+## Автообновление APK (self-update)
+
+Приложение умеет само проверять новую версию и предлагать установить её
+(без Google Play). Работает через GitHub Releases + эндпоинт на сервере BIOTIME.
+
+### Как это устроено
+
+1. **CI** (`build-apk.yml`) после сборки публикует `app-release.apk` в GitHub
+   Release `biotime-apk-latest` → появляется прямая ссылка вида:
+   `https://github.com/<owner>/<repo>/releases/download/biotime-apk-latest/app-release.apk`.
+2. **Сервер BIOTIME** отвечает на `GET /api/app/update-info` версией и этой ссылкой
+   (задаётся переменными окружения на сервере).
+3. **Приложение** при запуске (`UpdateChecker`) спрашивает сервер: если версия
+   новее установленной — показывает диалог «Доступно обновление». Пользователь
+   жмёт «Обновить», приложение скачивает APK (`UpdateHelper`) и открывает
+   системный установщик.
+
+### Настройка (разово)
+
+1. **На сервере BIOTIME** задайте переменные окружения:
+   - `APP_UPDATE_VERSION_CODE` — целое число, увеличивать при новом релизе;
+   - `APP_UPDATE_VERSION_NAME` — «1.0.1»;
+   - `APP_UPDATE_APK_URL` — прямая ссылка на `app-release.apk` из GitHub Release;
+   - `APP_UPDATE_NOTES` — что изменилось (подставляется в диалог).
+2. **В CI** (workflow уже настроен) включите разрешение создавать Release:
+   Settings ▸ Actions ▸ Workflow permissions ▸ «Read and write permissions».
+
+### Ограничения
+
+- Водитель один раз должен разрешить установку из неизвестных источников —
+  при первом обновлении откроются системные настройки, нужно включить.
+- Новая версия установится поверх старой: данные приложения сохраняются.
+- Если не задать `APP_UPDATE_APK_URL` — автообновление просто не будет
+  предлагаться (приложение работает как раньше).

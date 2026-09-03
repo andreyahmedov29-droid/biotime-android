@@ -13,6 +13,10 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.biotime.employee.tracking.LocationTrackingService
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
+import android.app.AlertDialog
+import android.content.DialogInterface
 
 /**
  * WebView-обёртка вокруг BIOTIME: открывает приложение во весь экран и
@@ -49,6 +53,7 @@ class MainActivity : AppCompatActivity() {
         loadApp()
 
         requestPermissionsIfNeeded()
+        checkForUpdate()
     }
 
     private fun configureWebView() {
@@ -132,6 +137,36 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {
             // На некоторых устройствах активности нет — пропускаем,
             // пользователь может исключить из энергосбережения вручную.
+        }
+    }
+
+    // Проверка нового APK (self-update через GitHub Releases / сервер).
+    // Запускается при старте: если /api/app/update-info отдаёт версию новее
+    // установленной — показываем диалог «Обновить», который скачивает и ставит APK.
+    private fun checkForUpdate() {
+        lifecycleScope.launch {
+            val info = UpdateChecker.check(this@MainActivity)
+            val current = UpdateChecker.currentVersionCode(this@MainActivity)
+            if (info == null || !info.isNewerThan(current) || info.apkUrl.isBlank()) return@launch
+
+            val message = buildString {
+                append("Доступна версия ${info.versionName} (сейчас ${current}).")
+                if (info.notes.isNotBlank()) append("\n\n${info.notes}")
+            }
+            AlertDialog.Builder(this@MainActivity)
+                .setTitle("Доступно обновление")
+                .setMessage(message)
+                .setCancelable(false)
+                .setPositiveButton("Обновить") { _: DialogInterface?, _: Int ->
+                    runCatching {
+                        val file = UpdateHelper.download(
+                            this@MainActivity, info.apkUrl, info.versionCode
+                        )
+                        if (file != null) UpdateHelper.promptInstall(this@MainActivity, file)
+                    }
+                }
+                .setNegativeButton("Позже", null)
+                .show()
         }
     }
 
