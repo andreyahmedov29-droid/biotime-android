@@ -371,6 +371,7 @@ class MainActivity : AppCompatActivity() {
     private fun startQrScan() {
         IntentIntegrator(this)
             .setOrientationLocked(true)
+            .setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
             .setPrompt("Наведите камеру на QR-код этикетки")
             .setBeepEnabled(true)
             .initiateScan()
