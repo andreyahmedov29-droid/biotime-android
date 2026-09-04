@@ -8,6 +8,9 @@
     <!-- Камера для сканирования QR-этикеток отгрузки -->
     <uses-permission android:name="android.permission.CAMERA" />
 
+    <!-- Разрешение устанавливать обновление APK из неизвестных источников (self-update) -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <!-- Геолокация: обычная + фоновая (Android 10+ для фонового трекинга) -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />

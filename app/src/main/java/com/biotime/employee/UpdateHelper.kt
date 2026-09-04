@@ -19,20 +19,29 @@ object UpdateHelper {
     private const val AUTHORITY = "com.biotime.employee.fileprovider"
     private const val FILE_DIR = "update"
 
+    /** Результат скачивания: файл, если успешно, иначе понятная причина ошибки. */
+    data class DownloadResult(val file: File?, val error: String?)
+
     /** Скачивает APK во временную папку приложения. Имя с versionCode, чтобы не кэшировать старое. */
-    fun download(context: Context, apkUrl: String, versionCode: Int): File? {
+    fun download(context: Context, apkUrl: String, versionCode: Int): DownloadResult {
         try {
+            if (apkUrl.isBlank()) {
+                return DownloadResult(null, "Ссылка на обновление не задана на сервере.")
+            }
             val dir = File(context.filesDir, FILE_DIR).apply { mkdirs() }
             val target = File(dir, "biotime-${versionCode}.apk")
-            if (target.exists()) return target
+            if (target.exists()) return DownloadResult(target, null)
 
             val tmp = File(dir, "biotime-${versionCode}.apk.part")
             val conn = URL(apkUrl).openConnection() as HttpURLConnection
             conn.connectTimeout = 20_000
-            conn.readTimeout = 30_000
+            conn.readTimeout = 60_000
             conn.setRequestProperty("Accept", "application/vnd.android.package-archive")
-            conn.connect()
-            if (conn.responseCode !in 200..299) return null
+            val responseCode = conn.responseCode
+            if (responseCode !in 200..299) {
+                conn.disconnect()
+                return DownloadResult(null, "Сервер вернул ошибку ($responseCode) при скачивании APK.")
+            }
 
             conn.inputStream.use { input ->
                 FileOutputStream(tmp).use { out ->
@@ -45,14 +54,25 @@ object UpdateHelper {
             }
             conn.disconnect()
 
-            return if (tmp.exists() && tmp.length() > 0 && tmp.renameTo(target)) target else tmp
-        } catch (_: Exception) {
-            return null
+            val ok = tmp.exists() && tmp.length() > 0
+            if (!ok) {
+                return DownloadResult(null, "Файл обновления пустой или не скачался.")
+            }
+            val final = if (tmp.renameTo(target)) target else tmp
+            return DownloadResult(final, null)
+        } catch (e: Exception) {
+            // Не показываем технический мусор, но даём понятное сообщение.
+            val msg = e.message ?: "Неизвестная ошибка"
+            return DownloadResult(null, "Не удалось скачать обновление: $msg")
         }
     }
 
-    /** Открывает системный установщик для скачанного APK. */
-    fun promptInstall(context: Context, apkFile: File) {
+    /**
+     * Открывает системный установщик для скачанного APK.
+     * @return true, если установщик запущен; false — если нужно разрешение на
+     *         установку из неизвестных источников (настройки уже открыты) или ошибка.
+     */
+    fun promptInstall(context: Context, apkFile: File): Boolean {
         try {
             val uri = FileProvider.getUriForFile(context, AUTHORITY, apkFile)
             val intent = Intent(Intent.ACTION_VIEW).apply {
@@ -69,12 +89,14 @@ object UpdateHelper {
                         android.net.Uri.parse("package:${context.packageName}")
                     )
                     context.startActivity(settings)
-                    return
+                    return false
                 }
             }
             context.startActivity(intent)
-        } catch (_: Exception) {
+            return true
+        } catch (e: Exception) {
             // на устройстве нет установщика / др. ошибка — пропускаем
+            return false
         }
     }
 }

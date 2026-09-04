@@ -17,6 +17,8 @@ import androidx.core.content.ContextCompat
 import com.biotime.employee.tracking.LocationTrackingService
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import android.app.AlertDialog
 import android.content.DialogInterface
 import android.content.Intent
@@ -211,16 +213,48 @@ class MainActivity : AppCompatActivity() {
                 .setMessage(message)
                 .setCancelable(false)
                 .setPositiveButton("Обновить") { _: DialogInterface?, _: Int ->
-                    runCatching {
-                        val file = UpdateHelper.download(
-                            this@MainActivity, info.apkUrl, info.versionCode
-                        )
-                        if (file != null) UpdateHelper.promptInstall(this@MainActivity, file)
-                    }
+                    performUpdate(info)
                 }
                 .setNegativeButton("Позже", null)
                 .show()
         }
+    }
+
+    // Скачивает и запускает установку нового APK; при любой ошибке показывает
+    // понятное сообщение вместо молчаливого «ничего не произошло».
+    private fun performUpdate(info: UpdateInfo) {
+        lifecycleScope.launch {
+            val downloading = AlertDialog.Builder(this@MainActivity)
+                .setTitle("Обновление")
+                .setMessage("Скачиваем новую версию…")
+                .setCancelable(false)
+                .show()
+            val res = withContext(Dispatchers.IO) {
+                UpdateHelper.download(this@MainActivity, info.apkUrl, info.versionCode)
+            }
+            downloading.dismiss()
+            if (res.file == null) {
+                showUpdateNotice("Не удалось обновить приложение", res.error ?: "Ошибка скачивания")
+                return@launch
+            }
+            val launched = UpdateHelper.promptInstall(this@MainActivity, res.file)
+            if (!launched) {
+                showUpdateNotice(
+                    "Разрешите установку из неизвестных источников",
+                    "Включите переключатель для этого приложения в открывшихся настройках " +
+                    "и запустите обновление снова."
+                )
+            }
+        }
+    }
+
+    private fun showUpdateNotice(title: String, message: String) {
+        if (isFinishing || isDestroyed) return
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setMessage(message)
+            .setPositiveButton("ОК", null)
+            .show()
     }
 
     // JS-мост: веб-код зовёт AndroidBridge.setRouteId(...), когда водитель
