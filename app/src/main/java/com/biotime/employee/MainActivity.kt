@@ -22,8 +22,10 @@ import kotlinx.coroutines.withContext
 import android.app.AlertDialog
 import android.content.DialogInterface
 import android.content.Intent
-import com.journeyapps.barcodescanner.IntentIntegrator
-import com.journeyapps.barcodescanner.IntentResult
+// В zxing-android-embedded интеграционные классы сканера лежат в пакете
+// com.google.zxing.integration.android (не в com.journeyapps.barcodescanner).
+import com.google.zxing.integration.android.IntentIntegrator
+import com.google.zxing.integration.android.IntentResult
 import org.json.JSONObject
 
 /**
