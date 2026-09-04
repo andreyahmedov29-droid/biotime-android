@@ -85,6 +85,15 @@ class MainActivity : AppCompatActivity() {
         settings.allowFileAccess = false
         settings.cacheMode = WebSettings.LOAD_DEFAULT
         webView.setBackgroundColor(0xFF08090D.toInt())
+        // Аппаратное ускорение рендеринга WebView: переносит отрисовку страницы
+        // (скролл, анимации, частые перерисовки JS) на GPU, а не грузит CPU.
+        // Отключаем программный рендер, чтобы темная тема/скролл не лагали на
+        // слабых устройствах. HARDWARE — значение по умолчанию в современных
+        // версиях, но здесь выставляем явно для гарантии.
+        webView.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+        // Отключаем эффект «отскока» по краям — сокращает лишние прорисовки и
+        // «прыжки» содержимого при достижении конца списка.
+        webView.overScrollMode = android.view.View.OVER_SCROLL_NEVER
 
         // Геолокация из WebView нужна, только пока приложение открыто;
         // в фоне работает нативный сервис.
