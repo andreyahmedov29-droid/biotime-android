@@ -11,8 +11,8 @@ android {
         applicationId = "com.biotime.employee"
         minSdk = 26          // Android 8.0: позволяет использовать адаптивные иконки без PNG-фолбэков
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.0.3"
+        versionCode = 5
+        versionName = "1.0.4"
     }
 
     buildTypes {
@@ -50,4 +50,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("com.google.android.material:material:1.12.0")
     implementation("com.google.android.gms:play-services-location:21.3.0")
+    // Встроенный QR/штрих-код сканер (ZXing) — для этикеток отгрузки.
+    // Используется мостом AndroidBridge.scanQR из MainActivity.
+    implementation("com.journeyapps:barcodescanner:4.3.0")
 }

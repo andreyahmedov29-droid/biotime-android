@@ -19,6 +19,10 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import android.app.AlertDialog
 import android.content.DialogInterface
+import android.content.Intent
+import com.journeyapps.barcodescanner.IntentIntegrator
+import com.journeyapps.barcodescanner.IntentResult
+import org.json.JSONObject
 
 /**
  * WebView-обёртка вокруг BIOTIME: открывает приложение во весь экран и
@@ -31,6 +35,12 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
 
+    // Отложенный вызов из веба «Отсканируй QR»: имя JS-колбэка и действие
+    // (load — погрузка складом, unload — выгрузка водителем). Результат сканера
+    // возвращается в веб через window[callbackName]({...}).
+    @Volatile private var pendingQrCallback: String? = null
+    @Volatile private var pendingQrAction: String? = null
+
     // Запрос обычного доступа к местоположению + уведомлениям.
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
@@ -42,6 +52,12 @@ class MainActivity : AppCompatActivity() {
                 maybeAskBackgroundLocation()
                 maybeAskBatteryOptimization()
             }
+        }
+
+    // Запрос доступа к камере строго для сканера QR (по нажатию «Сканировать»).
+    private val cameraPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) startQrScan() else notifyQrResult(false, null, "Нет доступа к камере")
         }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -224,6 +240,66 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {
             0
         }
+
+        // Сканирование QR-этикетки отгрузки. Веб вызывает:
+        //   AndroidBridge.scanQR("myCallback", "load" | "unload")
+        // Натив запрашивает камеру, открывает встроенный ZXing-сканер и возвращает
+        // результат в веб через window.myCallback({ok, code, action, message}).
+        @android.webkit.JavascriptInterface
+        fun scanQR(callbackName: String, action: String) {
+            pendingQrCallback = callbackName
+            pendingQrAction = action
+            requestCameraAndScan()
+        }
+    }
+
+    private fun startQrScan() {
+        IntentIntegrator(this)
+            .setOrientationLocked(true)
+            .setPrompt("Наведите камеру на QR-код этикетки")
+            .setBeepEnabled(true)
+            .initiateScan()
+    }
+
+    private fun requestCameraAndScan() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+            == PackageManager.PERMISSION_GRANTED) {
+            startQrScan()
+        } else {
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    // Результат встроенного сканера (IntentIntegrator).
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        val result: IntentResult? = IntentIntegrator.parseActivityResult(requestCode, resultCode, data)
+        if (result == null) return
+        if (!result.contents.isNullOrBlank()) {
+            notifyQrResult(true, result.contents, null)
+        } else {
+            notifyQrResult(false, null, "Сканирование отменено")
+        }
+    }
+
+    private fun callJs(js: String) {
+        runOnUiThread {
+            if (::webView.isInitialized) webView.evaluateJavascript(js, null)
+        }
+    }
+
+    private fun notifyQrResult(ok: Boolean, code: String?, message: String?) {
+        val cb = pendingQrCallback ?: return
+        val action = pendingQrAction ?: ""
+        pendingQrCallback = null
+        pendingQrAction = null
+        val payload = JSONObject()
+            .put("ok", ok)
+            .put("code", code ?: "")
+            .put("cancelled", !ok)
+            .put("action", action)
+            .put("message", message ?: "")
+        callJs("window.$cb && window.$cb(${payload.toString()})")
     }
 
     override fun onBackPressed() {
