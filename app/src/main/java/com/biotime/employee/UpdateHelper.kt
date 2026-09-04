@@ -22,6 +22,15 @@ object UpdateHelper {
     /** Результат скачивания: файл, если успешно, иначе понятная причина ошибки. */
     data class DownloadResult(val file: File?, val error: String?)
 
+    /**
+     * Итог попытки открыть установщик. Вместо сырого Boolean возвращаем и причину,
+     * чтобы приложение могло показать водителю конкретный шаг, а не молча закрыть
+     * окно: MISSING_PERMISSION — нужно разрешение на установку из неизвестных
+     * источников; NO_HANDLER — на устройстве нет установщика; ERROR — иное.
+     * INSTALLED — установщик запущен (дальше действует системный экран).
+     */
+    enum class InstallResult { INSTALLED, MISSING_PERMISSION, NO_HANDLER, ERROR }
+
     /** Скачивает APK во временную папку приложения. Имя с versionCode, чтобы не кэшировать старое. */
     fun download(context: Context, apkUrl: String, versionCode: Int): DownloadResult {
         try {
@@ -69,10 +78,10 @@ object UpdateHelper {
 
     /**
      * Открывает системный установщик для скачанного APK.
-     * @return true, если установщик запущен; false — если нужно разрешение на
-     *         установку из неизвестных источников (настройки уже открыты) или ошибка.
+     * @return InstallResult.INSTALLED, если установщик запущен; иначе — конкретная
+     *         причина (см. enum), чтобы UI показал понятный шаг вместо молчания.
      */
-    fun promptInstall(context: Context, apkFile: File): Boolean {
+    fun promptInstall(context: Context, apkFile: File): InstallResult {
         try {
             val uri = FileProvider.getUriForFile(context, AUTHORITY, apkFile)
             val intent = Intent(Intent.ACTION_VIEW).apply {
@@ -88,15 +97,23 @@ object UpdateHelper {
                         android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
                         android.net.Uri.parse("package:${context.packageName}")
                     )
-                    context.startActivity(settings)
-                    return false
+                    try {
+                        context.startActivity(settings)
+                    } catch (_: Exception) {
+                        // на некоторых устройствах активности нет — вернём причину,
+                        // пользователь включит разрешение вручную в настройках
+                    }
+                    return InstallResult.MISSING_PERMISSION
                 }
             }
+            val resolved = intent.resolveActivity(context.packageManager)
+            if (resolved == null) {
+                return InstallResult.NO_HANDLER
+            }
             context.startActivity(intent)
-            return true
+            return InstallResult.INSTALLED
         } catch (e: Exception) {
-            // на устройстве нет установщика / др. ошибка — пропускаем
-            return false
+            return InstallResult.ERROR
         }
     }
 }

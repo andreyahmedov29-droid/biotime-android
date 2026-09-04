@@ -22,6 +22,7 @@ import kotlinx.coroutines.withContext
 import android.app.AlertDialog
 import android.content.DialogInterface
 import android.content.Intent
+import java.io.File
 // В zxing-android-embedded интеграционные классы сканера лежат в пакете
 // com.google.zxing.integration.android (не в com.journeyapps.barcodescanner).
 import com.google.zxing.integration.android.IntentIntegrator
@@ -232,8 +233,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     // Скачивает и запускает установку нового APK; при любой ошибке показывает
-    // понятное сообщение вместо молчаливого «ничего не произошло».
+    // понятное сообщение вместо молчаливого «ничего не произошло». Каждый шаг
+    // пишется в лог-файл, чтобы можно было точно понять, где оборвалась цепочка.
     private fun performUpdate(info: UpdateInfo) {
+        appendUpdateLog("Начало обновления: versionCode=${info.versionCode}, apkUrl=${info.apkUrl}")
         lifecycleScope.launch {
             val downloading = AlertDialog.Builder(this@MainActivity)
                 .setTitle("Обновление")
@@ -245,17 +248,60 @@ class MainActivity : AppCompatActivity() {
             }
             downloading.dismiss()
             if (res.file == null) {
+                appendUpdateLog("Скачивание не удалось: ${res.error}")
                 showUpdateNotice("Не удалось обновить приложение", res.error ?: "Ошибка скачивания")
                 return@launch
             }
-            val launched = UpdateHelper.promptInstall(this@MainActivity, res.file)
-            if (!launched) {
-                showUpdateNotice(
-                    "Разрешите установку из неизвестных источников",
-                    "Включите переключатель для этого приложения в открывшихся настройках " +
-                    "и запустите обновление снова."
-                )
+            appendUpdateLog("APK скачан: ${res.file.absolutePath} (${res.file.length()} байт)")
+            when (UpdateHelper.promptInstall(this@MainActivity, res.file)) {
+                UpdateHelper.InstallResult.INSTALLED -> {
+                    appendUpdateLog("Системный установщик запущен")
+                }
+                UpdateHelper.InstallResult.MISSING_PERMISSION -> {
+                    appendUpdateLog("Нет разрешения на установку из неизвестных источников")
+                    showUpdateNotice(
+                        "Нужно разрешение на установку",
+                        "Приложение не может установить обновление само.\n\n" +
+                        "Открылись настройки Android — включите там переключатель " +
+                        "«Разрешить установку из этого источника» для BIOTIME, затем " +
+                        "нажмите снова «Обновить».\n\n" +
+                        "Если настройки не открылись: Настройки ▸ Приложения ▸ BIOTIME ▸ " +
+                        "«Установка неизвестных приложений» ▸ Разрешить."
+                    )
+                }
+                UpdateHelper.InstallResult.NO_HANDLER -> {
+                    appendUpdateLog("Установщик APK на устройстве не найден")
+                    showUpdateNotice(
+                        "Установщик не найден",
+                        "Системный установщик недоступен на этом устройстве.\n" +
+                        "Скачанный APK лежит внутри приложения; установите вручную " +
+                        "или сообщите администратору."
+                    )
+                }
+                UpdateHelper.InstallResult.ERROR -> {
+                    appendUpdateLog("Ошибка запуска установщика (файл/намерение)")
+                    showUpdateNotice(
+                        "Ошибка установки",
+                        "Не удалось запустить установку. Проверьте свободную память " +
+                        "телефона и наличие системного установщика, затем повторите."
+                    )
+                }
             }
+        }
+    }
+
+    // Пишет строку в лог процесса обновления (filesDir/update/log.txt). Полезно,
+    // когда водитель говорит «нажал Обновить — и ничего»: по этому файлу видно,
+    // где оборвалась цепочка (скачивание vs установка vs разрешение).
+    private fun appendUpdateLog(line: String) {
+        try {
+            val dir = File(filesDir, "update").apply { mkdirs() }
+            val f = File(dir, "log.txt")
+            val ts = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+                .format(java.util.Date())
+            f.appendText("[$ts] $line\n")
+        } catch (_: Exception) {
+            // лог — вспомогательный, его сбой не должен мешать обновлению
         }
     }
 
