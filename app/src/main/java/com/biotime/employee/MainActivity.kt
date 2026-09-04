@@ -76,7 +76,12 @@ class MainActivity : AppCompatActivity() {
         loadApp()
 
         requestPermissionsIfNeeded()
-        checkForUpdate()
+        // Обновлением управляет веб-интерфейс: он показывает диалог «Доступно
+        // обновление» (ходит через сессию шлюза, потому видит актуальную версию),
+        // а установку запускает через нативный мост AndroidBridge.updateApp(...).
+        // Нативный checkForUpdate отключён, чтобы при старте не выскакивали два
+        // одинаковых окна обновления подряд (нативное + веб-модалка).
+        // checkForUpdate()
     }
 
     private fun configureWebView() {
@@ -341,6 +346,25 @@ class MainActivity : AppCompatActivity() {
             pendingQrCallback = callbackName
             pendingQrAction = action
             requestCameraAndScan()
+        }
+
+        // Запуск установки обновления из веб-интерфейса. Веб получает актуальную
+        // версию с /api/app/update-info и зовёт сюда, чтобы установку выполнял
+        // НАТИВНЫЙ код (системный установщик), а не WebView, который не умеет
+        // ставить APK (window.open(apkUrl) в WebView «закрывает окно и молчит»).
+        // Веб вызывает: AndroidBridge.updateApp(versionCode, versionName, apkUrl, notes)
+        @android.webkit.JavascriptInterface
+        fun updateApp(versionCode: Int, versionName: String, apkUrl: String, notes: String) {
+            runOnUiThread {
+                performUpdate(
+                    UpdateInfo(
+                        versionCode = versionCode,
+                        versionName = versionName,
+                        apkUrl = apkUrl,
+                        notes = notes
+                    )
+                )
+            }
         }
     }
 
