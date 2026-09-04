@@ -56,3 +56,26 @@ jobs:
             https://github.com/${{ github.repository }}/releases/download/biotime-apk-latest/app-release.apk
           files: app/build/outputs/apk/release/*.apk
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Авто-оповещение сервера о новой версии APK для self-update.
+      # Чтобы включить — задайте на GitHub два секрета (Settings ▸ Secrets ▸ Actions):
+      #   SERVER_UPDATE_URL   — эндпоинт, который принимает POST {versionCode, versionName, apkUrl}
+      #   SERVER_UPDATE_TOKEN — произвольный токен/секрет (передаётся заголовком X-Update-Token)
+      # Если секреты не заданы — шаг БЕЗОПАСНО пропускается (сборка/публикация релиза уже прошли).
+      - name: Оповестить сервер о новой версии APK
+        env:
+          SERVER_UPDATE_URL: ${{ secrets.SERVER_UPDATE_URL }}
+          SERVER_UPDATE_TOKEN: ${{ secrets.SERVER_UPDATE_TOKEN }}
+        run: |
+          if [ -z "$SERVER_UPDATE_URL" ] || [ -z "$SERVER_UPDATE_TOKEN" ]; then
+            echo "::warning::Секреты SERVER_UPDATE_URL/SERVER_UPDATE_TOKEN не заданы — пропускаем оповещение сервера."
+            exit 0
+          fi
+          VC=$(sed -n 's/.*versionCode = \(.*\)/\1/p' app/build.gradle.kts | tr -d ' \r')
+          VN=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | tr -d ' \r')
+          APK_URL="https://github.com/${{ github.repository }}/releases/download/biotime-apk-latest/app-release.apk"
+          echo "Извещаем сервер: versionCode=$VC versionName=$VN"
+          curl -sS -X POST "$SERVER_UPDATE_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-Update-Token: $SERVER_UPDATE_TOKEN" \
+            --data "{\"versionCode\":$VC,\"versionName\":\"$VN\",\"apkUrl\":\"$APK_URL\"}"
