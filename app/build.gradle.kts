@@ -52,5 +52,6 @@ dependencies {
     implementation("com.google.android.gms:play-services-location:21.3.0")
     // Встроенный QR/штрих-код сканер (ZXing) — для этикеток отгрузки.
     // Используется мостом AndroidBridge.scanQR из MainActivity.
-    implementation("com.journeyapps:barcodescanner:4.3.0")
+    // Координаты: com.journeyapps:zxing-android-embedded (не «barcodescanner»).
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 }

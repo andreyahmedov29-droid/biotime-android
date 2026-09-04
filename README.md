@@ -109,8 +109,9 @@ release-APK подписан отладочным ключом (см. `build.gra
   Если мост не вызывать — трекинг всё равно работает, просто без имени маршрута.
 - **Мост scanQR**: веб-код зовёт `AndroidBridge.scanQR("cbName", "load"|"unload")`,
   натив открывает камеру и возвращает результат в веб через `window.cbName({...})`
-  (`ok`, `code`, `action`, `message`). Зависимость сканера — `com.journeyapps:barcodescanner`
-  (ZXing) в `app/build.gradle.kts`; разрешение `CAMERA` объявлено в манифесте.
+  (`ok`, `code`, `action`, `message`). Зависимость сканера — `com.journeyapps:zxing-android-embedded`
+  (ZXing) в `app/build.gradle.kts` (классы лежат в пакете `com.journeyapps.barcodescanner`);
+  разрешение `CAMERA` объявлено в манифесте.
   В обычном браузере (без нативного моста) веб предлагает ввод кода вручную.
 
 ## Настройка перед релизом
