@@ -74,7 +74,7 @@ jobs:
       # /api/app/update-info — версию вручную на сервере править НЕ нужно.
       # Чтобы включить — задайте на GitHub два секрета (Settings ▸ Secrets ▸ Actions):
       #   SERVER_UPDATE_URL   — адрес POST /api/app/update сервера BIOTIME, например:
-      #     https://app-0cd4491f8939.vibecode.bitrix24.tech/api/app/update
+      #     https://app-22aae7dc61f1.vibecode.bitrix24.tech/api/app/update
       #   SERVER_UPDATE_TOKEN — произвольный токен/секрет (передаётся заголовком
       #     X-Update-Token; должен совпадать с SERVER_UPDATE_TOKEN на сервере).
       # Если секреты не заданы — шаг БЕЗОПАСНО пропускается (сборка/публикация релиза уже прошли).

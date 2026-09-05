@@ -6,7 +6,7 @@
 
 ## Что делает
 
-- Открывает `https://app-0cd4491f8939.vibecode.bitrix24.tech/` (адрес BIOTIME-приложения).
+- Открывает `https://app-22aae7dc61f1.vibecode.bitrix24.tech/` (адрес BIOTIME-приложения).
 - Каждые **15 секунд** отправляет координаты водителя на готовый серверный
   эндпоинт `POST /api/drivers/location`.
 - Работает в фоне через **Foreground Service** (постоянное уведомление).

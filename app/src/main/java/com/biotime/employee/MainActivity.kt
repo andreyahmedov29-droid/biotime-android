@@ -506,6 +506,6 @@ class MainActivity : AppCompatActivity() {
     companion object {
         // Адрес BIOTIME-приложения (за шлюзом платформы — сессия водителя
         // подхватывается автоматически).
-        const val APP_URL = "https://app-0cd4491f8939.vibecode.bitrix24.tech/"
+        const val APP_URL = "https://app-22aae7dc61f1.vibecode.bitrix24.tech/"
     }
 }
