@@ -76,7 +76,12 @@ class MainActivity : AppCompatActivity() {
         // сохранённого состояния, чтобы страница НЕ перезагружалась заново и шлюз
         // платформы не запрашивал повторный вход. Полную перезагрузку делаем
         // только когда восстанавливать нечего (первый запуск).
-        if (savedInstanceState == null || !webView.restoreState(savedInstanceState)) {
+        // Восстановление WebView из сохранённого состояния. Разбиваем на
+        // локальную переменную: `!` перед методом с платформенным (nullable)
+        // аргументом kotlin-компилятор в ряде версий не разрешает
+        // («Unresolved reference: !»), а перед Boolean-переменной — всегда ок.
+        val restored = savedInstanceState != null && webView.restoreState(savedInstanceState)
+        if (!restored) {
             loadApp()
         }
 
