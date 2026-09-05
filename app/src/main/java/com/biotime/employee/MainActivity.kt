@@ -6,12 +6,14 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.webkit.WebChromeClient
+import android.webkit.CookieManager
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.biotime.employee.tracking.LocationTrackingService
@@ -69,8 +71,16 @@ class MainActivity : AppCompatActivity() {
         setContentView(webView)
 
         configureWebView()
-        loadApp()
+        // Если Activity пересоздали (например, система убила фоновый процесс после
+        // «Домой», или изменилась конфигурация) — восстанавливаем WebView из
+        // сохранённого состояния, чтобы страница НЕ перезагружалась заново и шлюз
+        // платформы не запрашивал повторный вход. Полную перезагрузку делаем
+        // только когда восстанавливать нечего (первый запуск).
+        if (savedInstanceState == null || !webView.restoreState(savedInstanceState)) {
+            loadApp()
+        }
 
+        configureBackNavigation()
         requestPermissionsIfNeeded()
         // Обновлением управляет веб-интерфейс: он показывает диалог «Доступно
         // обновление» (ходит через сессию шлюза, потому видит актуальную версию),
@@ -80,7 +90,37 @@ class MainActivity : AppCompatActivity() {
         // checkForUpdate()
     }
 
+    // Обработка системной кнопки «Назад» и жеста-свайпа с края экрана
+    // (Android 10+ «влево/вправо»). Используем OnBackPressedCallback — он
+    // перехватывает «назад» на ВСЕХ версиях, включая Android 13+ с predictive
+    // back, где старый onBackPressed() не гарантированно вызывается.
+    private fun configureBackNavigation() {
+        onBackPressedDispatcher.addCallback(
+            this,
+            object : OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() {
+                    if (webView.canGoBack()) {
+                        // Есть история внутри WebView — идём по ней (это нормальная
+                        // навигация, авторизацию она не сбрасывает).
+                        webView.goBack()
+                    } else {
+                        // Истории нет. Вместо закрытия Activity (finish) сворачиваем
+                        // приложение в фон: Activity и WebView продолжают жить, при
+                        // возврате страница остаётся открытой и повторный вход НЕ
+                        // нужен. Это исключает «выкидывание на авторизацию» из-за
+                        // пересоздания Activity.
+                        moveTaskToBack(true)
+                    }
+                }
+            }
+        )
+    }
+
     private fun configureWebView() {
+        // Явно разрешаем приём и сохранение кук сессии шлюза платформы. Куки
+        // сохраняются на диск и переживают пересоздание WebView/Activity, поэтому
+        // сессия входа не сбрасывается при сворачивании или пересоздании.
+        CookieManager.getInstance().setAcceptCookie(true)
         val settings = webView.settings
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
@@ -446,8 +486,16 @@ class MainActivity : AppCompatActivity() {
         callJs("window.$cb && window.$cb(${payload.toString()})")
     }
 
-    override fun onBackPressed() {
-        if (webView.canGoBack()) webView.goBack() else super.onBackPressed()
+    // Сохраняем состояние WebView (текущую страницу и её историю), чтобы при
+    // пересоздании Activity (и убийстве фонового процесса после «Домой») WebView
+    // не грузился заново и не требовал авторизации шлюза.
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        try {
+            webView.saveState(outState)
+        } catch (_: Exception) {
+            // Сохранение состояния WebView — вспомогательное, сбой не критичен.
+        }
     }
 
     override fun onDestroy() {

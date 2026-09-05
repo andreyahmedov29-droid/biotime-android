@@ -11,8 +11,11 @@ android {
         applicationId = "com.biotime.employee"
         minSdk = 26          // Android 8.0: позволяет использовать адаптивные иконки без PNG-фолбэков
         targetSdk = 35
-        versionCode = 6
-        versionName = "1.0.5"
+        // Версия APK. Единый источник — version.json в корне репозитория:
+        // CI (build-apk.yml) синхронизирует valueCode/versionName из него
+        // перед сборкой, поэтому при поднятии версии правьте ТОЛЬКО version.json.
+        versionCode = 9
+        versionName = "1.0.8"
     }
 
     buildTypes {

@@ -23,6 +23,18 @@ jobs:
       - name: Кэш Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # Единый источник версии — version.json в корне репозитория. Перед сборкой
+      # подставляем версию в app/build.gradle.kts, чтобы versionName/versionCode
+      # APK всегда совпадали с version.json (как в desktop-сборке). Поднимайте
+      # версию только в version.json одним правком.
+      - name: Синхронизировать версию из version.json
+        run: |
+          VC=$(sed -n 's/.*"versionCode": \([0-9]*\).*/\1/p' version.json | head -1)
+          VN=$(sed -n 's/.*"versionName": "\([^"]*\)".*/\1/p' version.json | head -1)
+          sed -i "s/versionCode = [0-9]*/versionCode = $VC/" app/build.gradle.kts
+          sed -i "s/versionName = \"[^\"]*\"/versionName = \"$VN\"/" app/build.gradle.kts
+          echo "Версия APK: versionCode=$VC versionName=$VN"
+
       - name: Права на gradlew (Linux)
         run: chmod +x gradlew
 
@@ -58,9 +70,13 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       # Авто-оповещение сервера о новой версии APK для self-update.
+      # Сервер сам записывает присланную версию и начинает отдавать её в
+      # /api/app/update-info — версию вручную на сервере править НЕ нужно.
       # Чтобы включить — задайте на GitHub два секрета (Settings ▸ Secrets ▸ Actions):
-      #   SERVER_UPDATE_URL   — эндпоинт, который принимает POST {versionCode, versionName, apkUrl}
-      #   SERVER_UPDATE_TOKEN — произвольный токен/секрет (передаётся заголовком X-Update-Token)
+      #   SERVER_UPDATE_URL   — адрес POST /api/app/update сервера BIOTIME, например:
+      #     https://app-0cd4491f8939.vibecode.bitrix24.tech/api/app/update
+      #   SERVER_UPDATE_TOKEN — произвольный токен/секрет (передаётся заголовком
+      #     X-Update-Token; должен совпадать с SERVER_UPDATE_TOKEN на сервере).
       # Если секреты не заданы — шаг БЕЗОПАСНО пропускается (сборка/публикация релиза уже прошли).
       - name: Оповестить сервер о новой версии APK
         env:
