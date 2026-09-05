@@ -54,6 +54,14 @@ class LocationTrackingService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Трекер работает ТОЛЬКО пока рабочий день водителя начат и не завершён.
+        // Если день не активен (ещё не начат или уже завершён) — не запускаем
+        // геолокацию и останавливаем сервис. Статус дня задаёт веб через
+        // AndroidBridge.setWorkActive(...).
+        if (!isWorkActive()) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
         startLocationUpdates()
         return START_STICKY // перезапуск системой после убийства процесс
     }
@@ -105,6 +113,9 @@ class LocationTrackingService : Service() {
     private fun send(loc: Location) {
         scope.launch {
             try {
+                // Защита от гонки: если день завершился, пока координата летела —
+                // не отправляем её, чтобы после «Завершить работу» трекер молчал.
+                if (!isWorkActive()) return@launch
                 val routeId = prefs().getString(KEY_ROUTE_ID, "") ?: ""
                 val body = JSONObject()
                     .put("lat", loc.latitude)
@@ -129,6 +140,9 @@ class LocationTrackingService : Service() {
 
     private fun prefs() = getSharedPreferences("biotime", Context.MODE_PRIVATE)
 
+    private fun isWorkActive(): Boolean =
+        prefs().getBoolean(KEY_WORK_ACTIVE, false)
+
     override fun onDestroy() {
         try { fusedClient.removeLocationUpdates(callback) } catch (_: Exception) {}
         scope.cancel()
@@ -141,15 +155,43 @@ class LocationTrackingService : Service() {
         private const val CHANNEL_ID = "biotime_tracking"
         private const val NOTIF_ID = 1
         private const val KEY_ROUTE_ID = "active_route_id"
+        private const val KEY_WORK_ACTIVE = "work_day_active"
         private const val UPDATE_INTERVAL_MS = 15_000L // 15 секунд
 
+        /** Признак активного рабочего дня (начат и не завершён). */
+        fun isWorkActive(context: Context): Boolean =
+            context.getSharedPreferences("biotime", Context.MODE_PRIVATE)
+                .getBoolean(KEY_WORK_ACTIVE, false)
+
+        /**
+         * Устанавливает статус рабочего дня и запускает/останавливает фоновый
+         * трекер геолокации соответственно:
+         *  - active == true  — день начат: запускает сервис (если ещё не бежит);
+         *  - active == false — день завершён (или ещё не начат): останавливает.
+         * Вызывается из веб-интерфейса через AndroidBridge.setWorkActive(...).
+         */
+        fun setWorkActive(context: Context, active: Boolean) {
+            context.getSharedPreferences("biotime", Context.MODE_PRIVATE)
+                .edit().putBoolean(KEY_WORK_ACTIVE, active).apply()
+            if (active) {
+                start(context)
+            } else {
+                stop(context)
+            }
+        }
+
         fun start(context: Context) {
+            if (!isWorkActive(context)) return // не начинаем трекинг вне рабочего дня
             val intent = Intent(context, LocationTrackingService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
             } else {
                 context.startService(intent)
             }
+        }
+
+        fun stop(context: Context) {
+            context.stopService(Intent(context, LocationTrackingService::class.java))
         }
 
         fun setActiveRouteId(context: Context, routeId: String) {

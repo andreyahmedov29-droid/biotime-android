@@ -11,7 +11,11 @@ import android.content.Intent
 class GpsReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == android.location.LocationManager.PROVIDERS_CHANGED_ACTION) {
-            LocationTrackingService.start(context)
+            // Возобновляем трекер после включения GPS ТОЛЬКО при активном рабочем
+            // дне. Если день завершён — трекинг не возобновляется.
+            if (LocationTrackingService.isWorkActive(context)) {
+                LocationTrackingService.start(context)
+            }
         }
     }
 }

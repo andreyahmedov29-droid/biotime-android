@@ -50,8 +50,13 @@ class MainActivity : AppCompatActivity() {
             val fine = result[Manifest.permission.ACCESS_FINE_LOCATION] == true
             val coarse = result[Manifest.permission.ACCESS_COARSE_LOCATION] == true
             if (fine || coarse) {
-                // Базовые разрешения получены — стартуем фоновый трекер.
-                LocationTrackingService.start(this)
+                // Базовые разрешения получены — стартуем фоновый трекер только
+                // если рабочий день уже активен (начат и не завершён). Статус дня
+                // приходит от веба через setWorkActive; вне рабочего дня трекер
+                // не запускается.
+                if (LocationTrackingService.isWorkActive(this)) {
+                    LocationTrackingService.start(this)
+                }
                 maybeAskBackgroundLocation()
                 maybeAskBatteryOptimization()
             }
@@ -232,8 +237,11 @@ class MainActivity : AppCompatActivity() {
         }
 
         if (needed.isEmpty()) {
-            // Разрешения уже есть — сразу стартуем трекер.
-            LocationTrackingService.start(this)
+            // Разрешения уже есть — стартуем трекер, только если день активен
+            // (иначе веб сам запустит через setWorkActive при «Начать работу»).
+            if (LocationTrackingService.isWorkActive(this)) {
+                LocationTrackingService.start(this)
+            }
             maybeAskBackgroundLocation()
             maybeAskBatteryOptimization()
         } else {
@@ -381,6 +389,15 @@ class MainActivity : AppCompatActivity() {
         @android.webkit.JavascriptInterface
         fun setRouteId(routeId: String) {
             LocationTrackingService.setActiveRouteId(this@MainActivity, routeId)
+        }
+
+        // Статус рабочего дня водителя. Веб зовёт AndroidBridge.setWorkActive(true)
+        // при «Начать работу» и setWorkActive(false) при «Завершить работу».
+        // Трекер геолокации работает ТОЛЬКО пока день активен: при завершении дня
+        // натив останавливает фоновую отправку координат.
+        @android.webkit.JavascriptInterface
+        fun setWorkActive(active: Boolean) {
+            LocationTrackingService.setWorkActive(this@MainActivity, active)
         }
 
         // Установленная версия APK (versionCode), которую веб-интерфейс сравнивает

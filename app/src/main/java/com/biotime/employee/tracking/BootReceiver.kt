@@ -11,7 +11,12 @@ import android.content.Intent
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == Intent.ACTION_BOOT_COMPLETED) {
-            LocationTrackingService.start(context)
+            // Перезапускаем трекер после перезагрузки ТОЛЬКО если рабочий день
+            // ещё активен (начат и не завершён). Вне рабочего дня геолокацию
+            // не запрашиваем.
+            if (LocationTrackingService.isWorkActive(context)) {
+                LocationTrackingService.start(context)
+            }
         }
     }
 }
