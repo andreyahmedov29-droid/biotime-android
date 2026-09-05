@@ -97,6 +97,14 @@
             android:exported="false"
             tools:replace="android:screenOrientation" />
 
+        <!-- Кастомный не-полноэкранный сканер QR (Путь 2): камера поверх,
+             панель счётрчика и клиента снизу. Вызывается через AndroidBridge.scanQR
+             вместо полноэкранной CaptureActivity. -->
+        <activity
+            android:name=".QrScanActivity"
+            android:screenOrientation="portrait"
+            android:exported="false" />
+
     </application>
 
 </manifest>

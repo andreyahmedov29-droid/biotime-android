@@ -23,10 +23,6 @@ import android.app.AlertDialog
 import android.content.DialogInterface
 import android.content.Intent
 import java.io.File
-// В zxing-android-embedded интеграционные классы сканера лежат в пакете
-// com.google.zxing.integration.android (не в com.journeyapps.barcodescanner).
-import com.google.zxing.integration.android.IntentIntegrator
-import com.google.zxing.integration.android.IntentResult
 import org.json.JSONObject
 
 /**
@@ -89,6 +85,10 @@ class MainActivity : AppCompatActivity() {
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
         settings.allowFileAccess = false
+        // Веб-камера (getUserMedia) открывается автоматически при сканировании и
+        // переоткрывается между сканами — без этого флага WebView потребовал бы
+        // касание по видео перед каждым запуском потока.
+        settings.mediaPlaybackRequiresUserGesture = false
         settings.cacheMode = WebSettings.LOAD_DEFAULT
         webView.setBackgroundColor(0xFF08090D.toInt())
         // Аппаратное ускорение рендеринга WebView: переносит отрисовку страницы
@@ -110,6 +110,22 @@ class MainActivity : AppCompatActivity() {
                 callback: android.webkit.GeolocationPermissions.Callback
             ) {
                 callback.invoke(origin, true, false)
+            }
+
+            // Разрешаем веб-странице доступ к камере (getUserMedia) — для встроенного
+            // веб-сканера QR: получив видео с камеры, страница показывает его в малом
+            // окне и декодирует QR, а поверх выводит клиента и живой счётчик.
+            // Если WebView не поддержит getUserMedia, веб-код поймает ошибку и сам
+            // откатится на нативный сканер AndroidBridge.scanQR.
+            override fun onPermissionRequest(request: android.webkit.PermissionRequest?) {
+                if (request != null) {
+                    val resources = request.resources ?: arrayOf()
+                    if (resources.contains(android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE)) {
+                        request.grant(resources)
+                        return
+                    }
+                }
+                super.onPermissionRequest(request)
             }
         }
 
@@ -338,13 +354,17 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Сканирование QR-этикетки отгрузки. Веб вызывает:
-        //   AndroidBridge.scanQR("myCallback", "load" | "unload")
-        // Натив запрашивает камеру, открывает встроенный ZXing-сканер и возвращает
+        //   AndroidBridge.scanQR("myCallback", "load"|"unload", done, need, client)
+        // Натив запрашивает камеру, открывает кастомный не-полноэкранный сканер
+        // QrScanActivity (камера сверху, панель счётрчика снизу) и возвращает
         // результат в веб через window.myCallback({ok, code, action, message}).
         @android.webkit.JavascriptInterface
-        fun scanQR(callbackName: String, action: String) {
+        fun scanQR(callbackName: String, action: String, done: Int, need: Int, client: String) {
             pendingQrCallback = callbackName
             pendingQrAction = action
+            pendingQrDone = done
+            pendingQrNeed = need
+            pendingQrClient = client
             requestCameraAndScan()
         }
 
@@ -368,13 +388,33 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // Параметры текущего сеанса сканирования (для запуска QrScanActivity).
+    @Volatile private var pendingQrDone: Int = 0
+    @Volatile private var pendingQrNeed: Int = 0
+    @Volatile private var pendingQrClient: String = ""
+
+    private var scanLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val data = result.data
+        if (result.resultCode == QrScanActivity.RESULT_CODE && data != null) {
+            val code = data.getStringExtra(QrScanActivity.RESULT_OK_EXTRA)
+            if (!code.isNullOrBlank()) {
+                notifyQrResult(true, code, null)
+            } else {
+                notifyQrResult(false, null, "Сканирование отменено")
+            }
+        } else {
+            notifyQrResult(false, null, "Сканирование отменено")
+        }
+    }
+
     private fun startQrScan() {
-        IntentIntegrator(this)
-            .setOrientationLocked(true)
-            .setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
-            .setPrompt("Наведите камеру на QR-код этикетки")
-            .setBeepEnabled(true)
-            .initiateScan()
+        val i = Intent(this, QrScanActivity::class.java).apply {
+            putExtra(QrScanActivity.EXTRA_ACTION, pendingQrAction ?: "")
+            putExtra(QrScanActivity.EXTRA_DONE, pendingQrDone)
+            putExtra(QrScanActivity.EXTRA_NEED, pendingQrNeed)
+            putExtra(QrScanActivity.EXTRA_CLIENT, pendingQrClient)
+        }
+        scanLauncher.launch(i)
     }
 
     private fun requestCameraAndScan() {
@@ -383,18 +423,6 @@ class MainActivity : AppCompatActivity() {
             startQrScan()
         } else {
             cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-        }
-    }
-
-    // Результат встроенного сканера (IntentIntegrator).
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        val result: IntentResult? = IntentIntegrator.parseActivityResult(requestCode, resultCode, data)
-        if (result == null) return
-        if (!result.contents.isNullOrBlank()) {
-            notifyQrResult(true, result.contents, null)
-        } else {
-            notifyQrResult(false, null, "Сканирование отменено")
         }
     }
 
