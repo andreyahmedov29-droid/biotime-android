@@ -71,15 +71,13 @@ class MainActivity : AppCompatActivity() {
         setContentView(webView)
 
         configureWebView()
-        // Если Activity пересоздали (например, система убила фоновый процесс после
-        // «Домой», или изменилась конфигурация) — восстанавливаем WebView из
-        // сохранённого состояния, чтобы страница НЕ перезагружалась заново и шлюз
-        // платформы не запрашивал повторный вход. Полную перезагрузку делаем
-        // только когда восстанавливать нечего (первый запуск).
-        // Восстановление WebView из сохранённого состояния. Разбиваем на
-        // локальную переменную: `!` перед методом с платформенным (nullable)
-        // аргументом kotlin-компилятор в ряде версий не разрешает
-        // («Unresolved reference: !»), а перед Boolean-переменной — всегда ок.
+        // If the Activity was recreated (e.g. the system killed the background
+        // process after "Home", or the configuration changed) - restore the WebView
+        // from the saved state so the page is NOT reloaded and the platform gateway
+        // does not ask for re-login. Full reload only when there is nothing to restore.
+        // Restore into a local variable: putting `!` before a method call with a
+        // platform (nullable) argument is not resolved by some kotlin compilers
+        // ("Unresolved reference: !"), while `!` before a plain Boolean always is.
         val restored = savedInstanceState != null && webView.restoreState(savedInstanceState)
         if (!restored) {
             loadApp()
@@ -95,25 +93,22 @@ class MainActivity : AppCompatActivity() {
         // checkForUpdate()
     }
 
-    // Обработка системной кнопки «Назад» и жеста-свайпа с края экрана
-    // (Android 10+ «влево/вправо»). Используем OnBackPressedCallback — он
-    // перехватывает «назад» на ВСЕХ версиях, включая Android 13+ с predictive
-    // back, где старый onBackPressed() не гарантированно вызывается.
+    // Handles the system "Back" button and the edge-swipe gesture
+    // (Android 10+ "left/right"). Uses OnBackPressedCallback - it intercepts
+    // "back" on ALL versions, including Android 13+ predictive back where the
+    // legacy onBackPressed() is not guaranteed to be called.
     private fun configureBackNavigation() {
         onBackPressedDispatcher.addCallback(
             this,
             object : OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() {
                     if (webView.canGoBack()) {
-                        // Есть история внутри WebView — идём по ней (это нормальная
-                        // навигация, авторизацию она не сбрасывает).
+                        // There is history inside the WebView - navigate back.
                         webView.goBack()
                     } else {
-                        // Истории нет. Вместо закрытия Activity (finish) сворачиваем
-                        // приложение в фон: Activity и WebView продолжают жить, при
-                        // возврате страница остаётся открытой и повторный вход НЕ
-                        // нужен. Это исключает «выкидывание на авторизацию» из-за
-                        // пересоздания Activity.
+                        // No history. Instead of closing the Activity (finish), move
+                        // the app to the background: Activity and WebView stay alive,
+                        // the page stays open on return and no re-login is needed.
                         moveTaskToBack(true)
                     }
                 }
@@ -122,9 +117,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun configureWebView() {
-        // Явно разрешаем приём и сохранение кук сессии шлюза платформы. Куки
-        // сохраняются на диск и переживают пересоздание WebView/Activity, поэтому
-        // сессия входа не сбрасывается при сворачивании или пересоздании.
+        // Explicitly allow receiving and persisting the platform gateway session
+        // cookies. They are stored on disk and survive WebView/Activity recreation,
+        // so the login session is not lost when the app is minimized or recreated.
         CookieManager.getInstance().setAcceptCookie(true)
         val settings = webView.settings
         settings.javaScriptEnabled = true
@@ -491,9 +486,9 @@ class MainActivity : AppCompatActivity() {
         callJs("window.$cb && window.$cb(${payload.toString()})")
     }
 
-    // Сохраняем состояние WebView (текущую страницу и её историю), чтобы при
-    // пересоздании Activity (и убийстве фонового процесса после «Домой») WebView
-    // не грузился заново и не требовал авторизации шлюза.
+    // Save the WebView state (current page and its history) so that when the
+    // Activity is recreated (or the background process is killed after "Home")
+    // the WebView does not reload and does not require gateway re-authorization.
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         try {
