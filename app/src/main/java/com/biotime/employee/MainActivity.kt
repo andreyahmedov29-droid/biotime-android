@@ -75,10 +75,10 @@ class MainActivity : AppCompatActivity() {
         // process after "Home", or the configuration changed) - restore the WebView
         // from the saved state so the page is NOT reloaded and the platform gateway
         // does not ask for re-login. Full reload only when there is nothing to restore.
-        // Restore into a local variable: putting `!` before a method call with a
-        // platform (nullable) argument is not resolved by some kotlin compilers
-        // ("Unresolved reference: !"), while `!` before a plain Boolean always is.
-        val restored = savedInstanceState != null && webView.restoreState(savedInstanceState)
+        // WebView.restoreState(Bundle) returns WebBackForwardList?, not Boolean:
+        // "has something been restored" == (result is not null). Build a Boolean
+        // by comparing with null, otherwise Kotlin reports a type mismatch.
+        val restored = savedInstanceState != null && webView.restoreState(savedInstanceState) != null
         if (!restored) {
             loadApp()
         }
