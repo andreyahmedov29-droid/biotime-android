@@ -25,10 +25,17 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            // Подписываем release отладочным ключом, чтобы APK можно было сразу
-            // установить и раздать водителям. Для Google Play затем поставьте
-            // настоящий signingConfig (keystore).
-            signingConfig = signingConfigs.getByName("debug")
+            // Вариант Б: постоянный keystore «release.keystore» лежит в папке app/
+            // прямо в репозитории. Одна и та же подпись на всех сборках — поэтому
+            // автообновление APK перестаёт выдавать конфликт подписей.
+            // (Ключ в репозитории — приемлемо только для внутренней раздачи
+            // водителям; для Google Play используйте секретный keystore.)
+            signingConfig = signingConfigs.create("release").apply {
+                storeFile = file("release.keystore")
+                storePassword = "biotime2026"
+                keyAlias = "biotime"
+                keyPassword = "biotime2026"
+            }
         }
     }
 
