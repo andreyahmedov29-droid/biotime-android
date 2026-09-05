@@ -400,6 +400,14 @@ class MainActivity : AppCompatActivity() {
             LocationTrackingService.setWorkActive(this@MainActivity, active)
         }
 
+        // Роль «водитель» (состоит ли сотрудник в группе «Водители»). Веб зовёт
+        // AndroidBridge.setDriver(...) после загрузки /api/state (me.isDriver).
+        // Для не-водителей геолокация НЕ запрашивается — трекер не запускается.
+        @android.webkit.JavascriptInterface
+        fun setDriver(isDriver: Boolean) {
+            LocationTrackingService.setDriver(this@MainActivity, isDriver)
+        }
+
         // Установленная версия APK (versionCode), которую веб-интерфейс сравнивает
         // с /api/app/update-info. Веб идёт через сессию шлюза, поэтому он видит
         // актуальную версию сервера, а нативный код сообщает версию устройства.

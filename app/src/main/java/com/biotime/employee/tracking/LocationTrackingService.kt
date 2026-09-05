@@ -54,11 +54,13 @@ class LocationTrackingService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // Трекер работает ТОЛЬКО пока рабочий день водителя начат и не завершён.
+        // Трекер работает ТОЛЬКО у водителя и пока его рабочий день начат и не
+        // завершён. Для не-водителей (не состоят в группе «Водители») геолокация
+        // не запрашивается вообще.
         // Если день не активен (ещё не начат или уже завершён) — не запускаем
-        // геолокацию и останавливаем сервис. Статус дня задаёт веб через
-        // AndroidBridge.setWorkActive(...).
-        if (!isWorkActive()) {
+        // геолокацию и останавливаем сервис. Статус дня и роль задаёт веб через
+        // AndroidBridge.setWorkActive(...) / AndroidBridge.setDriver(...).
+        if (!isDriver() || !isWorkActive()) {
             stopSelf()
             return START_NOT_STICKY
         }
@@ -113,9 +115,9 @@ class LocationTrackingService : Service() {
     private fun send(loc: Location) {
         scope.launch {
             try {
-                // Защита от гонки: если день завершился, пока координата летела —
-                // не отправляем её, чтобы после «Завершить работу» трекер молчал.
-                if (!isWorkActive()) return@launch
+                // Защита от гонки: если пользователь не водитель или день
+                // завершился, пока координата летела — не отправляем её.
+                if (!isDriver() || !isWorkActive()) return@launch
                 val routeId = prefs().getString(KEY_ROUTE_ID, "") ?: ""
                 val body = JSONObject()
                     .put("lat", loc.latitude)
@@ -143,6 +145,9 @@ class LocationTrackingService : Service() {
     private fun isWorkActive(): Boolean =
         prefs().getBoolean(KEY_WORK_ACTIVE, false)
 
+    private fun isDriver(): Boolean =
+        prefs().getBoolean(KEY_IS_DRIVER, false)
+
     override fun onDestroy() {
         try { fusedClient.removeLocationUpdates(callback) } catch (_: Exception) {}
         scope.cancel()
@@ -156,6 +161,7 @@ class LocationTrackingService : Service() {
         private const val NOTIF_ID = 1
         private const val KEY_ROUTE_ID = "active_route_id"
         private const val KEY_WORK_ACTIVE = "work_day_active"
+        private const val KEY_IS_DRIVER = "is_driver"
         private const val UPDATE_INTERVAL_MS = 15_000L // 15 секунд
 
         /** Признак активного рабочего дня (начат и не завершён). */
@@ -163,17 +169,36 @@ class LocationTrackingService : Service() {
             context.getSharedPreferences("biotime", Context.MODE_PRIVATE)
                 .getBoolean(KEY_WORK_ACTIVE, false)
 
+        /** Признак «сотрудник — водитель» (состоит в группе «Водители»). */
+        fun isDriver(context: Context): Boolean =
+            context.getSharedPreferences("biotime", Context.MODE_PRIVATE)
+                .getBoolean(KEY_IS_DRIVER, false)
+
+        /**
+         * Устанавливает, является ли сотрудник водителем (приходит от веба из
+         * /api/state → me.isDriver). Для не-водителей геолокация НЕ запрашивается:
+         * если роль сменилась на «не водитель» — останавливаем трекер.
+         */
+        fun setDriver(context: Context, isDriver: Boolean) {
+            context.getSharedPreferences("biotime", Context.MODE_PRIVATE)
+                .edit().putBoolean(KEY_IS_DRIVER, isDriver).apply()
+            if (!isDriver) {
+                stop(context)
+            }
+        }
+
         /**
          * Устанавливает статус рабочего дня и запускает/останавливает фоновый
          * трекер геолокации соответственно:
          *  - active == true  — день начат: запускает сервис (если ещё не бежит);
          *  - active == false — день завершён (или ещё не начат): останавливает.
+         * Трекер сработает только у водителя (isDriver), иначе игнорируется.
          * Вызывается из веб-интерфейса через AndroidBridge.setWorkActive(...).
          */
         fun setWorkActive(context: Context, active: Boolean) {
             context.getSharedPreferences("biotime", Context.MODE_PRIVATE)
                 .edit().putBoolean(KEY_WORK_ACTIVE, active).apply()
-            if (active) {
+            if (active && isDriver(context)) {
                 start(context)
             } else {
                 stop(context)
@@ -181,7 +206,8 @@ class LocationTrackingService : Service() {
         }
 
         fun start(context: Context) {
-            if (!isWorkActive(context)) return // не начинаем трекинг вне рабочего дня
+            // Не начинаем трекинг ни вне рабочего дня, ни для не-водителей.
+            if (!isDriver(context) || !isWorkActive(context)) return
             val intent = Intent(context, LocationTrackingService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
