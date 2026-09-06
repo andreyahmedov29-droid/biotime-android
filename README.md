@@ -16,6 +16,25 @@
   `AndroidBridge.scanQR`) — склад отмечает погрузку мест, водитель — выгрузку.
 - Перезапускается после перезагрузки устройства и включения GPS.
 
+## Автоматическое обновление версии (авторелиз)
+
+При каждом push в `main` GitHub Actions (`.github/workflows/build-apk.yml`)
+сам:
+
+- инкрементит `versionCode` и patch-версию (`1.1.2 → 1.1.3`) в `version.json`
+  и `app/build.gradle.kts` (коммит с маркером `[skip ci]` — без зацикливания);
+- собирает debug/release APK и публикует его в GitHub Release
+  `biotime-apk-latest`;
+- оповещает сервер (`POST /api/app/update` с заголовком `X-Update-Token`),
+  чтобы версия в `/api/app/update-info` стала больше установленной — тогда
+  приложение при запуске предложит обновиться.
+
+Вручную версию для APK задавать не нужно. Для оповещения сервера на GitHub
+должны быть заданы секреты, совпадающие с переменными окружения на сервере:
+
+- `SERVER_UPDATE_URL` — `https://app-22aae7dc61f1.vibecode.bitrix24.tech/api/app/update`;
+- `SERVER_UPDATE_TOKEN` — тот же токен, что `SERVER_UPDATE_TOKEN` в env сервера.
+
 ## Структура проекта
 
 ```
