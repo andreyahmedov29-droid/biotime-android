@@ -1,5 +1,5 @@
 {
-  "versionCode": 12,
-  "versionName": "1.1.1",
-  "notes": "Производственный календарь РФ; обновление APK"
+  "versionCode": 13,
+  "versionName": "1.1.2",
+  "notes": "Фикс автообновления: сохраняется сессия шлюза при сворачивании приложения (CookieManager.flush() в onPause/onStop + third-party cookies) — после возврата не появляется экран «Защищённый сервер / Войти через Bitrix24»"
 }
