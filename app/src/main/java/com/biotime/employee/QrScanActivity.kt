@@ -15,18 +15,22 @@ import com.journeyapps.barcodescanner.DecoratedBarcodeView
  *
  * Камера-превью (ScannerView из zxing-android-embedded) занимает верхнюю часть
  * экрана, а в нижней — панель с именем клиента и живым счётчиком «отсканировано /
- * нужно». Водитель видит прогресс ВО ВРЕМЯ самой камеры, а не только между сканами.
+ * нужно». Камера НЕ закрывается после каждого скана — считывание идёт непрерывно,
+ * а счётчик в нижней панели растёт на месте. Каждый отсканированный код тут же
+ * уходит в веб через колбэк (webSignal), веб отмечает место на сервере.
  *
- * Сканирует ОДИН QR за запуск и возвращает результат через setResult + finish
- * (стандартный поток Activity). Веб-цикл (qrScanCallback) остаётся прежним: после
- * скана веб показывает оверлей-прогресс (Путь 1), затем снова открывает этот сканер
- * с обновлённым счётчиком.
+ * Сканирует непрерывно, пока not отсканированы все места (done >= need), либо пока
+ * пользователь не нажмёт системный «Назад». Закрывается Activity с результатом:
+ * последний (или отсутствующий) код + счётчик done/need, чтобы веб мог дозапросить
+ * оставшиеся места. Для возврата каждого кода в веб используется сигнальный мост
+ * (передаётся из MainActivity перед запуском).
  *
  * Передаваемые параметры (Intent extra):
  *   EXTRA_ACTION  — "load" | "unload";
  *   EXTRA_CLIENT  — имя клиента для отображения;
  *   EXTRA_DONE    — сколько уже отсканировано;
  *   EXTRA_NEED    — сколько всего нужно.
+ *   EXTRA_CALLBACK — имя веб-функции-колбэка (window[callback](payload)).
  */
 class QrScanActivity : AppCompatActivity() {
 
@@ -35,23 +39,35 @@ class QrScanActivity : AppCompatActivity() {
         const val EXTRA_CLIENT = "biotime.scan.client"
         const val EXTRA_DONE = "biotime.scan.done"
         const val EXTRA_NEED = "biotime.scan.need"
+        const val EXTRA_CALLBACK = "biotime.scan.callback"
 
         // Результат (setResult codes/data):
         const val RESULT_CODE = 0x51
         const val RESULT_OK_EXTRA = "biotime.scan.result.code"
         const val RESULT_CANCELLED_EXTRA = "biotime.scan.result.cancelled"
+
+        // Мост для отправки отсканированного кода в веб. Ставится MainActivity
+        // перед запуском Activity (не может быть передан через Intent). Если мост
+        // не установлен — Activity закрывается после первого скана (старое поведение).
+        @Volatile var webSignal: ((code: String, action: String, done: Int, need: Int) -> Unit)? = null
     }
 
     private var barcodeView: DecoratedBarcodeView? = null
     private var consumedCode: String? = null
+    private var done = 0
+    private var need = 0
+    private var action = "load"
+    private var callback: String = "qrScanCallback"
+    private var counterText: TextView? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         val client = intent.getStringExtra(EXTRA_CLIENT) ?: "Клиент не выбран"
-        val done = intent.getIntExtra(EXTRA_DONE, 0).coerceAtLeast(0)
-        val need = intent.getIntExtra(EXTRA_NEED, 0).coerceAtLeast(0)
-        val action = intent.getStringExtra(EXTRA_ACTION) ?: "load"
+        done = intent.getIntExtra(EXTRA_DONE, 0).coerceAtLeast(0)
+        need = intent.getIntExtra(EXTRA_NEED, 0).coerceAtLeast(0)
+        action = intent.getStringExtra(EXTRA_ACTION) ?: "load"
+        callback = intent.getStringExtra(EXTRA_CALLBACK) ?: callback
 
         // Корневой вертикальный layout: камера (вес 1) + панель прогресса внизу.
         val root = LinearLayout(this).apply {
@@ -82,6 +98,7 @@ class QrScanActivity : AppCompatActivity() {
             text = "$done / $need"
             textSize = 44f
             setTextColor(0xFFFFAB38.toInt())
+            counterText = this
             panel.addView(this)
         }
         TextView(this).apply {
@@ -98,14 +115,17 @@ class QrScanActivity : AppCompatActivity() {
         root.addView(panel)
         setContentView(root)
 
-        // Декодируем каждый появляющийся QR; после первого валидного — возвращаем.
+        // Декодируем каждый появляющийся QR НЕПРЕРЫВНО. Камеру не закрываем:
+        // после каждого кода шлём результат в веб и увеличиваем счётчик. Activity
+        // завершается, когда отсканированы все места, пользователь нажал «Назад»,
+        // либо моста в веб нет (тогда ведём себя как прежде — один QR за запуск).
         barcodeView?.decodeContinuous(object : BarcodeCallback {
             override fun barcodeResult(result: BarcodeResult?) {
                 val text = result?.text ?: return
                 // Защита от повторной отправки одного и того же кадра.
                 if (text == consumedCode) return
                 consumedCode = text
-                finishWithCode(text)
+                handleScanned(text)
             }
 
             override fun possibleResultPoints(resultPoints: List<com.google.zxing.ResultPoint>?) {
@@ -114,10 +134,33 @@ class QrScanActivity : AppCompatActivity() {
         })
     }
 
+    private fun handleScanned(code: String) {
+        val signal = webSignal
+        if (signal == null) {
+            // Нет моста в веб — закрываемся с результатом по-старому (один QR).
+            finishWithCode(code)
+            return
+        }
+        done++
+        runOnUiThread {
+            counterText?.text = "$done / $need"
+        }
+        // Отправляем код в веб (сервер отметит место). Веб сам решит, когда хватит.
+        runOnUiThread {
+            signal(code, action, done, need)
+        }
+        // Если отсканированы все места — камеру можно закрыть.
+        if (done >= need && need > 0) {
+            runOnUiThread { finishWithCode(code) }
+        }
+    }
+
     private fun finishWithCode(code: String) {
         val data = Intent().apply {
             putExtra(RESULT_OK_EXTRA, code)
         }
+        data.putExtra("biotime.scan.done", done)
+        data.putExtra("biotime.scan.need", need)
         setResult(RESULT_CODE, data)
         finish()
     }

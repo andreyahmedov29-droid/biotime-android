@@ -484,6 +484,22 @@ class MainActivity : AppCompatActivity() {
             putExtra(QrScanActivity.EXTRA_DONE, pendingQrDone)
             putExtra(QrScanActivity.EXTRA_NEED, pendingQrNeed)
             putExtra(QrScanActivity.EXTRA_CLIENT, pendingQrClient)
+            putExtra(QrScanActivity.EXTRA_CALLBACK, pendingQrCallback ?: "qrScanCallback")
+        }
+        // Непрерывный скан: мост отправляет каждый отсканированный код в веб,
+        // чтобы веб отметил место на сервере, не закрывая камеру (QrScanActivity
+        // остаётся открытой, пока не отсканированы все места или не нажали «Назад»).
+        QrScanActivity.webSignal = { code, act, d, n ->
+            val payload = JSONObject()
+                .put("ok", true)
+                .put("code", code)
+                .put("cancelled", false)
+                .put("action", act)
+                .put("done", d)
+                .put("need", n)
+                .put("message", "")
+            val cb = pendingQrCallback ?: "qrScanCallback"
+            callJs("window.$cb && window.$cb(${payload.toString()})")
         }
         scanLauncher.launch(i)
     }
@@ -515,6 +531,8 @@ class MainActivity : AppCompatActivity() {
             .put("action", action)
             .put("message", message ?: "")
         callJs("window.$cb && window.$cb(${payload.toString()})")
+        // Скан-сессия завершена — снимаем непрерывный мост.
+        QrScanActivity.webSignal = null
     }
 
     // Save the WebView state (current page and its history) so that when the
