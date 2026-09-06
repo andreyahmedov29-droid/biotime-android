@@ -126,6 +126,12 @@ class MainActivity : AppCompatActivity() {
         // cookies. They are stored on disk and survive WebView/Activity recreation,
         // so the login session is not lost when the app is minimized or recreated.
         CookieManager.getInstance().setAcceptCookie(true)
+        // Принимаем и third-party сессии с SSO-доменов входа (auth2.bitrix24.net /
+        // vibecode.bitrix24.tech → приложение на app-*.vibecode.bitrix24.tech).
+        // Без этого куки сессии, поставленные шлюзом при входе, не доходят до
+        // WebView при повторной навигации после сворачивания, и шлюз снова
+        // показывает экран «Защищённый сервер / Войти через Bitrix24».
+        CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
         val settings = webView.settings
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
@@ -520,6 +526,48 @@ class MainActivity : AppCompatActivity() {
             webView.saveState(outState)
         } catch (_: Exception) {
             // Сохранение состояния WebView — вспомогательное, сбой не критичен.
+        }
+    }
+
+    // Перед уходом в фон принудительно записываем cookies на диск. Session-cookie
+    // шлюза иначе не успевает сохраниться до того, как система убьёт/пересоздаст
+    // WebView при сворачивании — после возврата куки сессии нет, и шлюз снова
+    // показывает экран «Защищённый сервер / Войти через Bitrix24». flush() в
+    // onPause + onStop покрывает и короткое сворачивание, и переключение
+    // приложения / kill процесса.
+    override fun onPause() {
+        super.onPause()
+        try {
+            CookieManager.getInstance().flush()
+        } catch (_: Exception) {
+            // куки — вспомогательное; сбой не должен ронять приложение
+        }
+    }
+
+    override fun onStop() {
+        try {
+            CookieManager.getInstance().flush()
+        } catch (_: Exception) {
+            // см. onPause
+        }
+        super.onStop()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Если при возврате из фона главный документ не загружен (WebView был
+        // пересоздан, а restoreState не восстановил страницу) — возвращаемся на
+        // приложение. Куки сессии к этому моменту уже записаны flush() в
+        // onPause/onStop, поэтому шлюз пустит без повторного входа.
+        try {
+            if (::webView.isInitialized) {
+                val url = webView.url
+                if (url == null || url.isBlank() || url == "about:blank") {
+                    webView.loadUrl(APP_URL)
+                }
+            }
+        } catch (_: Exception) {
+            // восстановление — вспомогательное; сбой не критичен
         }
     }
 
