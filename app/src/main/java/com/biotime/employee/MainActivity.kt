@@ -183,12 +183,6 @@ class MainActivity : AppCompatActivity() {
         webView.webViewClient = object : WebViewClient() {
             // Оставляем навигацию внутри WebView (не открываем системный браузер).
             override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean = false
-            // Страница (и кука сессии шлюза) загружена — запускаем фоновый keepalive
-            // входа, чтобы сессия не рвалась после сворачивания (для всех сотрудников).
-            override fun onPageFinished(view: WebView?, url: String?) {
-                super.onPageFinished(view, url)
-                SessionKeepAliveService.start(this@MainActivity)
-            }
             // При загрузке основного документа шлюз платформы может вернуть
             // 401/403 (BH_LOGIN_REQUIRED) — типично при включённом VPN, когда
             // сессия не проходит через туннель. Показываем понятное сообщение

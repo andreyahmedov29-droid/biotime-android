@@ -17,6 +17,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.net.HttpURLConnection
 import java.net.URL
@@ -45,6 +46,11 @@ import java.net.URL
 class SessionKeepAliveService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // Ссылка на текущий цикл пингования. Гарантирует, что повторные onStartCommand
+    // (после каждого входного вызова start()) не плодят параллельные циклы: перед
+    // запуском нового отменяем предыдущий. Несколько циклов = дубли запросов и
+    // лишняя нагрузка на сессию.
+    private var keepAliveJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -57,8 +63,10 @@ class SessionKeepAliveService : Service() {
         return START_STICKY
     }
 
+    @Synchronized
     private fun startKeepAliveLoop() {
-        scope.launch {
+        keepAliveJob?.cancel()
+        keepAliveJob = scope.launch {
             while (isActive) {
                 pingOnce()
                 delay(INTERVAL_MS)

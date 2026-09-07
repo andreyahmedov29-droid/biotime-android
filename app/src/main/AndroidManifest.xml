@@ -20,6 +20,8 @@
     <!-- Foreground-сервис геолокации и уведомление -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <!-- Тип foreground-сервиса keepalive сессии (Android 14+ требует тип и разрешение) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Исключение из энергосбережения + перезапуск после перезагрузки -->
@@ -58,10 +60,15 @@
             android:exported="false"
             android:foregroundServiceType="location" />
 
-        <!-- Фоновый keepalive входа (держит сессию/WebView живыми без повторного входа) -->
+        <!-- Фоновый keepalive входа (держит сессию/WebView живыми без повторного входа).
+             Тип foregroundServiceType обязателен с Android 14 (API 34): без него
+             startForeground() бросает MissingForegroundServiceTypeException и
+             приложение падает сразу при запуске. dataSync — фоновая синхронизация
+             сессии, без геолокации и камеры. -->
         <service
             android:name=".SessionKeepAliveService"
-            android:exported="false" />
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <!-- Перезапуск трекинга после перезагрузки устройства -->
         <receiver
