@@ -7,6 +7,11 @@
     <string name="tracking_notif_title">PMS</string>
     <string name="tracking_notif_text">Отслеживание маршрута активно</string>
 
+    <string name="keepalive_channel_name">Поддержка входа</string>
+    <string name="keepalive_channel_desc">PMS удерживает приложение активным в фоне, чтобы не приходилось повторно входить после сворачивания</string>
+    <string name="keepalive_notif_title">PMS</string>
+    <string name="keepalive_notif_text">Вход сохранён</string>
+
     <string name="perm_rationale">Чтобы админ видел ваш маршрут на карте даже при свёрнутом приложении, разрешите доступ к местоположению</string>
     <string name="perm_rationale_bg">Для фонового трекинга нужен доступ к местоположению «всегда». Включите его в настройках.</string>
     <string name="battery_rationale">Разрешите PMS работать в фоне (исключение из энергосбережения), иначе система остановит трекинг</string>

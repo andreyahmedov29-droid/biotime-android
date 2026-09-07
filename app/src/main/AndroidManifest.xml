@@ -58,6 +58,11 @@
             android:exported="false"
             android:foregroundServiceType="location" />
 
+        <!-- Фоновый keepalive входа (держит сессию/WebView живыми без повторного входа) -->
+        <service
+            android:name=".SessionKeepAliveService"
+            android:exported="false" />
+
         <!-- Перезапуск трекинга после перезагрузки устройства -->
         <receiver
             android:name=".tracking.BootReceiver"
