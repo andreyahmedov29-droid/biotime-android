@@ -28,6 +28,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import android.webkit.CookieManager
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -130,6 +131,19 @@ class LocationTrackingService : Service() {
                 conn.connectTimeout = 15_000
                 conn.readTimeout = 15_000
                 conn.setRequestProperty("Content-Type", "application/json")
+                // Фоновый keepalive сессии: каждый координатный POST в фоне идёт на домен
+                // приложения через платформенный Gateway. Чтобы Gateway признал запрос и
+                // продлил сессию (_vibe_gw), передаём накопленную WebView-куку сессии так же,
+                // как это делает активная вкладка. Пока рабочий день активен, трекер работает
+                // в фоне каждые ~15 c — значит Gateway-сессия не протухает за время простоя.
+                // Если куки уже нет (например, приложение закрывали дольше срока токена) —
+                // запрос просто вернёт 401, как и раньше, ничего не ломая.
+                try {
+                    val cookie = CookieManager.getInstance().getCookie(url.toString())
+                    if (!cookie.isNullOrEmpty()) conn.setRequestProperty("Cookie", cookie)
+                } catch (_: Exception) {
+                    // куки — вспомогательное; сбой не должен ронять фон
+                }
                 conn.doOutput = true
                 conn.outputStream.use { it.write(body.toString().toByteArray()) }
                 conn.responseCode // 200 — ок; 401/403 — сессия истекла (нужен вход в WebView)
