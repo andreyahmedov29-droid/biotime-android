@@ -457,6 +457,22 @@ class MainActivity : AppCompatActivity() {
                 )
             }
         }
+
+        // Признак «терминал сбора данных» (ТСД): веб зовёт AndroidBridge.isTCD()
+        // после загрузки, чтобы включить компактный интерфейс под небольшой
+        // экран и аппаратный сканер. Возвращает true только для известных
+        // вендоров промышленных ТСД; обычный смартфон даёт false.
+        @android.webkit.JavascriptInterface
+        fun isTCD(): Boolean {
+            val manufacturer = Build.MANUFACTURER.trim().lowercase()
+            val model = Build.MODEL.trim().lowercase()
+            val tcdKeywords = arrayOf(
+                "zebra", "motorola", "honeywell", "dolphin", "urovo",
+                "idata", "newland", "point mobile", "datalogic", "dblue",
+                "optiicon", "chainway", "unicroun", "pax", "sunmi"
+            )
+            return tcdKeywords.any { manufacturer.contains(it) || model.contains(it) }
+        }
     }
 
     // Параметры текущего сеанса сканирования (для запуска QrScanActivity).
