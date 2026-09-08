@@ -22,8 +22,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import android.app.AlertDialog
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.DialogInterface
 import android.content.Intent
+import android.content.IntentFilter
 import java.io.File
 import org.json.JSONObject
 
@@ -37,6 +40,26 @@ import org.json.JSONObject
 class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
+
+    // Сканер ТСД в режиме Broadcast (Атол Smart, Urovo и др.): Android-служба
+    // сканера шлёт системное широковещание, где код лежит в extra "scannerdata".
+    // Ловим нативно и передаём в веб через window.onBarcode (веб в режиме
+    // "external" уже слушает его и обрабатывает код окна «Отгрузка»).
+    private val scannerReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            try {
+                if (intent.action == ATOL_SCAN_ACTION && ::webView.isInitialized) {
+                    val code = intent.getStringExtra("scannerdata")
+                    if (!code.isNullOrBlank()) {
+                        val payload = JSONObject().put("code", code).toString()
+                        callJs("window.onBarcode && window.onBarcode($payload)")
+                    }
+                }
+            } catch (_: Exception) {
+                // Скан — вспомогательное; сбой приёмника не должен ронять приложение.
+            }
+        }
+    }
 
     // Отложенный вызов из веба «Отсканируй QR»: имя JS-колбэка и действие
     // (load — погрузка складом, unload — выгрузка водителем). Результат сканера
@@ -573,6 +596,11 @@ class MainActivity : AppCompatActivity() {
     override fun onPause() {
         super.onPause()
         try {
+            unregisterReceiver(scannerReceiver)
+        } catch (_: Exception) {
+            // приёмник мог быть не зарегистрирован — это не ошибка
+        }
+        try {
             CookieManager.getInstance().flush()
         } catch (_: Exception) {
             // куки — вспомогательное; сбой не должен ронять приложение
@@ -590,6 +618,13 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Регистрируем приёмник сканера ТСД (Broadcast-режим). Приёмник
+        // динамический, поэтому активно ровно столько, сколько живо окно.
+        try {
+            registerReceiver(scannerReceiver, IntentFilter(ATOL_SCAN_ACTION))
+        } catch (_: Exception) {
+            // нет прав/дубликат — пропускаем, клавиатурный путь останется рабочим
+        }
         // Перезапускаем keepalive при возврате из фона: если пользователь только что
         // вошёл заново, свежая кука сессии подхватывается сразу (сервис START_STICKY
         // всё равно пережил бы фон, но после ручного входа стоп/старт не лишний).
@@ -617,6 +652,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
+        // Экшен широковещания Android-службы сканера ТСД Атол (режим Broadcast).
+        // Настраивается в предустановленной утилите «Scan tool» (Barcode Send Model
+        // → Broadcast; Extra key = scannerdata; пароль по умолчанию 888888).
+        private const val ATOL_SCAN_ACTION = "com.android.server.scannerservice.broadcast"
+
         // Адрес BIOTIME-приложения (за шлюзом платформы — сессия водителя
         // подхватывается автоматически).
         const val APP_URL = "https://app-2660de1a180b.vibecode.bitrix24.tech/"
