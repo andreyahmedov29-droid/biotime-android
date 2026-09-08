@@ -469,7 +469,8 @@ class MainActivity : AppCompatActivity() {
             val tcdKeywords = arrayOf(
                 "zebra", "motorola", "honeywell", "dolphin", "urovo",
                 "idata", "newland", "point mobile", "datalogic", "dblue",
-                "optiicon", "chainway", "unicroun", "pax", "sunmi"
+                "optiicon", "chainway", "unicroun", "pax", "sunmi",
+                "atol", "shtrikh"
             )
             return tcdKeywords.any { manufacturer.contains(it) || model.contains(it) }
         }
