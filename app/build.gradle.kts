@@ -15,7 +15,7 @@ android {
         // CI (build-apk.yml) синхронизирует valueCode/versionName из него
         // перед сборкой, поэтому при поднятии версии правьте ТОЛЬКО version.json.
         versionCode = 24
-        versionName = "1.2.1"
+        versionName = "1.1.3"
     }
 
     buildTypes {
