@@ -142,13 +142,13 @@ class QrScanActivity : AppCompatActivity() {
             val bg = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
                 setColor(0xB3141822.toInt())
-                setStroke(dp(2).toInt(), 0x66FFFFFF.toInt())
+                setStroke(dp(2f).toInt(), 0x66FFFFFF.toInt())
             }
             background = bg
-            val size = dp(56).toInt()
+            val size = dp(56f).toInt()
             val lp = FrameLayout.LayoutParams(size, size).apply {
                 gravity = Gravity.TOP or Gravity.END
-                setMargins(0, dp(18).toInt(), dp(18).toInt(), 0)
+                setMargins(0, dp(18f).toInt(), dp(18f).toInt(), 0)
             }
             layoutParams = lp
             setOnClickListener { closeSelf() }
@@ -230,7 +230,7 @@ class QrScanActivity : AppCompatActivity() {
 
     /** Закрытие камеры по команде из веба (когда сервер засчитал все места). */
     fun closeFromWeb() {
-        runOnUiThread { finishWithCode(consumedCode) }
+        runOnUiThread { finishWithCode(consumedCode ?: "") }
     }
 
     override fun onBackPressed() {
