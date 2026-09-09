@@ -69,6 +69,11 @@ class QrScanActivity : AppCompatActivity() {
     private var action = "load"
     private var callback: String = "qrScanCallback"
     private var counterText: TextView? = null
+    // Коды мест, уже засчитанных в текущей сессии сканирования. Камера
+    // (decodeContinuous) может отдавать ОДИН И ТОТ ЖЕ QR несколько раз подряд
+    // (разные кадры/детекции = «пики»). Счётчик done растёт ТОЛЬКО на уникальные
+    // места, чтобы не видеть «11 / 5» при пяти реальных местах.
+    private val seen = HashSet<String>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -182,6 +187,9 @@ class QrScanActivity : AppCompatActivity() {
             finishWithCode(code)
             return
         }
+        // Повторный «пик» уже засчитанного места — игнорируем: счётчик и журнал
+        // не должны учитывать дублирующие детекции одного кода.
+        if (!seen.add(code)) return
         done++
         runOnUiThread {
             counterText?.text = "$done / $need"
