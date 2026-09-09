@@ -1,8 +1,13 @@
 package com.biotime.employee
 
 import android.content.Intent
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.view.ViewGroup
+import android.util.TypedValue
+import android.view.Gravity
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
@@ -19,11 +24,12 @@ import com.journeyapps.barcodescanner.DecoratedBarcodeView
  * а счётчик в нижней панели растёт на месте. Каждый отсканированный код тут же
  * уходит в веб через колбэк (webSignal), веб отмечает место на сервере.
  *
- * Сканирует непрерывно, пока not отсканированы все места (done >= need), либо пока
- * пользователь не нажмёт системный «Назад». Закрывается Activity с результатом:
- * последний (или отсутствующий) код + счётчик done/need, чтобы веб мог дозапросить
- * оставшиеся места. Для возврата каждого кода в веб используется сигнальный мост
- * (передаётся из MainActivity перед запуском).
+ * Сканирует непрерывно, пока пользователь не закроет окно. Закрыть можно
+ * заметной кнопкой-крестиком в правом верхнем углу либо системной кнопкой
+ * «Назад». Закрывается Activity с результатом: последний (или отсутствующий)
+ * код + счётчик done/need, чтобы веб мог дозапросить оставшиеся места. Для
+ * возврата каждого кода в веб используется сигнальный мост (передаётся из
+ * MainActivity перед запуском).
  *
  * Передаваемые параметры (Intent extra):
  *   EXTRA_ACTION  — "load" | "unload";
@@ -50,6 +56,10 @@ class QrScanActivity : AppCompatActivity() {
         // перед запуском Activity (не может быть передан через Intent). Если мост
         // не установлен — Activity закрывается после первого скана (старое поведение).
         @Volatile var webSignal: ((code: String, action: String, done: Int, need: Int) -> Unit)? = null
+
+        // Текущая активная Activity сканера — чтобы веб (через MainActivity) мог
+        // закрыть камеру, когда сервер подтвердит завершение выгрузки мест.
+        @Volatile var current: QrScanActivity? = null
     }
 
     private var barcodeView: DecoratedBarcodeView? = null
@@ -113,12 +123,43 @@ class QrScanActivity : AppCompatActivity() {
         // (высота 0 без веса — камера схлопнулась бы), поэтому добавляем без параметров.
         root.addView(barcodeView)
         root.addView(panel)
-        setContentView(root)
 
-        // Декодируем каждый появляющийся QR НЕПРЕРЫВНО. Камеру не закрываем:
-        // после каждого кода шлём результат в веб и увеличиваем счётчик. Activity
-        // завершается, когда отсканированы все места, пользователь нажал «Назад»,
-        // либо моста в веб нет (тогда ведём себя как прежде — один QR за запуск).
+        // Контейнер-обёртка, поверх камеры располагаем заметный крестик «выхода».
+        val container = FrameLayout(this)
+        container.addView(root, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        ))
+
+        // Крестик закрытия: крупный, контрастный, поверх камеры в правом верхнем углу.
+        val closeBtn = TextView(this).apply {
+            text = "✕"
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 30f)
+            gravity = Gravity.CENTER
+            // Фон-кружок: тёмно-синий полупрозрачный с тонкой светлой рамкой — виден
+            // на любом кадре камеры.
+            val bg = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(0xB3141822.toInt())
+                setStroke(dp(2).toInt(), 0x66FFFFFF.toInt())
+            }
+            background = bg
+            val size = dp(56).toInt()
+            val lp = FrameLayout.LayoutParams(size, size).apply {
+                gravity = Gravity.TOP or Gravity.END
+                setMargins(0, dp(18).toInt(), dp(18).toInt(), 0)
+            }
+            layoutParams = lp
+            setOnClickListener { closeSelf() }
+        }
+        container.addView(closeBtn)
+
+        setContentView(container)
+
+        // Декодируем каждый появляющийся QR НЕПРЕРЫВНО. Камеру не закрываем
+        // автоматически (даже когда счётчик достиг need): каждый код уходит в веб,
+        // а закрытие — только по крестику, «Назад» или при отсутствии моста в веб.
         barcodeView?.decodeContinuous(object : BarcodeCallback {
             override fun barcodeResult(result: BarcodeResult?) {
                 val text = result?.text ?: return
@@ -149,10 +190,6 @@ class QrScanActivity : AppCompatActivity() {
         runOnUiThread {
             signal(code, action, done, need)
         }
-        // Если отсканированы все места — камеру можно закрыть.
-        if (done >= need && need > 0) {
-            runOnUiThread { finishWithCode(code) }
-        }
     }
 
     private fun finishWithCode(code: String) {
@@ -165,8 +202,18 @@ class QrScanActivity : AppCompatActivity() {
         finish()
     }
 
+    /** Закрытие окна сканера по крестику — как системная кнопка «Назад» (отмена). */
+    private fun closeSelf() {
+        onBackPressed()
+    }
+
+    private fun dp(v: Float): Float {
+        return TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, resources.displayMetrics)
+    }
+
     override fun onResume() {
         super.onResume()
+        current = this
         barcodeView?.resume()
     }
 
@@ -177,7 +224,13 @@ class QrScanActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        if (current === this) current = null
         barcodeView = null
+    }
+
+    /** Закрытие камеры по команде из веба (когда сервер засчитал все места). */
+    fun closeFromWeb() {
+        runOnUiThread { finishWithCode(consumedCode) }
     }
 
     override fun onBackPressed() {
