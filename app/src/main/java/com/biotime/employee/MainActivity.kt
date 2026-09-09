@@ -29,6 +29,8 @@ import android.content.Intent
 import android.content.IntentFilter
 import java.io.File
 import org.json.JSONObject
+import android.speech.tts.TextToSpeech
+import java.util.Locale
 
 /**
  * WebView-обёртка вокруг BIOTIME: открывает приложение во весь экран и
@@ -40,6 +42,14 @@ import org.json.JSONObject
 class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
+
+    // Нативный озвучиватель (TextToSpeech) — запасной голос для ТСД/WebView,
+    // где веб-речь (window.speechSynthesis) не имеет голосов. Веб вызывает
+    // AndroidBridge.speak("Хорошо"/"Плохо"), когда его собственный TTS пуст,
+    // чтобы голос работал на любом устройстве в APK. Бип остаётся ещё более
+    // низким запасным каналом, если и нативный TTS не готов.
+    private var tts: TextToSpeech? = null
+    @Volatile private var ttsReady = false
 
     // Сканер ТСД в режиме Broadcast (Атол Smart, Urovo и др.): Android-служба
     // сканера шлёт системное широковещание, где код лежит в extra "scannerdata".
@@ -113,12 +123,37 @@ class MainActivity : AppCompatActivity() {
 
         configureBackNavigation()
         requestPermissionsIfNeeded()
+        initTts()
         // Обновлением управляет веб-интерфейс: он показывает диалог «Доступно
         // обновление» (ходит через сессию шлюза, потому видит актуальную версию),
         // а установку запускает через нативный мост AndroidBridge.updateApp(...).
         // Нативный checkForUpdate отключён, чтобы при старте не выскакивали два
         // одинаковых окна обновления подряд (нативное + веб-модалка).
         // checkForUpdate()
+    }
+
+    // Инициализация нативного TTS. Готовность приходит асинхронно (onInit);
+    // веб проверяет её через AndroidBridge.hasTts() и, пока она false, веб
+    // ограничивается бипом — чтобы ни один скан не остался без звука.
+    private fun initTts() {
+        try {
+            tts = TextToSpeech(applicationContext) { status ->
+                if (status == TextToSpeech.SUCCESS) {
+                    // Ставим русский язык, если он доступен; иначе — системный.
+                    val ru = Locale("ru", "RU")
+                    val available = tts?.setLanguage(ru) ?: TextToSpeech.LANG_MISSING_DATA
+                    if (available == TextToSpeech.LANG_MISSING_DATA ||
+                        available == TextToSpeech.LANG_NOT_SUPPORTED) {
+                        tts?.setLanguage(Locale.getDefault())
+                    }
+                    tts?.setOnUtteranceProgressListener(null)
+                    ttsReady = true
+                }
+            }
+        } catch (_: Exception) {
+            // Если TTS не инициализировался — веб останется на бипе.
+            ttsReady = false
+        }
     }
 
     // Handles the system "Back" button and the edge-swipe gesture
@@ -497,6 +532,34 @@ class MainActivity : AppCompatActivity() {
             )
             return tcdKeywords.any { manufacturer.contains(it) || model.contains(it) }
         }
+
+        // Готов ли нативный TTS к речи. Веб зовёт это ДО сброса на бип: если
+        // веб-речи нет (getVoices() пуст на ТСД/WebView) и нативный TTS готов —
+        // голос произносится нативно, а бип остаётся только когда и он не готов.
+        @android.webkit.JavascriptInterface
+        fun hasTts(): Boolean = ttsReady
+
+        // Произнести фразу голосом нативного TTS. Веб зовёт только когда его
+        // собственная речь недоступна и hasTts() вернул true. Натив говорит
+        // «Хорошо»/«Плохо» и на ТСД без веб-голосов.
+        @android.webkit.JavascriptInterface
+        fun speak(text: String) {
+            speakNative(text)
+        }
+    }
+
+    // Нативное озвучивание фразы. Вызывается из JS-моста (speak), выполняет TTS
+    // на UI-потоке (требование Android-движка). Безмолвный сбой натива не должен
+    // ронять приложение.
+    private fun speakNative(text: String) {
+        if (!ttsReady) return
+        runOnUiThread {
+            try {
+                tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "biotime-scan")
+            } catch (_: Exception) {
+                // голос — вспомогательный канал; сбой не должен ломать сканирование
+            }
+        }
     }
 
     // Параметры текущего сеанса сканирования (для запуска QrScanActivity).
@@ -647,6 +710,13 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         SessionKeepAliveService.stop(this)
+        try {
+            tts?.shutdown()
+            tts = null
+            ttsReady = false
+        } catch (_: Exception) {
+            // освобождение ресурса TTS — вспомогательное
+        }
         webView.destroy()
         super.onDestroy()
     }
