@@ -2883,7 +2883,10 @@
                        <table class="report-table motion-clients-table">
                          <thead><tr><th>Клиент</th><th>Километраж</th><th>В пути</th><th>Сдача</th><th>Мест сдано</th></tr></thead>
                          <tbody>${rt.clients.map((cl) => `<tr>
-                           <td>${escapeHtml(cl.client || "—")}</td>
+                           <td>
+                             <span class="motion-client-name">${escapeHtml(cl.client || "—")}</span>
+                             ${cl.address ? `<span class="motion-client-addr">${escapeHtml(cl.address)}</span>` : ""}
+                           </td>
                            <td>${cl.km || 0}</td>
                            <td>${fmtHms(cl.moveSec || 0)}</td>
                            <td>${fmtHms(cl.siteSec || 0)}</td>

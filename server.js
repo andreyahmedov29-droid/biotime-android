@@ -2560,6 +2560,14 @@ async function handleApi(req, res, urlPath) {
     }
     const t = (Number.isFinite(Number(body.closedAt)) && Number(body.closedAt) > 0)
       ? Number(body.closedAt) : Date.now();
+    // Время на точке в секундах (восстановление: водитель простоял на точке
+    // siteSeconds). «На точке» считается как siteEnd - siteStart; чтобы
+    // восстановить точное значение, ставим siteStart = закрытие − siteSeconds.
+    // По умолчанию 0. «Путь» (transitStart/transitEnd) для точки НЕ трогаем:
+    // если у точки их не было (как у «Тодокар» на эталоне — «Путь: —»), они
+    // остаются null, и фронтенд показывает прочерк, а не 0:00.
+    const siteSeconds = (Number.isFinite(Number(body.siteSeconds)) && Number(body.siteSeconds) > 0)
+      ? Number(body.siteSeconds) : 0;
 
     // Точка-цель (клиент). Если она входит в связку (один адрес с соседями),
     // закрываем всю группу единым временем — как делает «Завершить сдачу».
@@ -2656,17 +2664,17 @@ async function handleApi(req, res, urlPath) {
       const c = route.clients[i];
       if (!c || typeof c !== "object") return;
       if (!c.id) c.id = `${route.id}-st${i + 1}`;
-      c.transitStart = c.transitStart || t;
-      c.transitEnd = c.transitEnd || t;
-      c.siteStart = c.siteStart || t;
-      c.siteEnd = c.siteEnd || t;
+      // transitStart/transitEnd НЕ заполняем принудительно — сохраняем исходное
+      // состояние (null останется null, чтобы «Путь» показал «—»).
+      c.siteStart = t - siteSeconds * 1000;
+      c.siteEnd = t;
       c.unloadFinished = true;
       if (c.state !== "delivered" && c.state !== "postponed") {
         c.state = "delivered";
       }
     });
     await persistDb();
-    return sendJson(res, 200, { ok: true, clientIndex, closed: affected, closedAt: t });
+    return sendJson(res, 200, { ok: true, clientIndex, closed: affected, closedAt: t, siteSeconds });
   }
 
   // ---- POST /api/admin/staff/block  { id, on, name? } ----

@@ -5920,6 +5920,10 @@ button.icon-btn svg,
   font-variant-numeric: tabular-nums;
 }
 .motion-clients-table td:nth-child(1) { color: var(--ink); font-weight: 600; }
+/* Колонка «Клиент»: название и адрес объединены в одной ячейке — название как
+   раньше, адрес под ним мельче и приглушённым (не отдельной строкой/клеткой). */
+.motion-clients-table .motion-client-name { display: block; color: var(--ink); font-weight: 600; }
+.motion-clients-table .motion-client-addr { display: block; font-weight: 400; font-size: 11px; color: var(--ink-faint); margin-top: 1px; }
 /* Устойчивые ширины колонок клиентов (без адреса): клиент, км, в пути, сдача, мест */
 .motion-clients-table th:nth-child(1), .motion-clients-table td:nth-child(1) { width: 26%; }
 .motion-clients-table th:nth-child(2), .motion-clients-table td:nth-child(2) { width: 18%; }
