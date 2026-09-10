@@ -191,6 +191,38 @@
   // перезапуск), а как только связь восстанавливается — автоматически
   // отправляется на сервер в исходном порядке, с реальным временем нажатия.
   const OFFLINE_KEY = "biotime.offlineOps";
+
+  // Нативный дубль офлайн-очереди (Android WebView).
+  // Веб хранит очередь в localStorage, а дополнительно дублирует её JSON в
+  // нативный файл через AndroidBridge (см. MainActivity.kt, offlineOpsSave).
+  // Это страховка от ситуации, когда система очищает localStorage при
+  // принудительном kill/перезагрузке телефона: после рестарта очередь
+  // восстанавливается из нативного файла, а не теряется.
+  const nativeSupportsOffline = typeof AndroidBridge !== "undefined" &&
+    typeof AndroidBridge.offlineOpsSave === "function" &&
+    typeof AndroidBridge.offlineOpsLoad === "function" &&
+    typeof AndroidBridge.offlineOpsClear === "function";
+
+  // Дублирует очередь в нативный слой. Безопасно: сбой моста не прерывает
+  // основную (localStorage) запись.
+  function nativeOfflineOpsSave(ops) {
+    if (!nativeSupportsOffline) return;
+    try { AndroidBridge.offlineOpsSave(JSON.stringify(ops)); } catch (_) { /* не критично */ }
+  }
+
+  // Восстанавливает очередь из нативного дубля, если localStorage пуст/повреждён.
+  function hydrateOfflineFromNative() {
+    if (!nativeSupportsOffline) return false;
+    try {
+      const raw = AndroidBridge.offlineOpsLoad();
+      if (!raw) return false;
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed) || !parsed.length) return false;
+      try { localStorage.setItem(OFFLINE_KEY, JSON.stringify(parsed)); } catch { /* ignore */ }
+      return true;
+    } catch { return false; }
+  }
+
   function readOfflineOps() {
     try {
       const raw = JSON.parse(localStorage.getItem(OFFLINE_KEY));
@@ -198,7 +230,17 @@
     } catch { return []; }
   }
   function writeOfflineOps(ops) {
-    try { localStorage.setItem(OFFLINE_KEY, JSON.stringify(ops)); } catch { /* переполнение/приватный режим */ }
+    try {
+      localStorage.setItem(OFFLINE_KEY, JSON.stringify(ops));
+      nativeOfflineOpsSave(ops);
+      return true;
+    } catch {
+      // Переполнение / приватный режим / диск недоступен. Возвращаем false,
+      // чтобы вызывающий код знал о проблеме и не считал данные сохранёнными.
+      // Даже если localStorage переполнен — пробуем хотя бы нативный дубль.
+      nativeOfflineOpsSave(ops);
+      return false;
+    }
   }
   function offlineOpId() {
     return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 9);
@@ -218,6 +260,27 @@
   // Сетевая ошибка (сервер/шлюз недоступны) в отличие от HTTP-ошибки сервера.
   function isOfflineError(e) {
     return (e && e.status === 0) || (typeof navigator !== "undefined" && navigator.onLine === false);
+  }
+
+  // Временная ошибка отправки: действие НЕЛЬЗЯ удалять из очереди — оно должно
+  // повториться позже. Это не «сервер отклонил действие», а «сервер не смог
+  // принять его прямо сейчас»: истёкшая сессия шлюза (401), лимит запросов (429),
+  // неготовый/просыпающийся инстанс (5xx, BH_SERVER_WAKING), обрыв соединения
+  // на середине ответа (таймаут). Удаление в таких случаях — потеря действия,
+  // из-за которой водитель «нажал — а всё слетело» после восстановления сети.
+  function isTransientError(e) {
+    if (!e || typeof e !== "object") return false;
+    const status = e.status;
+    const code = String(e.code || "");
+    if (status === 0) return true; // сетевой обрыв (страховочно)
+    // 408 (Request Timeout), 429 (Too Many Requests), 5xx — сервер не готов.
+    if (status === 408 || status === 429 || (status >= 500 && status <= 599)) return true;
+    // 401/403 — сессия шлюза не подтверждена (часто после пересоздания WebView);
+    // это временное состояние, нужен вход, а не потеря действия.
+    if (status === 401 || status === 403) return true;
+    // Платформенные коды пробуждения/входа — временные.
+    if (/BH_SERVER_WAKING|SERVER_WAKING|WAKING|BH_LOGIN_REQUIRED|LOGIN_REQUIRED/i.test(code)) return true;
+    return false;
   }
 
   // Индикатор очереди внизу/вверху интерфейса. Показывает «Нет связи — N действий
@@ -391,15 +454,34 @@
         }
         removeOfflineOp(op.id);
       } catch (e) {
-        if (isOfflineError(e)) {
+        if (isOfflineError(e) || isTransientError(e)) {
+          // Сеть пропала ИЛИ сервер/сессия временно не готовы — действие НЕ
+          // удаляем, оно повторится при следующей попытке (online-событие, старт,
+          // периодический flush). Очередь уже на диске в localStorage — переживёт
+          // сворачивание и перезапуск.
           showOfflineBadge(readOfflineOps().length);
           return;
         }
-        // Серверная ошибка: действие нельзя применить в текущем состоянии —
-        // убираем из очереди и сообщаем, чтобы не зациклить отправку.
-        removeOfflineOp(op.id);
-        const msg = (e && (e.error || e.message)) || "Действие из офлайн-очереди отклонено сервером";
-        toast(msg);
+        // Постоянная ошибка сервера (сервер явно отклонил действие: 400/422/409 —
+        // устаревшее состояние, невалидный payload). Не удаляем сразу — даём
+        // несколько попыток (возможно, сервер ещё «дожимает» предыдущее действие
+        // очереди, и состояние скоро станет валидным), и только после лимита
+        // убираем, чтобы не крутить вечно.
+        const attempts = (Number(op.attempts) || 0) + 1;
+        op.attempts = attempts;
+        try {
+          const cur = readOfflineOps();
+          const idx = cur.findIndex((x) => x.id === op.id);
+          if (idx >= 0) { cur[idx].attempts = attempts; writeOfflineOps(cur); }
+        } catch (_) { /* не критично */ }
+        if (attempts >= 4) {
+          removeOfflineOp(op.id);
+          const msg = (e && (e.error || e.message)) || "Действие из офлайн-очереди отклонено сервером";
+          toast(msg);
+        } else {
+          showOfflineBadge(readOfflineOps().length);
+          return;
+        }
       }
     }
     // Очередь отправлена — перерисовываем маршруты из актуального состояния.
@@ -408,6 +490,11 @@
       renderMyRoutesList(myRoutesCache);
     }
     updateOfflineBadge(readOfflineOps().length);
+    // Если очередь полностью отправлена — стираем нативный дубль, чтобы он не
+    // «воскрес» обратно в localStorage при следующем старте (мы уже отдали всё).
+    if (!readOfflineOps().length && nativeSupportsOffline) {
+      try { AndroidBridge.offlineOpsClear(); } catch (_) { /* не критично */ }
+    }
   }
 
   async function loadState() {
@@ -6725,11 +6812,15 @@
 
     const appendGroup = (el2, name, members, gid) => {
       const group = document.createElement("div");
-      // Группы всегда отображаются СВЁРНУТЫМИ при раскрытии дня (видно только
-      // название и счётчик сотрудников). Разворачиваются по клику на заголовок.
-      // Прежнее сохранённое состояние сворачивания групп больше не влияет на
-      // «по умолчанию» — при каждом открытии дня группы снова свёрнуты.
-      group.className = "today-group collapsed";
+      // Состояние сворачивания группы персистим (как и дни), иначе автоопрос
+      // каждые ~8с пересоздаёт DOM, и развёрнутая пользователем группа снова
+      // схлопывается — «вкладка сама сворачивается». По умолчанию свёрнута, но
+      // после клика по заголовку выбор запоминается и переживает перерисовку.
+      const colKey = "todayGrp:" + key + ":" + gid;
+      const openedKey = colKey + "+";
+      // Развёрнута, если пользователь явно отметил `+`-ключ; иначе свёрнута.
+      const isOpen = state.collapsed.has(openedKey);
+      group.className = "today-group" + (isOpen ? "" : " collapsed");
       const head = document.createElement("div");
       head.className = "today-group-head";
       head.innerHTML = `
@@ -6743,7 +6834,12 @@
       group.appendChild(head);
       group.appendChild(body);
       head.addEventListener("click", () => {
-        group.classList.toggle("collapsed");
+        const nowOpen = group.classList.toggle("collapsed") === false;
+        // Запоминаем выбор: '+'-ключ = развёрнута, обычный = свёрнута.
+        state.collapsed.delete(colKey);
+        state.collapsed.delete(openedKey);
+        state.collapsed.add(nowOpen ? openedKey : colKey);
+        saveCollapsed(state.collapsed);
       });
       el2.appendChild(group);
     };
@@ -6765,8 +6861,15 @@
       if (sInput && sInput.getAttribute("data-id") === String(id)) { card = r; break; }
     }
     if (!card) return;
-    const startVal = card.querySelector(".today-start").value;
-    const endVal = card.querySelector(".today-end").value;
+    // Читаем значения ИЗ ЧЕРНОВИКА (todayDraft), который записывается при каждом
+    // нажатии клавиши и переживает перерисовку (buildTodayRows отображает из него).
+    // Раньше читали из DOM-элементов: автоопрос каждые ~8с пересоздаёт строки, и к
+    // моменту debounce-сохранения поле «конец» могло оказаться ПУСТЫМ (т.к. на
+    // сервере сегмент открыт, end:null) → в PUT уходило end:null → сегмент оставался
+    // открытым и автозакрывался в неверный момент («не даёт изменить время вручную»).
+    const draft = todayDraft[key] && todayDraft[key][id];
+    const startVal = (draft && draft.start !== undefined) ? draft.start : card.querySelector(".today-start").value;
+    const endVal = (draft && draft.end !== undefined) ? draft.end : card.querySelector(".today-end").value;
     const stateEl = card.querySelector(".today-state");
     if (stateEl) stateEl.textContent = "сохраняю…";
     // Пустые начало и конец — не трогаем день (не создаём пустую запись).
@@ -8575,6 +8678,15 @@
       const n = readOfflineOps().length;
       if (n > 0) showOfflineBadge(n);
     });
+    // Если localStorage пуст (например, система очистила его при принудительном
+    // kill/перезагрузке), пытаемся восстановить очередь из нативного дубля
+    // (AndroidBridge → файл на диске в MainActivity.kt). Это страховка, чтобы
+    // действия водителя пережили даже такую перезагрузку телефона.
+    if (!readOfflineOps().length && nativeSupportsOffline) {
+      hydrateOfflineFromNative();
+      const n = readOfflineOps().length;
+      if (n > 0) showOfflineBadge(n);
+    }
     // Первичная отправка накопленной очереди (если приложение открыли, когда связь
     // уже есть) и периодическая повторная попытка на случай, если момент
     // восстановления сети не был пойман событием online.
@@ -8619,7 +8731,13 @@
       }).catch(() => {});
     } catch { /* ignore */ }
   };
-  window.addEventListener("pagehide", persistOnUnload);
+  // При сворачивании/закрытии страницы форсируем отправку накопленной
+  // офлайн-очереди: если связь уже есть, последние действия (прибыл на адрес,
+  // сдача, перенос, сканы) уходят на сервер прямо сейчас, а не ждут
+  // следующего периодического flush после возврата. Если сети нет — очередь
+  // уже лежит в localStorage и переживёт перезапуск/убийство WebView.
+  const flushOnUnload = () => { try { flushOfflineOps(); } catch { /* ignore */ } };
+  window.addEventListener("pagehide", () => { persistOnUnload(); flushOnUnload(); });
   window.addEventListener("beforeunload", persistOnUnload);
 })();
 
