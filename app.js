@@ -1791,7 +1791,7 @@
       `<th class="report-sticky-right" title="Оклад + надбавка. Переработки считаются от чистого оклада, без надбавки">Оклад</th>`,
       `<th class="report-sticky-right" title="Премия — доплата к окладу (из раздела «Оклады и дни»)">Премия</th>`,
       `<th class="report-sticky-right">Отраб. дней</th>`,
-      anySeeHours ? `<th class="report-sticky-right">Переработка</th>` : "",
+      anySeeHours ? `<th class="report-sticky-right" title="Время переработки в формате ЧЧ:ММ">Часы переработка</th>` : "",
       anySeeHours ? `<th class="report-sticky-right">Сумма</th>` : "",
     ].join("");
 
@@ -2164,7 +2164,7 @@
         return `<tr>
           <td data-label="День">${dateStr}</td>
           <td class="num" data-label="Отработано">${hs(row.work)}</td>
-          <td class="num ${row.over > 0 ? "over-pos" : ""}" data-label="Переработка">${row.over > 0 ? hs(row.over) : "—"}</td>
+          <td class="num ${row.over > 0 ? "over-pos" : ""}" data-label="Часы переработка">${row.over > 0 ? hs(row.over) : "—"}</td>
           <td class="num earn" data-label="За переработку">${fmtCalcMoney(overPay)}</td>
         </tr>`;
       }).join("") : "";
@@ -2191,13 +2191,13 @@
           <div class="salary-calc-days-wrap">
             <table class="salary-calc-days">
               <thead>
-                <tr><th>День</th><th class="num">Отработано</th><th class="num">Переработка</th><th class="num">За переработку</th></tr>
+                <tr><th>День</th><th class="num">Отработано</th><th class="num">Часы переработка</th><th class="num">За переработку</th></tr>
               </thead>
               <tbody>
                 ${rowsHtml}
               </tbody>
               <tfoot>
-                <tr><td data-label="Итого">Итого</td><td class="num" data-label="Отработано">${hs(r.totalWorkMs)}</td><td class="num over-pos" data-label="Переработка">${hs(r.totalOverMs)}</td><td class="num earn" data-label="За переработку">${fmtCalcMoney(totalOverPay)}</td></tr>
+                <tr><td data-label="Итого">Итого</td><td class="num" data-label="Отработано">${hs(r.totalWorkMs)}</td><td class="num over-pos" data-label="Часы переработка">${hs(r.totalOverMs)}</td><td class="num earn" data-label="За переработку">${fmtCalcMoney(totalOverPay)}</td></tr>
               </tfoot>
             </table>
           </div>` : `<div class="salary-calc-none">Нет отработанных дней за этот месяц.</div>`}
@@ -2882,16 +2882,23 @@
                    ? `<tr class="route-clients-row" data-route-client-idx="${mi}"><td colspan="7">
                        <table class="report-table motion-clients-table">
                          <thead><tr><th>Клиент</th><th>Километраж</th><th>В пути</th><th>Сдача</th><th>Мест сдано</th></tr></thead>
-                         <tbody>${rt.clients.map((cl) => `<tr>
-                           <td>
-                             <span class="motion-client-name">${escapeHtml(cl.client || "—")}</span>
-                             ${cl.address ? `<span class="motion-client-addr">${escapeHtml(cl.address)}</span>` : ""}
-                           </td>
+                         <tbody>${rt.clients.map((cl) => {
+                           // «Единое название» связки (bundleName) показывается вместо
+                           // адреса у точек, объединяющих нескольких контрагентов на
+                           // одном адресе; если единого названия нет — имя клиента и адрес.
+                           const label = cl.bundleName || cl.client || "—";
+                           const address = cl.bundleName ? "" : (cl.address || "");
+                           return `<tr>
+                             <td>
+                               <span class="motion-client-name">${escapeHtml(label)}</span>
+                               ${address ? `<span class="motion-client-addr">${escapeHtml(address)}</span>` : ""}
+                             </td>
                            <td>${cl.km || 0}</td>
                            <td>${fmtHms(cl.moveSec || 0)}</td>
                            <td>${fmtHms(cl.siteSec || 0)}</td>
                            <td>${(cl.placesDone || 0)} / ${(cl.placesTotal || 0)}</td>
-                         </tr>`).join("")}</tbody>
+                         </tr>`;
+                         }).join("")}</tbody>
                        </table>
                      </td></tr>`
                    : "";
