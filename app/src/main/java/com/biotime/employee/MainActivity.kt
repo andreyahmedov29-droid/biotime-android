@@ -472,6 +472,62 @@ class MainActivity : AppCompatActivity() {
             LocationTrackingService.setDriver(this@MainActivity, isDriver)
         }
 
+        // Нативный дубль офлайн-очереди действий водителя.
+        // Веб хранит очередь в WebView localStorage (
+        // biotime.offlineOps), но localStorage может быть очищен системой при
+        // принудительном kill/перезагрузке телефона. Чтобы действия (прибыл,
+        // сдача, перенос, сканы) пережили даже такую перезагрузку, веб
+        // дублирует JSON очереди в нативный файл. При старте, если localStorage
+        // пуст, веб восстанавливает очередь из нативного дубля.
+        //
+        // Сохраняет очередь (JSON-строка) атомарно в filesDir/offline_ops.json.
+        // Вызывается из веба: AndroidBridge.offlineOpsSave(jsonString)
+        @android.webkit.JavascriptInterface
+        fun offlineOpsSave(json: String) {
+            try {
+                val dir = File(filesDir, "offline").apply { mkdirs() }
+                val tmp = File(dir, "offline_ops.json.tmp")
+                val dest = File(dir, "offline_ops.json")
+                tmp.writeText(json)
+                // Атомарный перенос: если процесс убьют на середине записи,
+                // старый файл останется целым, а не обрежется на полпути.
+                if (dest.exists()) dest.delete()
+                if (!tmp.renameTo(dest)) {
+                    // rename может не сработать на некоторых файловых системах —
+                    // фолбэк на прямое перезаписывание.
+                    dest.writeText(json)
+                    tmp.delete()
+                }
+            } catch (_: Exception) {
+                // Нативный дубль — вспомогательный канал; сбой не должен
+                // ронять приложение и прерывать основную работу веба.
+            }
+        }
+
+        // Читает дубль очереди из нативного файла. Вызывается из веба при старте,
+        // если localStorage пуст. Возвращает JSON-строку или "" если файла нет.
+        @android.webkit.JavascriptInterface
+        fun offlineOpsLoad(): String {
+            return try {
+                val f = File(filesDir, "offline/offline_ops.json")
+                if (f.exists()) f.readText() else ""
+            } catch (_: Exception) {
+                ""
+            }
+        }
+
+        // Стирает дубль очереди (когда веб успешно отправил все действия).
+        // Вызывается из веба: AndroidBridge.offlineOpsClear()
+        @android.webkit.JavascriptInterface
+        fun offlineOpsClear() {
+            try {
+                val f = File(filesDir, "offline/offline_ops.json")
+                if (f.exists()) f.delete()
+            } catch (_: Exception) {
+                // вспомогательный канал
+            }
+        }
+
         // Установленная версия APK (versionCode), которую веб-интерфейс сравнивает
         // с /api/app/update-info. Веб идёт через сессию шлюза, поэтому он видит
         // актуальную версию сервера, а нативный код сообщает версию устройства.
