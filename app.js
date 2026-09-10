@@ -413,10 +413,15 @@
   async function flushOfflineOps() {
     let ops = readOfflineOps();
     if (!ops.length) { hideOfflineBadge(); return; }
-    if (typeof navigator !== "undefined" && navigator.onLine === false) {
-      showOfflineBadge(ops.length);
-      return;
-    }
+    // НЕ блокируемся по navigator.onLine: в мобильном WebView/браузере это поле
+    // и событие online часто запаздывают (сеть вернулась, а onLine ещё false).
+    // Если мы останавливаемся на этой проверке, периодический тик (20 с) каждые
+    // 20 секунд «видит» нет сети и НИКОГДА не пробует отправить — данные уходят
+    // только после перезапуска, когда onLine пересчитывается в true. Вместо
+    // этого всегда пробуем реальную отправку: если сети и правда нет, fetch
+    // упадёт быстро, isOfflineError вернёт управление, действия останутся в
+    // очереди и бейдж останется. Если сеть есть (даже при устаревшем onLine) —
+    // данные уйдут сразу, без перезапуска.
     updateOfflineBadge(ops.length);
     for (const op of ops) {
       try {
@@ -8684,6 +8689,11 @@
         refreshToday();
         render();
         sendHeartbeat();
+        // Сеть могла вернуться, пока приложение было свёрнуто/в фоне, и событие
+        // online (а значит и периодический тик, троттлится в фоне) могло не
+        // сработать. При возврате в приложение сразу пробуем отправить
+        // накопленные офлайн-действия.
+        flushOfflineOps();
       }
     });
     window.addEventListener("focus", sendHeartbeat);
