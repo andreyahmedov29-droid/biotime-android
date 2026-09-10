@@ -6239,10 +6239,19 @@
         if (!routeId || !Number.isInteger(clientIndex)) { toast("Не удалось определить точку"); return; }
         const ok = confirm("Закрыть эту точку маршрута как выполненную (все места выгружены)? Соседние точки (например, активная «СмартПартс») не будут изменены.");
         if (!ok) return;
+        // Восстановление времени на точке: водитель мог простоять на точке
+        // (например, «Тодокар» — 16 секунд). Спрашиваем у админа и передаём в
+        // эндпоинт, чтобы в отчёте «На точке» показалось нужное значение.
+        let siteSeconds = 0;
+        const rawSite = prompt("Сколько секунд водитель простоял на точке (время «На точке»)? Пусто или 0 — если время не восстанавливаем.", "");
+        if (rawSite !== null && rawSite.trim() !== "") {
+          const n = Number(String(rawSite).trim());
+          siteSeconds = Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
+        }
         try {
           await api("/api/admin/restore-client-close", {
             method: "POST",
-            body: JSON.stringify({ routeId, clientIndex }),
+            body: JSON.stringify({ routeId, clientIndex, siteSeconds }),
           });
           toast("Точка закрыта, места отмечены выгруженными");
           try { await loadDriverRoutes(); } catch (_) { /* не критично */ }
