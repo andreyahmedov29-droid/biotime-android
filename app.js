@@ -6122,6 +6122,15 @@
         // Связка = несколько контрагентов на одном адресе (c.members) —
         // это ОДНА остановка маршрута. Показываем адрес и перечень контрагентов.
         const members = Array.isArray(c.members) && c.members.length > 0 ? c.members : null;
+        // Кнопка «Восстановить точку» (только для администратора): применяется,
+        // когда действия водителя по точке потерялись (офлайн-очередь не
+        // доехала до сервера) и точку нужно закрыть как выполненную, не трогая
+        // соседние (например, «СмартПартс», который сейчас в работе).
+        const restoreBtn = state.isAdmin
+          ? `<button type="button" class="drv-ico-btn drv-stop-restore" data-route-id="${escapeHtml(r.id)}" data-client-index="${i}" title="Восстановить точку (закрыть как выполненную, места delivered)" aria-label="Восстановить точку">
+<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3a9 9 0 1 0 9 9"/><path d="M21 3v6h-6"/><path d="M12 7v5l3 2"/></svg>
+</button>`
+          : "";
         return `
           <li class="drv-stop">
             <span class="drv-stop-idx">${i + 1}</span>
@@ -6132,6 +6141,7 @@
                 ? `<span class="drv-stop-members">${members.map((m) => escapeHtml(m.client)).join(", ")}</span>`
                 : ""}
             </span>
+            ${restoreBtn}
           </li>
         `;
       }).join("");
@@ -6211,6 +6221,27 @@
     });
     el.driverRoutesList.querySelectorAll(".driver-route-unlock").forEach((btn) => {
       btn.addEventListener("click", () => unlockDriverRoute(btn.dataset.id));
+    });
+    // Восстановление точки (закрыть как выполненную) — только админ. Операция
+    // влияет на боевые данные, поэтому с подтверждением.
+    el.driverRoutesList.querySelectorAll(".drv-stop-restore").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const routeId = btn.dataset.routeId;
+        const clientIndex = Number(btn.dataset.clientIndex);
+        if (!routeId || !Number.isInteger(clientIndex)) { toast("Не удалось определить точку"); return; }
+        const ok = confirm("Закрыть эту точку маршрута как выполненную (все места выгружены)? Соседние точки (например, активная «СмартПартс») не будут изменены.");
+        if (!ok) return;
+        try {
+          await api("/api/admin/restore-client-close", {
+            method: "POST",
+            body: JSON.stringify({ routeId, clientIndex }),
+          });
+          toast("Точка закрыта, места отмечены выгруженными");
+          try { await loadDriverRoutes(); } catch (_) { /* не критично */ }
+        } catch (e) {
+          toast((e && (e.error || e.message)) || "Не удалось восстановить точку");
+        }
+      });
     });
   }
 
