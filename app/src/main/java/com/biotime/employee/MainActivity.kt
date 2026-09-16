@@ -50,6 +50,10 @@ class MainActivity : AppCompatActivity() {
     // низким запасным каналом, если и нативный TTS не готов.
     private var tts: TextToSpeech? = null
     @Volatile private var ttsReady = false
+    // Защита от наложения нескольких диалогов «Требуется вход» при нескольких
+    // подряд идущих 401 от шлюза (например, фоновые опросы). Пока окно открыто,
+    // новые не накладываются поверх.
+    @Volatile private var loginDialogShown = false
 
     // Сканер ТСД в режиме Broadcast (Атол Smart, Urovo и др.): Android-служба
     // сканера шлёт системное широковещание, где код лежит в extra "scannerdata".
@@ -236,6 +240,58 @@ class MainActivity : AppCompatActivity() {
                 }
                 super.onPermissionRequest(request)
             }
+
+            // Обработка JS-диалогов (alert/confirm/prompt). Без этих обработчиков
+            // WebView показывает никому не нужное окно, а синхронный вызов из JS
+            // навсегда блокирует UI: у водителя «на каждой точке» перестают
+            // нажиматься кнопки, пока не перезапустишь приложение. Показываем
+            // обычный нативный диалог и немедленно резолвим колбэк.
+            override fun onJsAlert(
+                view: WebView,
+                url: String,
+                message: String,
+                result: android.webkit.JsResult
+            ): Boolean {
+                android.app.AlertDialog.Builder(view.context)
+                    .setMessage(message)
+                    .setPositiveButton("OK") { _, _ -> result.confirm() }
+                    .setOnCancelListener { result.cancel() }
+                    .show()
+                return true
+            }
+
+            override fun onJsConfirm(
+                view: WebView,
+                url: String,
+                message: String,
+                result: android.webkit.JsResult
+            ): Boolean {
+                android.app.AlertDialog.Builder(view.context)
+                    .setMessage(message)
+                    .setPositiveButton("OK") { _, _ -> result.confirm() }
+                    .setNegativeButton("Отмена") { _, _ -> result.cancel() }
+                    .setOnCancelListener { result.cancel() }
+                    .show()
+                return true
+            }
+
+            override fun onJsPrompt(
+                view: WebView,
+                url: String,
+                message: String,
+                defaultValue: String,
+                result: android.webkit.JsPromptResult
+            ): Boolean {
+                val input = android.widget.EditText(view.context).apply { setText(defaultValue) }
+                val dialog = android.app.AlertDialog.Builder(view.context)
+                    .setMessage(message)
+                    .setView(input)
+                    .setPositiveButton("OK") { _, _ -> result.confirm(input.text.toString()) }
+                    .setNegativeButton("Отмена") { _, _ -> result.cancel() }
+                    .setOnCancelListener { result.cancel() }
+                    .show()
+                return true
+            }
         }
 
         webView.webViewClient = object : WebViewClient() {
@@ -250,11 +306,17 @@ class MainActivity : AppCompatActivity() {
                 request: WebResourceRequest?,
                 errorResponse: WebResourceResponse?
             ) {
-                super.onReceivedHttpError(view, request, errorResponse)
                 val code = errorResponse?.statusCode ?: 0
                 if (request?.isForMainFrame == true && (code == 401 || code == 403)) {
+                    // Останавливаем загрузку, чтобы шлюз Black Hole не показал на
+                    // экране сырой ответ 401 («Authentication required. This is a
+                    // Black Hole app subdomain…»). Вместо него — понятный русский
+                    // диалог о необходимости входа.
+                    try { view?.stopLoading() } catch (_: Exception) { /* ignore */ }
                     view?.post { showLoginRequiredDialog() }
+                    return
                 }
+                super.onReceivedHttpError(view, request, errorResponse)
             }
         }
 
@@ -271,7 +333,8 @@ class MainActivity : AppCompatActivity() {
     // не пускает приложение (BH_LOGIN_REQUIRED) — чаще всего из-за включённого VPN,
     // который меняет маршрут и «сбрасывает» авторизацию.
     private fun showLoginRequiredDialog() {
-        if (isFinishing || isDestroyed) return
+        if (isFinishing || isDestroyed || loginDialogShown) return
+        loginDialogShown = true
         AlertDialog.Builder(this)
             .setTitle("Требуется вход в приложение")
             .setMessage(
@@ -281,9 +344,13 @@ class MainActivity : AppCompatActivity() {
             )
             .setCancelable(false)
             .setPositiveButton("Повторить") { _: DialogInterface?, _: Int ->
+                loginDialogShown = false
                 webView.loadUrl(APP_URL)
             }
-            .setNegativeButton("Закрыть", null)
+            .setNegativeButton("Закрыть") { _: DialogInterface?, _: Int ->
+                loginDialogShown = false
+            }
+            .setOnCancelListener { loginDialogShown = false }
             .show()
     }
 
