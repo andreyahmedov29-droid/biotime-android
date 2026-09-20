@@ -729,6 +729,7 @@
         <button class="atab" data-sub="today">Время работы</button>
         <button class="atab" data-sub="groups">Группы</button>
         <button class="atab" data-sub="salaries">Оклады и дни</button>
+        <button class="atab" data-sub="multiplier">Множитель</button>
         <button class="atab" data-sub="log">Журнал</button>
         <button class="atab" data-sub="settings">Параметры</button>
         <button class="atab" data-sub="admins">Администраторы</button>
@@ -813,6 +814,61 @@
           <button class="jtab" data-jkind="manual">Время</button>
         </nav>
         <div class="journal-list" id="logList" data-jkind="status"></div>
+      </div>
+
+      <!-- Множитель подработки: индивидуальные правила (сотрудник/группа/все + дни недели) -->
+      <div class="asub" data-sub="multiplier" hidden>
+        <div class="sub-head">
+          <div class="sub-title-wrap">
+            <h4 class="sub-title">Множитель подработки</h4>
+            <p class="sub-note">Повышенный тариф к переработке: для конкретного сотрудника, группы или всех, в выбранные дни недели.</p>
+          </div>
+        </div>
+
+        <div class="params-section">
+          <h5 class="params-heading" id="multRuleFormTitle">Новое правило</h5>
+          <div class="multiplier-grid">
+            <div class="field">
+              <label for="multRuleTarget">Для кого</label>
+              <select id="multRuleTarget" class="select-input">
+                <option value="all">Для всех сотрудников</option>
+                <option value="staff">Конкретный сотрудник</option>
+                <option value="group">Группа сотрудников</option>
+              </select>
+            </div>
+            <div class="field" id="multRuleSubjectField">
+              <label id="multRuleSubjectLabel" for="multRuleSubject">Сотрудник / группа</label>
+              <select id="multRuleSubject" class="select-input"></select>
+            </div>
+            <div class="field">
+              <label for="multRuleDate">День</label>
+              <input id="multRuleDate" class="text-input" type="date" />
+            </div>
+            <div class="field">
+              <label for="multRuleFrom">С</label>
+              <input id="multRuleFrom" class="text-input" type="time" value="18:00" />
+            </div>
+            <div class="field">
+              <label for="multRuleTo">До</label>
+              <input id="multRuleTo" class="text-input" type="time" value="21:00" />
+            </div>
+            <div class="field">
+              <label for="multRuleValue">Множитель (×)</label>
+              <input id="multRuleValue" class="text-input" type="number" min="1" step="0.1" value="1.5" />
+            </div>
+          </div>
+          <span class="group-scope-label">Повышенный множитель действует в этот день с указанного времени до указанного (по переработке, попавшей в интервал). День обязателен: если день не выбран — множитель не применяется.</span>
+          <div class="mult-rule-actions">
+            <button type="button" class="ctrl ctrl-primary" id="multRuleAddBtn">Добавить правило</button>
+            <button type="button" class="ctrl ctrl-soft" id="multRuleCancelBtn" hidden>Отмена</button>
+          </div>
+        </div>
+
+        <div class="params-section">
+          <h5 class="params-heading">Действующие правила</h5>
+          <div class="multiplier-status" id="multiplierStatus">—</div>
+          <div class="mult-rule-list" id="multRuleList"></div>
+        </div>
       </div>
 
       <!-- Настройки -->
@@ -962,22 +1018,9 @@
 
         <div class="params-section">
           <h5 class="params-heading">Множитель подработки</h5>
-          <p class="toggle-sub">Коэффициент к ставке переработки, действующий в указанный период (например 1,5).</p>
-          <div class="multiplier-grid">
-            <div class="field">
-              <label for="multiplierVal">Множитель</label>
-              <input id="multiplierVal" class="text-input" type="number" min="1" step="0.1" value="1.0" />
-            </div>
-            <div class="field">
-              <label for="multiplierFrom">Действует с</label>
-              <input id="multiplierFrom" class="text-input" type="date" />
-            </div>
-            <div class="field">
-              <label for="multiplierTo">по</label>
-              <input id="multiplierTo" class="text-input" type="date" />
-            </div>
-          </div>
-          <div class="multiplier-status" id="multiplierStatus">не активен</div>
+          <p class="toggle-sub">Правила повышенного тарифа (по сотрудникам, группам и дням недели) настраиваются на отдельной вкладке «Множитель».</p>
+          <button type="button" class="ctrl" id="goToMultiplierTab">Открыть настройки множителя</button>
+          <div class="multiplier-status" id="multiplierStatus">—</div>
         </div>
 
         <div class="params-section">
@@ -1169,6 +1212,26 @@
       <div class="route-confirm-actions" style="margin-top:16px; display:flex; gap:8px; justify-content:flex-end;">
         <button type="button" class="ctrl" id="routeDeleteCancel">Отмена</button>
         <button type="button" class="ctrl ctrl-finish" id="routeDeleteConfirm">Удалить маршрут</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Ручной ввод кода этикетки при выгрузке (водитель): неблокирующая модалка.
+       Заменяет нативный prompt(), который в Android WebView без WebChromeClient
+       зависает — из-за него «на каждой точке» перестают нажиматься кнопки и
+       приходится перезапускать приложение. -->
+  <dialog class="modal" id="driverScanModal">
+    <div class="postpone-card">
+      <div class="modal-head">
+        <h3>Код этикетки</h3>
+        <button class="icon-btn modal-close" id="driverScanClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <p class="modal-note">Сканера нет на этом устройстве. Введите код этикетки (выгрузка):</p>
+      <input class="text-input" id="driverScanInput" type="text" autocomplete="off" spellcheck="false"
+             placeholder="Код этикетки" enterkeyhint="go" />
+      <div class="route-confirm-actions" style="margin-top:16px; display:flex; gap:8px; justify-content:flex-end;">
+        <button type="button" class="ctrl" id="driverScanCancel">Отмена</button>
+        <button type="button" class="ctrl ctrl-finish" id="driverScanOk">Сканировать</button>
       </div>
     </div>
   </dialog>

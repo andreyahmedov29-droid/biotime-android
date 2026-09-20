@@ -1590,6 +1590,45 @@ body.state-finished .total-cell.accent .total-value { color: var(--red-soft); }
 
 .report-table td.mark-over { color: var(--amber-soft); }
 
+/* День, в который у сотрудника действовал повышенный тариф подработки (×N>1):
+   тёплый янтарный фон ячейки табеля, чтобы «повышенный» день был виден сходу. */
+.report-table td.day-mult { background: rgba(255, 171, 56, 0.16); }
+.report-table td.day-mult.dow-we { background: rgba(255, 171, 56, 0.14); }
+
+/* Компактный бейдж «×N» рядом с меткой дня / датой в детализации. */
+.mult-tag {
+  display: inline-block;
+  margin-left: 3px;
+  padding: 0 4px;
+  border-radius: 5px;
+  font-size: 9px;
+  font-weight: 700;
+  font-style: normal;
+  line-height: 1.5;
+  color: var(--amber-bright);
+  background: rgba(255, 171, 56, 0.18);
+  vertical-align: middle;
+}
+
+/* В ячейке табеля метка статуса дня и бейдж «×N» (множитель повышенного
+   тарифа) стоят столбиком: так оба помещаются внутри плашки и не вылезают
+   за границы узкой ячейки (раньше «×N» стоял в строку с меткой и уширял
+   плашку за края ячейки). */
+.report-table td[data-day] .mark {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.15;
+}
+.report-table td[data-day] .mark .mult-tag {
+  margin-left: 0;
+  margin-top: 1px;
+  padding: 0 3px;
+  font-size: 8.5px;
+  line-height: 1.35;
+}
+
 .report-table .mark.status-Б {
   color: var(--red-soft);
   background: rgba(255, 122, 107, 0.14);
@@ -2808,38 +2847,62 @@ body.state-finished .total-cell.accent .total-value { color: var(--red-soft); }
 
 /* Карточки расчёта ЗП по сотрудникам: сетка плиток.
    Минимальная ширина карточки увеличена до 400px, чтобы в ряд влезало 3–4
-   плитки (а не ~6 узких), и чтобы раскрытая детализация — сводка, таблица по
-   дням и сетка показателей — целиком помещалась без обрезки и прокрутки.
+   плитки (а не ~6 узких). Раскрытая детализация — сводка, таблица по дням и
+   сетка показателей — прокручивается ВНУТРИ карточки (внутренний скролл), чтобы
+   карточка целиком помещалась в интерфейс без прокрутки всей страницы.
    max-width ограничивает сетку на сверхшироких экранах, не давая колонкам
    бесконечно множиться. На узких экранах медиа-запросы ниже дают 1 колонку. */
 .salary-calc-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+  /* Карточки расширяем, используя свободное пространство слева и справа:
+     шире минимальная ширина плитки и снято узкое ограничение 1700px, поэтому
+     при том же числе колонок каждая карточка заметно шире и читаемее. */
+  grid-template-columns: repeat(auto-fill, minmax(460px, 1fr));
   gap: 16px;
   margin: 14px auto 0;
-  max-width: 1700px;
+  max-width: 2400px;
   align-items: start;
 }
 .salary-calc-card {
   position: relative;
   min-width: 0;
   max-width: 100%;
+  /* Карточка целиком (шапка + детализация) влезает в экран: раскрытое
+     содержимое прокручивается ВНУТРИ карточки, а не уезжает за экран и не
+     заставляет прокручивать страницу, чтобы увидеть низ одной карточки. */
+  max-height: calc(100dvh - 220px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 18px;
   padding: 16px 18px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.018));
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.24);
-  cursor: pointer;
   transition: border-color var(--t-fast) var(--ease), transform var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
 }
 .salary-calc-card:hover {
   border-color: var(--line-strong, rgba(255, 255, 255, 0.14));
-  transform: translateY(-2px);
+  transform: none;
   box-shadow: 0 16px 38px rgba(0, 0, 0, 0.32);
 }
 .salary-calc-card.open {
   border-color: rgba(255, 171, 56, 0.5);
   box-shadow: 0 16px 40px rgba(255, 140, 30, 0.10), 0 10px 28px rgba(0, 0, 0, 0.28);
+}
+/* У сотрудника были дни с повышенным тарифом ×N: подсвечиваем рамку карточки. */
+.salary-calc-card.has-mult { border-color: rgba(255, 171, 56, 0.55); }
+.salary-calc-card.has-mult:hover { border-color: rgba(255, 171, 56, 0.8); }
+/* Бейдж «есть дни ×N» в подписи карточки. */
+.mult-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--amber-bright);
+  background: rgba(255, 171, 56, 0.16);
 }
 .salary-calc-name { font-size: 15.5px; font-weight: 700; }
 .salary-calc-chevron {
@@ -2849,10 +2912,13 @@ body.state-finished .total-cell.accent .total-value { color: var(--red-soft); }
   transition: transform var(--t-med) var(--ease);
 }
 .salary-calc-head { cursor: pointer; }
+.salary-calc-sub { cursor: pointer; }
 .salary-calc-card.open .salary-calc-chevron { transform: rotate(90deg); }
 .salary-calc-body {
-  overflow: hidden;
-  animation: salaryFadeIn var(--t-med) var(--ease);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 @keyframes salaryFadeIn {
   from { opacity: 0; transform: translateY(-4px); }
@@ -2961,7 +3027,7 @@ body.state-finished .total-cell.accent .total-value { color: var(--red-soft); }
   padding: 11px 13px;
 }
 .salary-calc-days-wrap {
-  overflow-x: auto;
+  overflow: hidden;
   -webkit-overflow-scrolling: touch;
   margin: 4px 0 14px;
   max-width: 100%;
@@ -2969,7 +3035,10 @@ body.state-finished .total-cell.accent .total-value { color: var(--red-soft); }
 }
 .salary-calc-days {
   width: 100%;
-  min-width: 340px;
+  min-width: 0;
+  /* Автоматическая раскладка по содержимому: колонки не фиксируются процентами,
+     поэтому числовые данные компактно встают у левого края своих колонок,
+     без пустоты справа и без наезда заголовков на соседние столбцы. */
   border-collapse: collapse;
   font-size: 12.5px;
   font-variant-numeric: tabular-nums;
@@ -2984,19 +3053,50 @@ body.state-finished .total-cell.accent .total-value { color: var(--red-soft); }
   border-bottom: 1px solid var(--line);
   font-weight: 700;
 }
+.salary-calc-days th.num { text-align: right; }
 .salary-calc-days td {
   padding: 8px 10px;
   border-bottom: 1px solid var(--line);
   color: #e7e5dc;
   white-space: nowrap;
 }
+/* В первой колонке «День» дата и бейджи (×N, Б/ОТ) могут переноситься на
+   следующую строку — при фиксированной раскладке long-контент не вылезает
+   вправо и не сдвигает соседние столбцы. */
+.salary-calc-days td:first-child { white-space: normal; }
 .salary-calc-days td:nth-child(2),
 .salary-calc-days td:nth-child(3),
-.salary-calc-days td:nth-child(4) { text-align: right; }
+.salary-calc-days td:nth-child(4) {
+  text-align: right;
+  /* Числовые данные прижимаем ближе к левому краю своих колонок, чтобы они
+     не уезжали вправо и не наезжали на соседние столбцы. */
+  padding-left: 6px;
+}
 .salary-calc-days td:last-child { color: var(--green); font-weight: 700; }
 .salary-calc-days .num { text-align: right; white-space: nowrap; }
 .salary-calc-days td.over-pos { color: var(--red); font-weight: 700; }
 .salary-calc-days td.earn { color: var(--green); font-weight: 700; }
+/* День в детализации ЗП, когда у сотрудника действовал повышенный тариф ×N. */
+.salary-calc-days tr.mult-day td { background: rgba(255, 171, 56, 0.10); }
+.salary-calc-days tr.mult-day td:first-child { color: var(--amber-bright); }
+/* День больничного «Б» / отпуска «ОТ» в детализации ЗП: засчитан как явка,
+   строка помечена статусом и мягко подсвечена. */
+.salary-calc-days tr.day-paid-idle td { background: rgba(120, 160, 255, 0.10); }
+.salary-calc-days tr.day-paid-idle td:first-child { color: var(--ink); }
+.salary-calc-days tr.day-paid-idle .num { color: var(--ink); }
+.day-status-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #cfe0ff;
+  background: rgba(120, 160, 255, 0.22);
+  border: 1px solid rgba(140, 175, 255, 0.35);
+  vertical-align: 1px;
+}
 .salary-calc-days tfoot td {
   padding-top: 11px;
   font-weight: 700;
@@ -3070,7 +3170,19 @@ body.state-finished .total-cell.accent .total-value { color: var(--red-soft); }
   .bundle-row-actions .drv-mini-btn { flex: 1 1 auto; justify-content: center; }
   /* Плитки расчёта ЗП на узких экранах — в одну колонку */
   .salary-calc-list { grid-template-columns: 1fr; }
-  .salary-calc-card { padding: 14px 14px; }
+  /* На мобильном не растягиваем клетку на всю высоту и не вешаем скролл списка:
+     карточка ограничена по высоте, а детализация прокручивается внутри неё. */
+  .salary-calc-list {
+    align-items: start;
+    height: auto;
+    overflow: visible;
+    padding-bottom: 0;
+  }
+  .salary-calc-card {
+    padding: 14px 14px;
+    min-height: 0;
+    max-height: calc(100dvh - 160px);
+  }
   /* Сводка: две читаемые колонки; длинные числа переносятся, не вылезая */
   .salary-calc-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3962,6 +4074,47 @@ body.hide-over-sum .earned-cell { display: none !important; }
 
 .multiplier-status { margin-top: 13px; font-size: 12px; color: var(--ink-faint); }
 .multiplier-status.active { color: var(--green-soft); }
+
+/* ---- Вкладка «Множитель»: правила по сотрудникам/группам и дням недели ---- */
+.multiplier-grid .select-input { max-width: none; width: 100%; }
+.mult-rule-days { margin-top: 16px; }
+.mult-rule-days-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin-top: 8px;
+}
+.mult-rule-days-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.mult-rule-days-row input[type=checkbox] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--green-soft, #4caf7d);
+}
+.mult-rule-actions { margin-top: 16px; display: flex; gap: 8px; }
+.mult-rule-list { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.mult-rule-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.015));
+}
+.mult-rule-info { min-width: 0; }
+.mult-rule-who { font-size: 13.5px; color: var(--ink); }
+.mult-rule-days-text { font-size: 12px; color: var(--ink-faint); margin-top: 3px; }
+.mult-rule-del { flex: 0 0 auto; }
+.mult-rule-actions-inline { display: flex; gap: 8px; flex: 0 0 auto; }
+.mult-rule-empty { font-size: 12.5px; color: var(--ink-faint); padding: 8px 2px; }
 
 /* Резервная копия данных (экспорт/импорт полной базы) */
 .backup-row {

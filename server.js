@@ -311,6 +311,11 @@ const KEY_FROM_ENVIRONMENT =
 const ENV_FILE = loadEnvUpwards(__dirname);
 const PORTAL_BASE = process.env.BITRIX_API_BASE_URL || "";
 const PORTAL_KEY = process.env.BITRIX_API_KEY || "";
+// Портальный прокси отвечает десятками секунд на живом портале (нормальная нагрузка,
+// а не сбой). Таймаут поэтому — минуты, а не секунды: обрыв на 30/60/90 с выбросил бы
+// ответ, который уже был в пути. Зависший портал при этом не должен вешать запрос
+// посетителя бесконечно, поэтому у fetch есть верхний предел ожидания.
+const PORTAL_TIMEOUT_MS = Number(process.env.PORTAL_TIMEOUT_MS || 180_000);
 
 // One honest line at startup: whether the portal key is present and where it came from.
 console.log(
@@ -327,20 +332,47 @@ async function portal(pathname, { method = "GET", body } = {}) {
     err.status = 503;
     throw err;
   }
-  const res = await fetch(`${PORTAL_BASE}${pathname}`, {
-    method,
-    headers: {
-      "X-Api-Key": PORTAL_KEY,
-      Accept: "application/json",
-      ...(body ? { "Content-Type": "application/json" } : {}),
-    },
-    ...(body ? { body: JSON.stringify(body) } : {}),
-  });
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), PORTAL_TIMEOUT_MS);
+  let res;
+  try {
+    res = await fetch(`${PORTAL_BASE}${pathname}`, {
+      method,
+      headers: {
+        "X-Api-Key": PORTAL_KEY,
+        Accept: "application/json",
+        ...(body ? { "Content-Type": "application/json" } : {}),
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+      signal: ctl.signal,
+    });
+  } catch (e) {
+    // Обрыв по таймауту или сети — это НЕ про ключ: портал просто не успел ответить.
+    clearTimeout(timer);
+    const err = new Error(e && e.name === "AbortError" ? "portal_timeout" : "portal_unreachable");
+    err.status = e && e.name === "AbortError" ? 504 : 502;
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
   const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
+  // Ответ портального прокси — всегда JSON. Но если адрес прокси настроен
+  // неверно (например, на поддомен приложения, а не на основной домен
+  // платформы /v1), Black Hole шлюз может вернуть 401 с ТЕКСТОВЫМ телом
+  // ("Authentication required. This is a Black Hole app subdomain…") вместо JSON.
+  // Неподтверждённый parse не должен вываливаться сырым исключением — превращаем
+  // его в корректную ошибку, а не отдаём клиенту «кашу» шлюза.
+  let data = null;
+  if (text) {
+    try { data = JSON.parse(text); } catch { data = null; }
+  }
   if (!res.ok) {
-    const err = new Error((data && data.error && data.error.message) || `portal_error_${res.status}`);
+    const err = new Error(
+      (data && data.error && data.error.message) ||
+      (res.status === 401 || res.status === 403 ? "portal_auth_failed" : `portal_error_${res.status}`)
+    );
     err.status = res.status;
+    if (res.status === 401 || res.status === 403) err.code = "portal_auth_failed";
     throw err;
   }
   return data && data.data !== undefined ? data.data : data;
@@ -395,6 +427,13 @@ function defaultDb() {
       multiplier: 1,
       multFrom: null,
       multTo: null,
+      multGroups: [],
+      // Индивидуальные правила повышенного множителя подработки (новая вкладка
+      // «Множитель»). Каждое: { id, target: "all"|"staff"|"group", targetId, mult,
+      // days: [пн..вс, 0-based] }. Приоритет при поиске: конкретный сотрудник →
+      // группа → «для всех». Старые поля multiplier/multFrom/multTo/multGroups —
+      // легаси-fallback, пока multRules пуст (обратная совместимость).
+      multRules: [],
       // Версия обновления Android-APK, управляемая из «Параметры» приложения.
       // Пусто = берутся значения из окружения APP_UPDATE_* (или жёсткие дефолты ниже).
       updateVersionCode: null,
@@ -628,13 +667,23 @@ function autoCloseDayEndTimers(now) {
     for (const id in rec.byEmployee) {
       const entry = rec.byEmployee[id];
       if (!entry || !Array.isArray(entry.segments)) continue;
+      let entryChanged = false;
       for (const s of entry.segments) {
         // Защита от битых/мусорных записей в сегментах дня: элемент может быть
         // null или не-объектом, и s.kind на нём раньше ронял ВЕСЬ запрос (500).
         if (s && typeof s === "object" && s.kind === "work" && s.end == null && now > endOfDayMs(s.start)) {
           s.end = endOfDayMs(s.start);
+          entryChanged = true;
           changed = true;
         }
+      }
+      // Авто-закрытие дня должно не только проставить «конец» (end), но и
+      // формально завершить день сотрудника (finished:true). Иначе в табеле
+      // «Время работы» день выглядел бы незакрытым, и пришлось бы закрывать
+      // вручную (как у Глаголина/Заводнова за 11.09), хотя авто всё закрыл.
+      if (entryChanged && !entry.finished) {
+        entry.finished = true;
+        changed = true;
       }
     }
   }
@@ -964,6 +1013,40 @@ function enrichUnloadProgress(route, labels) {
     c.unloadFinished = c.unloadFinished === true;
   });
   return route;
+}
+
+// Перепривязка этикеток маршрута при редактировании его состава. Этикетка
+// хранит clientIndex — позицию клиента в маршруте (код наклейки
+// «BG<routeId>-<clientIndex+1>-<place>», счётчики «Мест: N» идут по
+// Number(l.clientIndex) === позиции). Если порядок/состав клиентов изменился
+// (клиента переставили, убрали, добавили), а clientIndex у этикеток остался
+// старым, места «съезжают» на чужого клиента (Авилон ЗИЛ вдруг показывает 3
+// вместо ДЦ Алтуфьево). Сопоставляем каждую этикетку с новым клиентом по
+// адресу (осн.) / имени (фолбэк) и обновляем её clientIndex под актуальную
+// позицию. Этикетки, чей клиент исчез из маршрута, не трогаем (их индекс
+// перестанет совпадать, и счетчики по ним обнулятся — это честно помечает
+// «лишние» места).
+function relinkRouteLabels(routeId, newClients, labels) {
+  if (!Array.isArray(labels) || !Array.isArray(newClients)) return labels;
+  const keyOf = (c) => {
+    const addr = String((c && c.address) || "").trim().toLowerCase();
+    if (addr) return "a:" + addr;
+    const client = String((c && c.client) || "").trim().toLowerCase();
+    if (client) return "c:" + client;
+    return null;
+  };
+  // Карта «ключ клиента → новая позиция в маршруте».
+  const idxByKey = new Map();
+  newClients.forEach((c, i) => {
+    const k = keyOf(c);
+    if (k != null && !idxByKey.has(k)) idxByKey.set(k, i);
+  });
+  for (const l of labels) {
+    if (!l || String(l.routeId) !== String(routeId)) continue;
+    const k = keyOf({ address: l.address, client: l.client });
+    if (k != null && idxByKey.has(k)) l.clientIndex = idxByKey.get(k);
+  }
+  return labels;
 }
 
 // Протяжённость маршрута в км по последовательности остановок:
@@ -2135,6 +2218,71 @@ function timesheetRowsForMonth(year, m0, staffList) {
 // "live" for a human but survives that throttling.
 const ONLINE_WINDOW_MS = 5 * 60 * 1000;
 
+// Множитель подработки для сотрудника на конкретную дату. Повышенный тариф
+// ищется по индивидуальным правилам multRules (приоритет: конкретный сотрудник →
+// группа → «для всех»), и только если правил нет — по легаси-полям params
+// (multiplier/multFrom/multTo/multGroups). Согласовано с клиентским
+// multiplierForDate() в app.js. Правило multRules привязано к КОНКРЕТНОЙ дате
+// (date YYYY-MM-DD) и интервалу [from, to] (HH:MM): повышенный тариф для живого
+// расчёта активен, если date совпадает с датой аргумента И момент времени `date`
+// лежит внутри интервала. Без даты правило не применяется.
+function serverDayMult(staffId, date) {
+  const dbData = db || { params: {} };
+  const p = dbData.params || {};
+  const rules = Array.isArray(p.multRules) ? p.multRules : [];
+  const dayKeyY = (d) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const nowKey = dayKeyY(date);
+  const nowMs = date.getTime();
+  const timeToday = (t) => {
+    const [h, m] = String(t).split(":").map(Number);
+    const base = new Date(nowKey + "T00:00:00").getTime();
+    return base + ((Number.isFinite(h) ? h : 0) * 3600000 + (Number.isFinite(m) ? m : 0) * 60000);
+  };
+  const dayMatches = (r) => {
+    if (!r || r.mult < 1) return false;
+    if (String(r.date || "") !== nowKey) return false; // день обязателен и должен совпадать
+    const fromMs = timeToday(r.from);
+    const toMs = timeToday(r.to);
+    return fromMs <= nowMs && nowMs <= toMs; // сейчас внутри [from, to]
+  };
+  if (rules.length > 0) {
+    const matchFor = (target, test) => {
+      const r = rules.find((x) => x.target === target && dayMatches(x) && test(x));
+      return r ? r.mult : null;
+    };
+    // 1) конкретный сотрудник
+    const staffRule = matchFor("staff", (x) => String(x.targetId) === String(staffId));
+    if (staffRule) return staffRule;
+    // 2) группа (первая подходящая группа, где состоит сотрудник)
+    const groups = dbData.groups || [];
+    const groupRule = matchFor("group", (x) => {
+      const g = groups.find((gg) => String(gg.id) === String(x.targetId));
+      return g && Array.isArray(g.memberIds) && g.memberIds.includes(String(staffId));
+    });
+    if (groupRule) return groupRule;
+    // 3) «для всех»
+    const allRule = rules.find((x) => x.target === "all" && dayMatches(x));
+    if (allRule) return allRule.mult;
+    return 1;
+  }
+  // Легаси-fallback на старые params.
+  const mg = p.multGroups || [];
+  const inMultGroup = mg.length === 0 || mg.some((gid) => {
+    const g = (dbData.groups || []).find((x) => String(x.id) === String(gid));
+    return g && Array.isArray(g.memberIds) && g.memberIds.includes(String(staffId));
+  });
+  let mult = Number.isFinite(p.multiplier) && p.multiplier >= 1 ? p.multiplier : 1;
+  if (mult <= 1 || !inMultGroup) return 1;
+  if (p.multFrom && p.multTo) {
+    const d0 = new Date(date); d0.setHours(0, 0, 0, 0);
+    const from = new Date(p.multFrom + "T00:00:00");
+    const to = new Date(p.multTo + "T23:59:59");
+    if (!(from <= d0 && d0 <= to)) return 1;
+  }
+  return mult;
+}
+
 function liveRows(actor, dbData) {
   const staff = visibleStaff(actor, dbData);
   const now = Date.now();
@@ -2166,7 +2314,10 @@ function liveRows(actor, dbData) {
     const bizDays = businessDays(year, m0);
     const rateBaseH = bizDays * 8; // hourly rate always uses the 8-hour day base (оклад / 8)
     const rate = st.salary != null && st.salary > 0 && rateBaseH > 0 ? st.salary / rateBaseH : 0;
-    const mult = dbData.params && Number.isFinite(dbData.params.multiplier) ? dbData.params.multiplier : 1;
+    // Множитель подработки для «сегодня» — согласован с клиентским
+    // multiplierForDate(): ищет сначала индивидуальные правила multRules
+    // (сотрудник → группа → для всех), а при их отсутствии — легаси-params.
+    const mult = serverDayMult(st.id, new Date());
     const canShow = dbData.params ? dbData.params.showOverSum !== false : true;
     const overEarn = canShow ? (overMs / 3600000) * rate * mult : 0;
     return {
@@ -2270,8 +2421,11 @@ async function handleApi(req, res, urlPath) {
     const moderator = isModerator(user, db);
     if (admin) {
       // An admin sees the whole "Все сотрудники" list — refresh it from the portal
-      // directory (rate-limited to once per minute) before returning.
-      await syncDirectory(false);
+      // directory (rate-limited to once per minute). IMPORTANT: the portal answers in
+      // tens of seconds, so this MUST NOT block the visitor's /api/state response —
+      // run it in the background and serve the current staff list right away. The
+      // refreshed list reaches the client on the next poll (once a minute).
+      void syncDirectory(false);
     }
     // Groups: an admin sees every group; a moderator sees only the groups they
     // moderate. A plain member sees none.
@@ -2340,10 +2494,34 @@ async function handleApi(req, res, urlPath) {
     // background tab / an out-of-order save. An explicit "Завершить" always arrives
     // with that segment already closed (its `end` set), so it still works.
     const prevOwn = segmentsFor(user.id, prev);
+    const prevEntry = prev && prev.byEmployee && prev.byEmployee[user.id] ? prev.byEmployee[user.id] : null;
+    const prevFinished = !!(prevEntry && prevEntry.finished);
     const prevOpen = prevOwn.find((s) => s.kind === "work" && s.end == null) || null;
     const incomingHasOpen = Array.isArray(segments) && segments.some((s) => s.kind === "work" && s.end == null);
+    // П.1 — защита от дубля «закрытый + открытый»: явное «Завершить работу».
+    // Клиент передаёт finish:true (и реальное время нажатия finishTime). Тогда
+    // сервер закрывает любые открытые сегменты и НИКОГДА не воскрешает висящий
+    // prevOpen (раньше при несовпадении id закрытый + prevOpen добавлялся обратно,
+    // и день оставался открытым на сервере — «конец» в админке был пуст).
+    const finish = body.finish === true;
+    const finishTime = Number.isFinite(body.finishTime) ? body.finishTime : Date.now();
     let merged = Array.isArray(segments) ? segments.slice() : [];
-    if (prevOpen && !incomingHasOpen) {
+    if (finish) {
+      // Явное завершение: закрываем все открытые сегменты временем нажатия и
+      // не тащим prevOpen обратно. День помечается закрытым (finished), чтобы
+      // фоновые вкладки не могли его снова открыть.
+      for (const s of merged) {
+        if (s && typeof s === "object" && s.end == null) s.end = finishTime;
+      }
+    } else if (prevFinished) {
+      // П.2 — защита от гонки: день уже закрыт («Завершить работу» было).
+      // Фоновая вкладка с ещё идущим таймером каждые ~8 c шлёт сюда открытый
+      // сегмент и перезаписывала бы закрытое состояние (а открытый сегмент мог бы
+      // затереть уже сохранённый «конец»). Запрос без явного finish — не
+      // авторитетная перезапись, поэтому НЕ трогаем уже сохранённую запись:
+      // оставляем серверные сегменты (и флаг finished), возвращаем ok.
+      merged = prevOwn.slice();
+    } else if (prevOpen && !incomingHasOpen) {
       // The incoming day closes the SAME open timer (same id, or same start when
       // id is absent) — that is an explicit "Завершить работу", not a stale
       // background save. Keep the closed segment and do NOT resurrect the open
@@ -2359,7 +2537,12 @@ async function handleApi(req, res, urlPath) {
     // Server always writes as the owner: a member can only touch their own days.
     const day = prev && typeof prev === "object" ? prev : {};
     if (!(day.byEmployee && typeof day.byEmployee === "object")) day.byEmployee = {};
-    day.byEmployee[user.id] = { segments: merged };
+    // Помечаем запись сотрудника закрытой при явном завершении (или если она
+    // уже была закрыта) — так фоновые вкладки не смогут вернуть открытый таймер.
+    day.byEmployee[user.id] = {
+      segments: merged,
+      finished: finish || prevFinished,
+    };
     if (prevStatuses) day.statuses = prevStatuses;
     db.days[key] = day;
     await persistDb();
@@ -2726,7 +2909,15 @@ async function handleApi(req, res, urlPath) {
     if (!(day.byEmployee && typeof day.byEmployee === "object")) day.byEmployee = {};
     // Save ONLY this employee's segments so the others' data for the same day
     // (also edited from the "Время работы" tab) are never overwritten.
-    day.byEmployee[ownerId] = { segments };
+    // Админская правка «Время работы» тоже помечает день закрытым, если в
+    // сохранённых сегментах нет открытых (у всех задан «конец»). Так исправление
+    // времени не снимает защиту от гонки: фоновая вкладка сотрудника с открытым
+    // таймером не сможет потом оживить закрытый день. Если админ намеренно
+    // оставил «конец» пустым (открытый сегмент) — день считается открытым.
+    day.byEmployee[ownerId] = {
+      segments,
+      finished: !segments.some((s) => s && typeof s === "object" && s.end == null),
+    };
     if (prev && prev.statuses && typeof prev.statuses === "object") day.statuses = prev.statuses;
     db.days[key] = day;
     await persistDb();
@@ -2821,6 +3012,37 @@ async function handleApi(req, res, urlPath) {
     if (typeof body.multiplier === "number" && body.multiplier >= 1) p.multiplier = body.multiplier;
     if (typeof body.multFrom === "string") p.multFrom = body.multFrom || null;
     if (typeof body.multTo === "string") p.multTo = body.multTo || null;
+    if (Array.isArray(body.multGroups)) {
+      p.multGroups = [...new Set(body.multGroups.map(String).filter((id) => db.groups.some((g) => g.id === id)))];
+    }
+    // Индивидуальные правила множителя (вкладка «Множитель»): атомарная замена
+    // всего набора. Каждое правило проходит валидацию: target ∈ all|staff|group,
+    // targetId ссылается на существующего сотрудника/группу, mult ≥ 1,
+    // days — подмножество 0..6.
+    if (Array.isArray(body.multRules)) {
+      const staffIds = new Set((db.staff || []).map((s) => String(s.id)));
+      const groupIds = new Set((db.groups || []).map((g) => String(g.id)));
+      const validDate = (d) => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d);
+      const validTime = (t) => typeof t === "string" && /^\d{2}:\d{2}$/.test(t);
+      p.multRules = body.multRules
+        .filter((r) => r && typeof r === "object")
+        .map((r) => ({
+          id: String(r.id || r.target + ":" + r.targetId + ":" + r.mult),
+          target: r.target === "staff" || r.target === "group" || r.target === "all" ? r.target : "all",
+          targetId: r.target === "all" ? null : String(r.targetId || ""),
+          mult: Number.isFinite(Number(r.mult)) && Number(r.mult) >= 1 ? Number(r.mult) : 1,
+          date: validDate(r.date) ? r.date : "",
+          from: validTime(r.from) ? r.from : "",
+          to: validTime(r.to) ? r.to : "",
+        }))
+        .filter((r) => {
+          if (!r.date || !r.from || !r.to) return false; // день обязателен
+          if (r.mult <= 1) return false;
+          if (r.target === "all") return true;
+          if (r.target === "staff") return staffIds.has(r.targetId);
+          return groupIds.has(r.targetId);
+        });
+    }
     if (typeof body.norm === "number" && body.norm >= 1 && body.norm <= 24) db.norm = body.norm;
     // Версия обновления Android-APK. Пустая строка/null = вернуться к дефолтам
     // (окружение APP_UPDATE_* или жёсткие значения ниже).
@@ -3433,6 +3655,12 @@ async function handleApi(req, res, urlPath) {
           rr.km = saved;
         } else {
         rr.km = routeKm(rr); // быстрый фолбэк по прямой
+        // Сразу фиксируем прямой км в кэше: пока дорожный расчёт (2ГИС) не
+        // вернулся, карточка показывает стабильное число без «прыжков», а после
+        // рестарта сервера (кэш в памяти пуст) не выполняется повторная лавина
+        // внешних запросов ради уже известного значения. Дорожный км, когда
+        // придёт, перезапишет это значение в routeKmCache.
+        routeKmCache[id] = rr.km;
         if (!routeKmPending[id]) {
           routeKmPending[id] = true;
           routeKmRoad(rr).then((km) => {
@@ -3444,7 +3672,16 @@ async function handleApi(req, res, urlPath) {
       return rr;
     };
     if (isDriver(user, db) && !admin) {
-      const routes = filterDate((db.driverRoutes || []).filter((r) => r.driverId === user.id));
+      // Водитель видит свои маршруты. Строгое совпадение — по driverId, но если
+      // маршрут был назначен под ДРУГИМ id того же человека (id водителя меняется
+      // между сессиями: портальный id vs net_/vibe:/share- id WebView), он не
+      // попадал бы в список. Поэтому добавляем фолбэк по имени (tolerant name
+      // match — тот же механизм, что уже используется для админов), чтобы маршрут,
+      // созданный в другое время под другим id, всё равно был виден водителю.
+      const routes = filterDate((db.driverRoutes || []).filter((r) =>
+        r.driverId === user.id
+        || (r.driverName && user.name && namesMatch(user.name, r.driverName))
+      ));
       return sendJson(res, 200, {
         ok: true,
         routes: routes.map(withKm),
@@ -3678,6 +3915,11 @@ async function handleApi(req, res, urlPath) {
         }
       }
       db.driverRoutes[existIdx].clients = clients;
+      // Состав маршрута изменился — перепривязываем этикетки под новые позиции
+      // клиентов, иначе после правки места «съезжают» на чужих клиентов
+      // (например, у Авилон ЗИЛ показывается 3 вместо ДЦ Алтуфьево). Маршрут
+      // здесь не занят (locked проверен выше), поэтому перепривязка безопасна.
+      relinkRouteLabels(db.driverRoutes[existIdx].id, clients, db.labels);
       db.driverRoutes[existIdx].at = Date.now();
       if (Number.isFinite(Number(body.km)) && Number(body.km) >= 0) {
         db.driverRoutes[existIdx].km = Math.round(Number(body.km) * 10) / 10;
@@ -4338,6 +4580,13 @@ async function handleApi(req, res, urlPath) {
       }
       // Применяем новый порядок.
       route.clients = newOrder;
+      // Водитель переставил точки в активном маршруте — этикетки/боксы привязаны
+      // к позиции (clientIndex: «BG<routeId>-<clientIndex+1>-<place>», счётчики
+      // мест идут по Number(l.clientIndex) === позиции). Без перепривязки после
+      // перестановки боксы остались бы на старых местах и «съехали» бы на чужие
+      // точки (тот же класс бага, что Авилон ЗИЛ ↔ ДЦ Алтуфьево). Пересчитываем
+      // clientIndex у этикеток маршрута под новый порядок клиентов.
+      relinkRouteLabels(route.id, newOrder, db.labels);
       await persistDb();
       return sendJson(res, 200, routeResp());
     }
@@ -4514,6 +4763,10 @@ async function handleApi(req, res, urlPath) {
     const agg = {}; // driverId -> { name, km, moveSec, siteSec, lunchSec, points }
     const routesPerDriver = {}; // driverId -> [{ id, name, routeName, moveSec, siteSec, lunchSec, points }]
     (db.driverRoutes || []).forEach((r) => {
+      // Подтягиваем «Единое название» связки (bundleName) в точки маршрута из
+      // актуальной базы контрагентов: чтобы у общей точки нескольких контрагентов
+      // на одном адресе в отчёте движения показывалось единое название вместо адреса.
+      r = withResolvedBundleNames(r, db);
       if (!r || r.date !== date) return;
       const prog = r.progress || {};
       const totalLunch = (Array.isArray(prog.lunchHistory) ? prog.lunchHistory : [])
@@ -4589,6 +4842,7 @@ async function handleApi(req, res, urlPath) {
         return {
           client: String(c.client || ""),
           address: String(c.address || ""),
+          bundleName: String(c.bundleName || ""),
           state: String(c.state || ""),
           moveSec: Math.round(((ts && te && te > ts) ? Math.max(0, te - ts - tp) : 0) / 1000),
           siteSec: Math.round(((ss && se && se > ss) ? (se - ss) : 0) / 1000),

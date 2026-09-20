@@ -4,6 +4,10 @@
   // UI-only preference keeps living in localStorage (per browser). Everything else is server-side.
   const COLLAPSE_KEY = "biotime.collapsed";
   const FINISH_KEY = "biotime.finishKey";
+  // Кэш стартового состояния для офлайн-старта (см. cacheStateSnapshot /
+  // loadStateCache): если приложение открылось без сети и /api/state недоступен,
+  // кнопка «Начать» не блокируется — восстанавливаем последний удачный снимок.
+  const STATE_CACHE_KEY = "biotime.stateCache";
   const CAL_START = { year: 2026, month: 8 }; // сентябрь 2026 (month 0-based)
 
   // ---- State (server-backed) ----
@@ -21,7 +25,7 @@
     log: [],           // [{ ts, action, ownerId }]
     admins: [],        // [id,...]
     blocked: [],       // [{ id, name, at }] — вход в приложение закрыт администратором
-    params: { showOverHours: true, showOverSum: true, showDrivers: false, adminSeeRoutes: false, driverSeeRoutes: false, showShipment: false, shipmentGroups: [], allowDriverStartWithoutShipment: false, allowFinishUnloadIncomplete: false, routeDeleteCode: "", scanLogLimit: 30000, multiplier: 1, multFrom: null, multTo: null, updateVersionCode: null, updateVersionName: "", updateApkUrl: "", updateNotes: "" },
+    params: { showOverHours: true, showOverSum: true, showDrivers: false, adminSeeRoutes: false, driverSeeRoutes: false, showShipment: false, shipmentGroups: [], allowDriverStartWithoutShipment: false, allowFinishUnloadIncomplete: false, routeDeleteCode: "", scanLogLimit: 30000, multiplier: 1, multFrom: null, multTo: null, multGroups: [], multRules: [], updateVersionCode: null, updateVersionName: "", updateApkUrl: "", updateNotes: "" },
     norm: 9,
     phase: "idle",     // idle | working | paused | finished
     segments: [],      // today's segments
@@ -48,6 +52,76 @@
     localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...set]));
   }
 
+  // Снимок стартового состояния для офлайн-старта. Сохраняется при каждом
+  // УСПЕШНОМ loadState(). Если при последующем открытии сети нет — init()
+  // восстанавливает этот снимок (applyStateCache), и кнопка «Начать» не
+  // блокируется: водитель начинает день, а saveDay уходит в офлайн-очередь.
+  function cacheStateSnapshot() {
+    try {
+      localStorage.setItem(STATE_CACHE_KEY, JSON.stringify({
+        me: state.me || null,
+        isAdmin: state.isAdmin,
+        isModerator: state.isModerator,
+        isDriver: state.isDriver,
+        isLoader: state.isLoader,
+        canEditStatus: state.canEditStatus,
+        canManageShipment: state.canManageShipment,
+        canSeeShipment: state.canSeeShipment,
+        staff: state.staff || [],
+        groups: state.groups || [],
+        params: state.params || {},
+        norm: state.norm,
+        serverOffsetMin: state.serverOffsetMin,
+        phase: state.phase,
+        dayKey: state.dayKey,
+        segments: state.segments || [],
+        finishKey: state.finishKey || null,
+      }));
+    } catch { /* приватный режим / переполнение — офлайн-старт просто недоступен */ }
+  }
+
+  function loadStateCache() {
+    try {
+      const raw = localStorage.getItem(STATE_CACHE_KEY);
+      if (!raw) return null;
+      const c = JSON.parse(raw);
+      return (c && c.me) ? c : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // Применяет кэшированный снимок к state (офлайн-старт). Рабочий день
+  // восстанавливается, только если кэш относится к СЕГОДНЯ и сегменты не
+  // завершены; иначе — чистый «idle», чтобы можно было начать сегодня заново.
+  function applyStateCache(c) {
+    state.me = c.me || null;
+    state.isAdmin = !!c.isAdmin;
+    state.isModerator = !!c.isModerator;
+    state.isDriver = !!c.isDriver;
+    state.isLoader = !!c.isLoader;
+    state.canEditStatus = !!c.canEditStatus;
+    state.canManageShipment = !!c.canManageShipment;
+    state.canSeeShipment = !!c.canSeeShipment;
+    state.staff = Array.isArray(c.staff) ? c.staff : [];
+    state.groups = Array.isArray(c.groups) ? c.groups : [];
+    state.params = c.params && typeof c.params === "object" ? c.params : state.params;
+    state.norm = Number.isFinite(Number(c.norm)) ? Number(c.norm) : state.norm;
+    state.serverOffsetMin = Number.isFinite(Number(c.serverOffsetMin)) ? Number(c.serverOffsetMin) : -new Date().getTimezoneOffset();
+    state.finishKey = c.finishKey || null;
+    const today = dayKeyOf(Date.now());
+    state.dayKey = today;
+    if (c.phase === "working" && c.dayKey === today && Array.isArray(c.segments) && c.segments.length) {
+      // Был открытый рабочий таймер — продолжаем его офлайн (не заново).
+      state.segments = c.segments.slice();
+      state.phase = "working";
+    } else {
+      state.segments = [];
+      state.phase = "idle";
+    }
+    state.loading = false;
+  }
+
   // Черновики «начало/конец» для раздела «Время работы»: пока время ещё не
   // сохранено на сервер, набранные значения живут здесь (per browser) и,
   // как и свёрнутые дни, переживают перезагрузку и сворачивание папки дня.
@@ -72,10 +146,25 @@
     let res;
     let retryAfter = 0; // секунд до повтора, если сервер «просыпается»
     try {
-      res = await fetch(path, {
-        headers: { "Content-Type": "application/json" },
-        ...opts,
-      });
+      // Таймаут сетевого вызова: без него при потере связи fetch в мобильном
+      // WebView/браузере может «висеть» десятки секунд (DNS/сокет/VPN), и кнопка
+      // водителя (например, «Прибыл на адрес») кажется неактивной — нажатие
+      // «замирает» и не даёт ни очереди, ни отклика. С таймаутом ~8 с вызов
+      // падает быстро, действие тут же уходит в офлайн-очередь, а водитель сразу
+      // видит «Нет связи — действие сохранено». При живой сети этого не видно:
+      // API приложения отвечает за доли секунды (портал не опрашивается в
+      // обработчике посетителя — только в фоне).
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), 8000);
+      try {
+        res = await fetch(path, {
+          headers: { "Content-Type": "application/json" },
+          ...opts,
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(t);
+      }
     } catch (e) {
       // Сетевая ошибка: сервер/шлюз недоступны (типично для VPN, блокирующего
       // доступ к домену приложения). Показываем водителю внятный баннер.
@@ -434,6 +523,10 @@
             body: JSON.stringify({
               key: op.dayKey,
               segments: Array.isArray(op.segments) ? op.segments : [],
+              // Завершение, отложенное в офлайн-очередь, несёт флаг finish —
+              // доставляем его, иначе сервер мог бы счесть время прихода сети
+              // «открытым» и не закрыть день (см. POST /api/day).
+              ...(op.finish ? { finish: true, finishTime: op.finishTime } : {}),
               clientTime: op.clientTime,
             }),
           });
@@ -529,7 +622,7 @@
     });
     state.admins = s.admins || [];
     state.blocked = s.blocked || [];
-    state.params = Object.assign({ showOverHours: true, showOverSum: true, showDrivers: false, adminSeeRoutes: false, driverSeeRoutes: false, showShipment: false, shipmentGroups: [], allowDriverStartWithoutShipment: false, allowFinishUnloadIncomplete: false, routeDeleteCode: "", scanLogLimit: 30000, multiplier: 1, multFrom: null, multTo: null }, s.params || {});
+    state.params = Object.assign({ showOverHours: true, showOverSum: true, showDrivers: false, adminSeeRoutes: false, driverSeeRoutes: false, showShipment: false, shipmentGroups: [], allowDriverStartWithoutShipment: false, allowFinishUnloadIncomplete: false, routeDeleteCode: "", scanLogLimit: 30000, multiplier: 1, multFrom: null, multTo: null, multGroups: [], multRules: [] }, s.params || {});
     state.norm = (s.norm != null && s.norm >= 0 && s.norm <= 24) ? s.norm : 8;
     // Единый опорный пояс (смещение сервера от UTC в минутах). Если сервер его
     // не прислал (старая версия) — фолбэк на локальный пояс устройства.
@@ -538,6 +631,8 @@
       : -new Date().getTimezoneOffset();
     state.loading = false;
     refreshToday();
+    // Пишем снимок для офлайн-старта (при каждом успешном чтении состояния).
+    cacheStateSnapshot();
   }
 
   // Background sync: re-polls the server so an admin's day edits (e.g. fixing an
@@ -597,7 +692,13 @@
     } catch { /* transient network error — keep current state */ }
   }
 
-  async function saveDay() {
+  async function saveDay(opts) {
+    // opts = { finish?: bool, finishTime?: number } — «Завершить работу».
+    // Передаём серверу явный флаг завершения, чтобы он закрыл день (finished) и
+    // не воскрешал висящий открытый сегмент / не давал фоновым вкладкам оживить
+    // таймер (см. POST /api/day на сервере).
+    const finish = !!(opts && opts.finish);
+    const finishTime = (opts && Number.isFinite(opts.finishTime)) ? opts.finishTime : Date.now();
     // Deduplicate segments before persisting: repeated saves/restores can leave
     // several work rows sharing the same `start`. Keep one (prefer the one with an
     // `end`), so no accidental duplicate open timer survives and inflates totals.
@@ -612,7 +713,11 @@
     try {
       await api("/api/day", {
         method: "POST",
-        body: JSON.stringify({ key: state.dayKey, segments: state.segments }),
+        body: JSON.stringify({
+          key: state.dayKey,
+          segments: state.segments,
+          ...(finish ? { finish: true, finishTime } : {}),
+        }),
       });
       // Успешная доставка — если в очереди была отложенная запись этого дня, снимаем её,
       // чтобы она не перезаписала уже актуальные данные более поздним сохранением.
@@ -631,6 +736,7 @@
           kind: "save_day",
           dayKey: state.dayKey,
           segments: state.segments.slice(),
+          ...(finish ? { finish: true, finishTime } : {}),
           clientTime: Date.now(),
         });
         showOfflineBadge(readOfflineOps().length);
@@ -651,7 +757,11 @@
       delete state.days[state.dayKey].ownerId;
       delete state.days[state.dayKey].segments;
     }
-    state.days[state.dayKey].byEmployee[state.me.id] = { segments: state.segments.slice() };
+    state.days[state.dayKey].byEmployee[state.me.id] = {
+      segments: state.segments.slice(),
+      finished: finish || !!(state.days[state.dayKey].byEmployee[state.me.id]
+        && state.days[state.dayKey].byEmployee[state.me.id].finished),
+    };
   }
 
   async function postLog(action, kind = "timer") {
@@ -742,7 +852,9 @@
       const byEmp = state.days[state.dayKey] && state.days[state.dayKey].byEmployee;
       if (byEmp && byEmp[state.me.id]) {
         byEmp[state.me.id].segments = state.segments.slice();
-        saveDay().catch(() => {});
+        // День завершён: шлём закрытое состояние с флагом завершения, чтобы сервер
+        // пометил день finished и фоновые вкладки не смогли оживить открытый таймер.
+        saveDay({ finish: true }).catch(() => {});
       }
     }
   }
@@ -766,39 +878,168 @@
     return (st && st.extraBonus != null) ? st.extraBonus : 0;
   }
 
+  // Мемоизация «текущего» множителя для таймера: пересчитывается редко (смена
+  // дня, правил, сотр. не выбран иначе), а зовётся на каждом тике таймера (×1с)
+  // и в renderLive. Ключ — дата + сериализованный снimок правил + id сотрудника.
+  let currMultKey = null;
+  let currMultVal = 1;
   function currentMultiplier() {
-    return multiplierActive() ? state.params.multiplier : 1;
+    const now = Date.now();
+    const key = dayKeyOf(now);
+    const rules = state.params && state.params.multRules;
+    const rulesSig = rules && rules.length ? JSON.stringify(rules) : "";
+    const cacheKey = key + "|" + String(state.me && state.me.id) + "|" + rulesSig;
+    if (cacheKey === currMultKey) return currMultVal;
+    currMultKey = cacheKey;
+    currMultVal = multiplierForDate(key, state.me && state.me.id);
+    return currMultVal;
   }
 
+  // Активен ли повышенный тариф для текущего пользователя «сегодня».
+  // Используется для статус-панели (бейдж «Действует повышенный тариф ×N»).
   function multiplierActive() {
-    const p = state.params;
-    // A multiplier > 1 applies at all times unless a limiting period is given.
-    // Without a period, treat the set multiplier as active (elevated tariff).
-    if (!p.multFrom || !p.multTo) return p.multiplier > 1;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const from = new Date(p.multFrom + "T00:00:00");
-    const to = new Date(p.multTo + "T23:59:59");
-    return from <= today && today <= to;
+    return currentMultiplier() > 1;
+  }
+
+  // Правило множителя (мультипликатор подработки) теперь привязано к КОНКРЕТНОЙ
+  // дате и временному интервалу [from, to] (HH:MM). Если дата не совпадает или
+  // интервал не задан — правило НЕ применяется. Множитель ×N насчитывается
+  // ТОЛЬКО на те сверхурочные часы дня, которые попали в интервал.
+  //
+  // multRuleInfoFor(dateKey, staffId) → { mult, from, to } | null.
+  function multRuleInfoFor(dateKey, staffIdForGroup) {
+    const rules = Array.isArray(state.params.multRules) ? state.params.multRules : [];
+    if (!rules.length) return null;
+    const dateMatches = (r) => String(r.date || "") === String(dateKey);
+    const parseWindow = (r) => {
+      const from = String(r.from || "").trim();
+      const to = String(r.to || "").trim();
+      return (from && to) ? { from, to } : null;
+    };
+    const first = (target, test) => {
+      const r = rules.find((x) => x.target === target && x.mult >= 1 && dateMatches(x) && test(x));
+      return r ? { mult: r.mult, window: parseWindow(r) } : null;
+    };
+    // 1) конкретный сотрудник → 2) группа → 3) «для всех»
+    const candidates = [
+      first("staff", (x) => String(x.targetId) === String(staffIdForGroup)),
+      first("group", (x) => staffInGroup(staffIdForGroup, [x.targetId])),
+      (() => {
+        const r = rules.find((x) => x.target === "all" && x.mult >= 1 && dateMatches(x));
+        return r ? { mult: r.mult, window: parseWindow(r) } : null;
+      })(),
+    ];
+    return candidates.find((c) => c) || null;
+  }
+
+  // Множитель для бейджей/подсветки: возвращает ×N если на эту дату есть
+  // подходящее правило (независимо от интервала времени суток — бейдж показывает
+  // факт правила на день). Точный почасовой расчёт — в calcOverEarnByDay.
+  function multiplierForDate(dateKey, staffIdForGroup) {
+    const info = multRuleInfoFor(dateKey, staffIdForGroup);
+    return info ? info.mult : 1;
+  }
+
+  // Absolute ms начала/конца интервала (HH:MM) для даты dateKey.
+  function windowMs(dateKey, from, to) {
+    const base = new Date(dateKey + "T00:00:00").getTime();
+    const [h1, m1] = String(from).split(":").map(Number);
+    const [h2, m2] = String(to).split(":").map(Number);
+    const fromMs = base + ((Number.isFinite(h1) ? h1 : 0) * 3600000 + (Number.isFinite(m1) ? m1 : 0) * 60000);
+    const toMs = base + ((Number.isFinite(h2) ? h2 : 0) * 3600000 + (Number.isFinite(m2) ? m2 : 0) * 60000);
+    return { fromMs, toMs };
+  }
+
+  // Доля (0..1) сверхурочных часов дня, попавших в интервал [from, to].
+  // Модель: переработка дня — «хвост» рабочего времени (последние over минуты
+  // за концом рабочего дня). Считаем пересечение этого хвоста с интервалом.
+  function overtimeWindowShare(dateKey, staffId, overMs, from, to) {
+    if (!(overMs > 0) || !from || !to) return 0;
+    const segs = daySegments(dateKey, staffId);
+    let lastEnd = -Infinity;
+    for (const s of segs) {
+      if (s.kind !== "work") continue;
+      const end = s.end == null
+        ? (dateKey === dayKeyOf(Date.now()) ? Date.now() : dayEndMs(dateKey))
+        : s.end;
+      if (end > lastEnd) lastEnd = end;
+    }
+    if (!Number.isFinite(lastEnd) || lastEnd < 0) return 0;
+    const { fromMs, toMs } = windowMs(dateKey, from, to);
+    const tailStart = lastEnd - overMs; // начало «хвоста» переработки
+    const overlap = Math.max(0, Math.min(lastEnd, toMs) - Math.max(tailStart, fromMs));
+    return Math.min(1, Math.max(0, overlap / overMs));
+  }
+
+  // Деньги за переработку месяца с ПО-ЧАСОВЫМ множителем и автокомпенсацией
+  // недобора. rows: [{ date: Date, over: ms }, ...] — переработка каждого дня.
+  // Повышенный тариф ×N (правило multRules: конкретная дата + интервал [from,to])
+  // начисляется ТОЛЬКО на те сверхурочные часы дня, которые попали в интервал.
+  // Остальные сверхурочные часы — по обычной ставке (×1). Автокомпенсация:
+  // часы, зачтённые в месячный недобор, не оплачиваются — сначала «съедаются»
+  // часы без повышенного тарифа, чтобы конкретный интервал с ×N оплатился.
+  // Возвращает { overEarn, effectiveOverMs }.
+  function calcOverEarnByDay(rows, rate, isComplete, totalOverMs, deficitMs, staffIdForGroup) {
+    const dayMult = rows.map((r) => ({
+      dateKey: dayKeyOf(r.date.getTime()),
+      overMs: Math.max(0, r.over || 0),
+      // Признак «повышенного» дня для порядка компенсации: есть ли правило на дату.
+      info: null,
+    }));
+    // Не считаем info в map (нужен dayKey): заполняем отдельным проходом.
+    for (const dm of dayMult) dm.info = multRuleInfoFor(dm.dateKey, staffIdForGroup);
+    const totalOver = dayMult.reduce((acc, x) => acc + x.overMs, 0);
+    const usedMs = isComplete ? Math.min(totalOver > 0 ? totalOver : totalOverMs, deficitMs) : 0;
+    let rem = usedMs;
+    let overEarn = 0;
+    // Дни с правилом (повышенным) стоят в очереди компенсации позже обычных —
+    // недобор «съедается» сначала из дней ×1, чтобы интервал ×N оплатился.
+    const ordered = [...dayMult].sort((a, b) => Number(!!a.info) - Number(!!b.info));
+    for (const dm of ordered) {
+      if (dm.overMs <= 0) continue;
+      const take = Math.min(dm.overMs, rem);
+      const paid = dm.overMs - take;
+      if (paid > 0) {
+        const key = dayKeyOf(dm.dateKey);
+        const share = (dm.info && dm.info.window)
+          ? overtimeWindowShare(key, staffIdForGroup, dm.overMs, dm.info.window.from, dm.info.window.to)
+          : 0;
+        const boosted = paid * share;            // сверхурочные внутри интервала — по ×N
+        const base = paid - boosted;             // остальные — по ×1
+        const mult = dm.info ? dm.info.mult : 1;
+        overEarn += (base / 3600000) * rate * 1 + (boosted / 3600000) * rate * mult;
+      }
+      rem -= take;
+    }
+    const effectiveOverMs = isComplete ? Math.max(0, totalOverMs - usedMs) : totalOverMs;
+    return { overEarn, effectiveOverMs };
   }
 
   // Hourly rate from the monthly salary and the current month's working days.
   // The hourly rate always uses an 8-hour working-day base (оклад / 8), regardless
   // of the overtime norm (9 h = 8 h per Labour Code + 1 h lunch).
   const RATE_BASE_HOURS = 8;
+  // Мемоизация ставки: зависит только от месяца и оклада, которые меняются редко.
+  let currRateKey = null;
+  let currRateVal = 0;
   function currentRatePerHour() {
     const now = new Date();
+    const key = now.getFullYear() + "-" + now.getMonth() + "|" + activeSalary();
+    if (key === currRateKey) return currRateVal;
+    currRateKey = key;
     const bizDays = businessDaysInMonth(now.getFullYear(), now.getMonth());
     const rateMonthMs = bizDays * RATE_BASE_HOURS * 3600000;
     const salary = activeSalary();
-    return rateMonthMs > 0 ? salary / (rateMonthMs / 3600000) : 0;
+    currRateVal = rateMonthMs > 0 ? salary / (rateMonthMs / 3600000) : 0;
+    return currRateVal;
   }
 
   // Money earned today: overtime only, no salary base.
   // = overtime hours × hourly rate × multiplier.
   function todayEarned(workMs) {
     const rate = currentRatePerHour();
-    const mult = currentMultiplier();
+    // По-дневной множитель: «заработано сегодня» учитывает период и группы.
+    const mult = multiplierForDate(dayKeyOf(Date.now()), state.me && state.me.id);
     const normMs = state.norm * 3600000;
     const over = Math.max(0, workMs - normMs);
     return (over / 3600000) * rate * mult;
@@ -1035,8 +1276,6 @@
     const bonus = activeBonus();
     const extraBonus = activeExtraBonus();
     const ratePerHour = rateMonthMs > 0 ? salary / (rateMonthMs / 3600000) : 0;
-    const multiplier = currentMultiplier();
-    const overEarn = (totalOverMs / 3600000) * ratePerHour * multiplier;
     // Автокомпенсация: месячная норма = 22 рабочих дня × 8 ч = 176 ч
     // (по ТК — стандартная норма полного месяца; обед 1 ч не входит в часовую
     // норму). Если за месяц недобор, но в какие-то дни была переработка — она
@@ -1045,20 +1284,29 @@
     const NORM_MONTH_DAYS = 22;
     const normMonthMs = NORM_MONTH_DAYS * RATE_BASE_HOURS * 3600000; // 176 ч
     const deficitMs = Math.max(0, normMonthMs - totalWorkMs);
-    const usedMs = Math.min(totalOverMs, deficitMs); // зачтено в недобор
     // Месяц считается завершённым (расчёт окончателен), когда наступило 1-е число
     // следующего месяца. Автокомпенсация (уменьшение переработки на недобор)
     // применяется ТОЛЬКО после завершения месяца — пока месяц идёт, недобор ещё
     // может закрыться, поэтому показываем полную переработку (не обнуляем сумму).
     const isComplete = new Date(year, m0 + 1, 1) <= new Date();
-    const effectiveOverMs = isComplete ? Math.max(0, totalOverMs - usedMs) : totalOverMs; // к оплате
+    // Деньги за переработку с ПО-ДНЕВНЫМ множителем: повышенный тариф ×N действует
+    // только в дни периода multFrom–multTo (и только для отмеченных групп),
+    // остальные дни — обычная ставка (×1). Раньше единый currentMultiplier()
+    // применялся ко всему месяцу, из-за чего «тариф на конкретный день» считал все дни.
+    const meId = state.me && state.me.id;
+    const overCalc = calcOverEarnByDay(rows, ratePerHour, isComplete, totalOverMs, deficitMs, meId);
+    const effectiveOverMs = overCalc.effectiveOverMs; // к оплате
+    const overEarn = overCalc.overEarn;
+    const usedMs = isComplete ? Math.max(0, totalOverMs - effectiveOverMs) : 0; // зачтено в недобор
     // Unpaid days (НН/ДО) are not paid: deduct their share of the monthly salary.
     const dayRate = bizDays > 0 ? salary / bizDays : 0;
     const unpaidDeduct = unpaidDays * dayRate;
     // "Заработано" = оклад + подработка + премия − неоплаченные дни; подработка считается ТОЛЬКО от оклада.
-    const earned = salary + (effectiveOverMs / 3600000) * ratePerHour * multiplier + bonus + extraBonus - unpaidDeduct;
-    const overRate = ratePerHour * multiplier;
-    return { year, m0, key: monthKey(year, m0), label: monthLabel(year, m0), isLast, isComplete, bizDays, salary, bonus, extraBonus, totalWorkMs, totalOverMs, normMonthMs, deficitMs, usedMs, effectiveOverMs, ratePerHour, overEarn: (effectiveOverMs / 3600000) * ratePerHour * multiplier, earned, unpaidDays, unpaidDeduct, unpaidDates, dayRate, rows };
+    const earned = salary + overEarn + bonus + extraBonus - unpaidDeduct;
+    const overRate = ratePerHour;
+    // overEarn уже посчитан ПО ДНЯМ (calcOverEarnByDay) с по-дневным множителем;
+    // отдельная переменная `multiplier` тут не нужна (и удалена — не ссылаться на неё).
+    return { year, m0, key: monthKey(year, m0), label: monthLabel(year, m0), isLast, isComplete, bizDays, salary, bonus, extraBonus, totalWorkMs, totalOverMs, normMonthMs, deficitMs, usedMs, effectiveOverMs, ratePerHour, overEarn, earned, unpaidDays, unpaidDeduct, unpaidDates, dayRate, rows };
   }
 
   // ------------- DOM refs -------------
@@ -1132,6 +1380,9 @@
     routeDeleteModal: $("routeDeleteModal"), routeDeleteInput: $("routeDeleteInput"),
     routeDeleteConfirm: $("routeDeleteConfirm"), routeDeleteCancel: $("routeDeleteCancel"),
     routeDeleteClose: $("routeDeleteClose"),
+    driverScanModal: $("driverScanModal"), driverScanInput: $("driverScanInput"),
+    driverScanClose: $("driverScanClose"), driverScanCancel: $("driverScanCancel"),
+    driverScanOk: $("driverScanOk"),
     shipmentListActive: $("shipmentListActive"), shipmentListDone: $("shipmentListDone"),
     shipmentSubtabActive: $("shipmentSubtabActive"), shipmentSubtabDone: $("shipmentSubtabDone"),
     printModal: $("printModal"), printClientsTiles: $("printClientsTiles"),
@@ -1144,8 +1395,14 @@
     scanLoadBtn: $("scanLoadBtn"), scanOverlayClose: $("scanOverlayClose"),
     printScanStatus: $("printScanStatus"), printLabelsList: $("printLabelsList"), printScanInput: $("printScanInput"),
     scanSrcCamera: $("scanSrcCamera"), scanSrcExternal: $("scanSrcExternal"), printScanHint: $("printScanHint"),
-    multiplierVal: $("multiplierVal"), multiplierFrom: $("multiplierFrom"), multiplierTo: $("multiplierTo"),
     multiplierStatus: $("multiplierStatus"), normVal: $("normVal"), paramsSave: $("paramsSave"),
+    multRuleTarget: $("multRuleTarget"), multRuleSubject: $("multRuleSubject"),
+    multRuleSubjectField: $("multRuleSubjectField"), multRuleSubjectLabel: $("multRuleSubjectLabel"),
+    multRuleDate: $("multRuleDate"), multRuleFrom: $("multRuleFrom"), multRuleTo: $("multRuleTo"),
+    multRuleValue: $("multRuleValue"),
+    multRuleAddBtn: $("multRuleAddBtn"), multRuleCancelBtn: $("multRuleCancelBtn"),
+    multRuleFormTitle: $("multRuleFormTitle"), multRuleList: $("multRuleList"),
+    goToMultiplierTab: $("goToMultiplierTab"),
     updateVersionCode: $("updateVersionCode"), updateVersionName: $("updateVersionName"),
     updateApkUrl: $("updateApkUrl"), updateNotes: $("updateNotes"),
     backupExportBtn: $("backupExportBtn"), backupAppBtn: $("backupAppBtn"), backupImportFile: $("backupImportFile"), backupStatus: $("backupStatus"),
@@ -1226,7 +1483,10 @@
     render();
     showFinishToast();
     postLog("завершение работы");
-    await saveDay();
+    // П.3 — централизация завершения: явно сообщаем серверу, что день закрыт
+    // (finish:true + время нажатия). Сервер закрывает день и не даст фоновым
+    // вкладкам/дублю вернуть открытый таймер (см. POST /api/day).
+    await saveDay({ finish: true, finishTime: now });
     // Re-sync the timer state and immediately refresh the "Время работы" tab so
     // the finish time (now) shows up in the "конец" field without waiting for the
     // next poll / tab switch.
@@ -1377,6 +1637,48 @@
     }
   }
 
+  // Лёгкое ежесекундное обновление таймера: пересчитывает и пишет ТОЛЬКО живые
+  // цифры (отработано, переработка, деньги, время начала), не перерисовывая
+  // статусы/бейджи/ставку и не дёргая тяжёлые функции (currentRatePerHour,
+  // multiplierForDate) на каждый тик. Полный render() вызывается на событиях
+  // (start/pause/finish/poll) — там смена статуса действительно нужна.
+  function tickTimer() {
+    if (!el.pageTimer || el.pageTimer.hidden) return;
+    const now = liveNow();
+    const t = totals(now);
+    const normMs = state.norm * 3600 * 1000;
+    let closedWork = 0;
+    let openWork = 0;
+    for (const s of state.segments) {
+      if (s.kind !== "work") continue;
+      const dur = segDurationMs(s, now);
+      if (s.end == null) openWork += dur;
+      else closedWork += dur;
+    }
+    const workNet = Math.max(0, closedWork) + openWork;
+    const nineH = 9 * 3600 * 1000;
+    const [ty, tm, td] = state.dayKey.split("-").map(Number);
+    const todayIsBiz = isBizDay(ty, tm - 1, td);
+    const todayOver = todayIsBiz
+      ? (closedWork > 0 ? Math.max(0, closedWork - normMs) : 0)
+      : workNet;
+    const showSubtotal = todayIsBiz ? workNet >= nineH : workNet > 0;
+    const over = showSubtotal ? todayOver : 0;
+    if (el.totWorked) el.totWorked.textContent = fmtMs(workNet, false);
+    if (el.totOvertime) el.totOvertime.textContent = over > 0 ? fmtMs(over, false) : "00:00";
+    if (el.totOvertime && el.totOvertime.parentElement) {
+      el.totOvertime.parentElement.classList.toggle("over", over > 0);
+    }
+    if (el.totBal) el.totBal.textContent = fmtMoney(todayEarned(over > 0 ? normMs + over : 0));
+    // Время начала (первый рабочий сегмент) тоже живёт и дорисовывается только здесь.
+    const startSeg = state.segments.find((s) => s.kind === "work");
+    if (el.dialTime) {
+      if (!startSeg) el.dialTime.textContent = "—";
+      else if (startSeg.end != null) el.dialTime.textContent = `${msToHm(startSeg.start)} → ${msToHm(startSeg.end)}`;
+      else el.dialTime.textContent = msToHm(startSeg.start);
+    }
+  }
+
   // ------------- Calendar render -------------
   function renderCalendar() {
     // Чип оклада показывает только оклад (без надбавки). Надбавка остаётся
@@ -1481,7 +1783,10 @@
         const rowsHtml = calc.rows.map((r) => {
           const dateStr = r.date.toLocaleDateString("ru-RU", { day: "numeric", month: "short", weekday: "short" });
           const overCell = showOverHoursFlag ? `<td class="num ${r.over > 0 ? "over-pos" : ""}">${r.over > 0 ? fmtHours(r.over) : "—"}</td>` : "";
-          const sumCell = showOverSumFlag ? `<td class="num earn">${fmtMoney((r.over / 3600000) * calc.ratePerHour)}</td>` : "";
+          // Дневная сумма с ПО-ДНЕВНЫМ множителем (повышенный тариф только в дни
+          // периода и для отмеченных групп) — согласуется с итогом calc.overEarn.
+          const dayMult = multiplierForDate(dayKeyOf(r.date.getTime()), state.me && state.me.id);
+          const sumCell = showOverSumFlag ? `<td class="num earn">${fmtMoney((r.over / 3600000) * calc.ratePerHour * dayMult)}</td>` : "";
           return `<tr><td>${dateStr}</td><td class="num">${fmtHours(r.work)}</td>${overCell}${sumCell}</tr>`;
         }).join("");
         const overHead = showOverHoursFlag ? `<th class="num">Переработка</th>` : "";
@@ -1698,16 +2003,22 @@
       // day. The old formula (totalMs − attendedDays×8h) included the hours of
       // partial days (< 8h) that were not flagged "Я" while never subtracting
       // their norm, which inflated overtime (e.g. 2×2h expected became 5.7h).
+      // Переработка и её стоимость собираются ПО ДНЯМ. Переработка дня считается
+      // по тем же правилам, что в ЗП (выходной — весь закрытый таймер в подработку,
+      // рабочий — сверх нормы). Стоимость каждого дня учитывает ПО-ДНЕВНОЙ множитель
+      // (повышенный тариф только в дни периода multFrom–multTo и для отмеченных
+      // групп), а не единый множитель на весь месяц.
       let overMsVal = 0;
+      const overByDay = [];
       for (let o = 1; o <= daysInMonth; o += 1) {
         const dKey = `${y}-${String(m0 + 1).padStart(2, "0")}-${String(o).padStart(2, "0")}`;
         const wk = dayClosedWorkMs(st.id, dKey);
-        // Переработка по тем же правилам, что и в расчёте ЗП (computeMonth /
-        // employeeSalaryCalc): в выходной день закрытый таймер пишется ВЕСЬ в
-        // подработку (без вычитания дневной нормы), в рабочий — сверх нормы.
         if (wk > 0) {
-          if (isBizDay(y, m0, o)) overMsVal += Math.max(0, wk - normDayMs);
-          else overMsVal += wk;
+          const overDay = isBizDay(y, m0, o) ? Math.max(0, wk - normDayMs) : wk;
+          if (overDay > 0) {
+            overMsVal += overDay;
+            overByDay.push({ dKey, overDay });
+          }
         }
       }
       // "Часы" follow the hours flag; "сумма" (money) follows its OWN flag, so a
@@ -1717,7 +2028,9 @@
       // Money for overtime, from the employee's salary rate (salary / month norm).
       const normMonthH = bizDays * RATE_BASE_HOURS;
       const staffRate = st.salary != null && st.salary > 0 && normMonthH > 0 ? st.salary / normMonthH : 0;
-      const overEarn = seeSumVal ? (overMsVal / 3600000) * staffRate * currentMultiplier() : 0;
+      const overEarn = seeSumVal
+        ? overByDay.reduce((acc, od) => acc + (od.overDay / 3600000) * staffRate * multiplierForDate(od.dKey, st.id), 0)
+        : 0;
       return {
         id: st.id,
         name: st.name,
@@ -1815,11 +2128,17 @@
       for (let d = 1; d <= daysInMonth; d += 1) {
         const dow = new Date(y, m0, d).getDay();
         const isWE = dow === 0 || dow === 6;
+        const key = `${y}-${String(m0 + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+        // Повышенный тариф подработки (множитель ×N > 1) в этот день для этого
+        // сотрудника: подсвечиваем ячейку табеля, чтобы было видно, что день
+        // «ишёл по повышенному тарифу» (период multFrom–multTo + группа сотрудника).
+        const dayMult = multiplierForDate(key, r.id);
         const isToday = (() => {
           const now = new Date();
           return now.getFullYear() === y && now.getMonth() === m0 && now.getDate() === d;
         })();
         const cls = [isWE ? "dow-we" : ""];
+        if (dayMult > 1) cls.push("day-mult");
         const status = r.dayStatus[d];
         const rec = state.days[`${y}-${String(m0 + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`];
         const isManual = rec && rec.statuses && rec.statuses[r.id];
@@ -1829,9 +2148,13 @@
         if (status && !isManual) cls.push("auto-mark");
         if (status) cls.push("has-status");
         if (state.canEditStatus) cls.push("editable");
-        const key = `${y}-${String(m0 + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
         const mark = status
-          ? `<span class="mark ${status === "Я" && r.overMs > 0 ? "mark-over" : ""} status-${status}">${status}</span>`
+          // Бейдж множителя ×N показываем ТОЛЬКО в ячейках с явкой («Я»):
+          // повышенный тариф применяется к подработке, а подработка считается
+          // только в фактически отработанный день. У больничных, отпусков,
+          // неполных дней и прогулов бейдж ×N не ставим, даже если день попадает
+          // в период повышенного тарифа.
+          ? `<span class="mark ${status === "Я" && r.overMs > 0 ? "mark-over" : ""} status-${status}">${status}${status === "Я" && dayMult > 1 ? `<i class="mult-tag">×${dayMult}</i>` : ""}</span>`
           : "";
         dayCells += `<td class="${cls.join(" ")}" data-day="${key}" data-owner="${r.id}">${mark}</td>`;
       }
@@ -2052,6 +2375,8 @@
     let totalWorkMs = 0;
     let totalOverMs = 0;
     let unpaidDays = 0;
+    let paidIdleDays = 0; // дни больничного / отпуска, засчитанные как явка
+    let paidIdleMs = 0;   // их часы (вошли в totalWorkMs)
     const rows = []; // строки по дням для таблицы: {day, date, work, over}
     for (let d = 1; d <= daysInMonth; d += 1) {
       const key = `${year}-${String(m0 + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
@@ -2059,6 +2384,10 @@
       const st = rec && rec.statuses ? rec.statuses[staffId] : undefined;
       // Неоплачиваемые статусы (НН/ДО): исключаем из заработка.
       if (st === "НН" || st === "ДО") { unpaidDays++; continue; }
+      // Больничный (Б) и отпуск (ОТ) — оплачиваемое отсутствие: засчитываем в
+      // часы явки (по норме, как будто сотрудник отработал день) и обязательно
+      // показываем такой день строкой в карточке сотрудника (fixed in card).
+      const isPaidIdle = st === "Б" || st === "ОТ";
       const isBiz = isBizDay(year, m0, d);
       const closedReal = dayClosedWorkMs(staffId, key);
       const hasTimer = closedReal > 0; // есть завершённый сегмент таймера
@@ -2071,30 +2400,33 @@
         continue;
       }
       // Приоритет: есть таймер → используем его (ручная явка игнорируется).
-      // Нет таймера → если проставлена ручная явка «Я», считаем день за 8 часов.
+      // Нет таймера → если проставлена явка «Я» либо больничный «Б» / отпуск
+      // «ОТ», считаем день за норму рабочего времени (как явку).
       const work = hasTimer ? reportDayWorkMs(staffId, key)
-        : (st === "Я" ? RATE_BASE_HOURS * 3600000 : 0);
+        : (st === "Я" || isPaidIdle ? RATE_BASE_HOURS * 3600000 : 0);
       if (work <= 0) continue;
       const over = hasTimer ? Math.max(0, closedReal - normDayMs) : 0;
       totalWorkMs += work;
       if (over > 0) totalOverMs += over;
-      rows.push({ day: d, date: new Date(year, m0, d), work, over });
+      if (isPaidIdle && !hasTimer) { paidIdleDays += 1; paidIdleMs += work; }
+      rows.push({ day: d, date: new Date(year, m0, d), work, over, st: isPaidIdle ? st : undefined });
     }
     const deficitMs = Math.max(0, normMonthMs - totalWorkMs);
-    // Зачёт сверху вниз: переработка сначала закрывает месячный недобор.
-    const usedMs = Math.min(totalOverMs, deficitMs); // зачлось в недобор (не оплачивается)
     // Автокомпенсация применяется ТОЛЬКО после завершения месяца: пока месяц
     // идёт, показываем полную переработку, а недобор ещё может закрыться.
     const isComplete = new Date(year, m0 + 1, 1) <= new Date();
-    const effectiveOverMs = isComplete ? Math.max(0, totalOverMs - usedMs) : totalOverMs; // к оплате
     const st = state.staff.find((x) => String(x.id) === String(staffId));
     const salary = st && st.salary != null ? st.salary : 50000;
     const extraBonus = st && st.extraBonus != null ? st.extraBonus : 0;
     const bonus = st && st.bonus != null ? st.bonus : 0;
     const rateMonthH = bizDays * RATE_BASE_HOURS;
     const ratePerHour = rateMonthH > 0 ? salary / rateMonthH : 0;
-    const multiplier = currentMultiplier();
-    const overEarn = (effectiveOverMs / 3600000) * ratePerHour * multiplier;
+    // Деньги за переработку с ПО-ДНЕВНЫМ множителем (повышенный тариф только в
+    // дни периода multFrom–multTo и для отмеченных групп), остальные дни — ×1.
+    const overCalc = calcOverEarnByDay(rows, ratePerHour, isComplete, totalOverMs, deficitMs, staffId);
+    const effectiveOverMs = overCalc.effectiveOverMs; // к оплате
+    const overEarn = overCalc.overEarn;
+    const usedMs = isComplete ? Math.max(0, totalOverMs - effectiveOverMs) : 0; // зачлось в недобор
     const dayRate = bizDays > 0 ? salary / bizDays : 0;
     const unpaidDeduct = unpaidDays * dayRate;
     // «Заработано» = оклад + премия + надбавка + переработка − неоплаченные дни
@@ -2107,6 +2439,7 @@
       isComplete, deficitMs, usedMs, effectiveOverMs,
       salary, bonus, extraBonus, ratePerHour, overEarn, earned,
       unpaidDays, unpaidDeduct, dayRate, rows,
+      paidIdleDays, paidIdleMs,
     };
   }
 
@@ -2132,6 +2465,52 @@
     return "";
   }
 
+  // Кэш расчёта ЗП по сотруднику+месяцу для ЛЕНИВОГО рендера дневной детализации.
+  // Тяжёлый HTML построчно-по-дням (до ~31 <tr> на сотрудника) строится только
+  // когда карточку раскрывают, а не для всех сотрудников сразу — иначе первичный
+  // рендер «Расчёты ЗП» собирает тысячи скрытых DOM-узлов и заметно тормозит
+  // (особенно на мобильном WebView).
+  const salaryCalcCache = {};
+  function salaryCalcKey(id, y, m0) { return `${id}:${y}:${m0}`; }
+  function salaryCalcDaysHtml(entry) {
+    if (!entry || !entry.rows || !entry.rows.length) return "";
+    const hs = fmtCalcHours;
+    return entry.rows.map((row) => {
+      const dKey = dayKeyOf(row.date.getTime());
+      // Дневная сумма с ПО-ДНЕВНЫМ множителем (повышенный тариф только в дни
+      // периода, остальные ×1), согласовано с итогом employeeSalaryCalc.
+      const dayMult = multiplierForDate(dKey, entry.id);
+      const overPay = (row.over / 3600000) * entry.ratePerHour * dayMult;
+      const dateStr = row.date ? row.date.toLocaleDateString("ru-RU", { day: "numeric", weekday: "short" }) : ("—" + row.day);
+      // День, в который для этого сотрудника действовал повышенный тариф ×N:
+      // подсвечиваем строку и показываем множитель рядом с датой.
+      // Больничный «Б» / отпуск «ОТ»: помечаем день бейджем статуса и
+      // подсвечиваем строку — отсутствие засчитано в часы явки.
+      const paidIdle = row.st === "Б" || row.st === "ОТ";
+      // Повышенный тариф ×N действует ТОЛЬКО при реальной явке (переработка),
+      // а не в дни больничного/отпуска — у отсутствия нет переработки, поэтому
+      // множитель там не показываем и не подсвечиваем строку как тарифную.
+      const multBadge = (!paidIdle && dayMult > 1) ? ` <i class="mult-tag">×${dayMult}</i>` : "";
+      const statusBadge = paidIdle ? `<span class="day-status-tag">${row.st}</span>` : "";
+      return `<tr class="${!paidIdle && dayMult > 1 ? "mult-day" : ""} ${paidIdle ? "day-paid-idle" : ""}">
+        <td data-label="День">${dateStr}${multBadge}${statusBadge}</td>
+        <td class="num" data-label="Отработано">${hs(row.work)}</td>
+        <td class="num ${row.over > 0 ? "over-pos" : ""}" data-label="Часы переработка">${row.over > 0 ? hs(row.over) : "—"}</td>
+        <td class="num earn" data-label="За переработку">${fmtCalcMoney(overPay)}</td>
+      </tr>`;
+    }).join("");
+  }
+
+  // Были ли у этого сотрудника в выбранный месяц дни с повышенным тарифом ×N>1.
+  function entryHasMultDays(entry) {
+    return !!(entry && entry.rows && entry.rows.some((row) => {
+      // Считаем только дни реальной явки — больничный/отпуск не тарифные.
+      if (row.st === "Б" || row.st === "ОТ") return false;
+      const dKey = dayKeyOf(row.date.getTime());
+      return multiplierForDate(dKey, entry.id) > 1;
+    }));
+  }
+
   function renderSalaryCalc() {
     renderSalaryCalcMonthSelect();
     const val = el.salaryCalcMonth.value;
@@ -2142,7 +2521,12 @@
 
     const calcRows = state.staff
       .filter((s) => !isInGodGroup(s.id))
-      .map((s) => employeeSalaryCalc(s.id, y, m0))
+      .map((s) => {
+        const e = employeeSalaryCalc(s.id, y, m0);
+        e.id = s.id;
+        salaryCalcCache[salaryCalcKey(s.id, y, m0)] = e;
+        return e;
+      })
       .sort((a, b) => a.name.localeCompare(b.name, "ru"));
 
     const list = el.salaryCalcList;
@@ -2158,25 +2542,19 @@
     list.innerHTML = calcRows.map((r) => {
       const overHead = true;
       const sumHead = true;
-      const rowsHtml = r.rows && r.rows.length ? r.rows.map((row) => {
-        const overPay = (row.over / 3600000) * r.ratePerHour * currentMultiplier();
-        const dateStr = row.date ? row.date.toLocaleDateString("ru-RU", { day: "numeric", weekday: "short" }) : ("—" + row.day);
-        return `<tr>
-          <td data-label="День">${dateStr}</td>
-          <td class="num" data-label="Отработано">${hs(row.work)}</td>
-          <td class="num ${row.over > 0 ? "over-pos" : ""}" data-label="Часы переработка">${row.over > 0 ? hs(row.over) : "—"}</td>
-          <td class="num earn" data-label="За переработку">${fmtCalcMoney(overPay)}</td>
-        </tr>`;
-      }).join("") : "";
-      const totalOverPay = (r.effectiveOverMs / 3600000) * r.ratePerHour * currentMultiplier();
+      // Дневная детализация строится ЛЕНИВО при раскрытии карточки
+      // (salaryCalcDaysHtml из salaryCalcCache в click-обработчике), см. tbody.
+      const totalOverPay = r.overEarn; // уже посчитано по дням в employeeSalaryCalc
+      // У этого сотрудника в выбранный месяц были дни с повышенным тарифом ×N.
+      const hasMult = entryHasMultDays(r);
       return `
-      <article class="salary-calc-card">
+      <article class="salary-calc-card${hasMult ? " has-mult" : ""}" data-skey="${r.id}">
         <header class="salary-calc-head">
           <strong class="salary-calc-name">${escapeHtml(r.name)}</strong>
           <span class="salary-calc-total">Зарплата: ${fmtCalcMoney(r.earned)}</span>
           <span class="salary-calc-chevron" aria-hidden="true">▸</span>
         </header>
-        <div class="salary-calc-sub">${r.bizDays} раб. дн. · план ${hs(r.normMonthMs)} · ставка ${fmtCalcMoney(r.ratePerHour)}/ч</div>
+        <div class="salary-calc-sub">${r.bizDays} раб. дн. · план ${hs(r.normMonthMs)} · ставка ${fmtCalcMoney(r.ratePerHour)}/ч${hasMult ? `<span class="mult-badge">есть дни ×N</span>` : ""}</div>
         <!-- Подробности скрыты по умолчанию: плитка → клик раскрывает. -->
         <div class="salary-calc-body" hidden>
           <div class="salary-calc-summary">
@@ -2193,9 +2571,8 @@
               <thead>
                 <tr><th>День</th><th class="num">Отработано</th><th class="num">Часы переработка</th><th class="num">За переработку</th></tr>
               </thead>
-              <tbody>
-                ${rowsHtml}
-              </tbody>
+              <!-- Дневные строки подставляются лениво при раскрытии карточки. -->
+              <tbody data-salary-lazy="1"></tbody>
               <tfoot>
                 <tr><td data-label="Итого">Итого</td><td class="num" data-label="Отработано">${hs(r.totalWorkMs)}</td><td class="num over-pos" data-label="Часы переработка">${hs(r.totalOverMs)}</td><td class="num earn" data-label="За переработку">${fmtCalcMoney(totalOverPay)}</td></tr>
               </tfoot>
@@ -2203,6 +2580,7 @@
           </div>` : `<div class="salary-calc-none">Нет отработанных дней за этот месяц.</div>`}
           <div class="salary-calc-grid">
             <div>Отработано (факт): <b>${hs(r.totalWorkMs)}</b></div>
+            ${r.paidIdleDays ? `<div>Больничный · отпуск (${r.paidIdleDays} дн.): <b>${hs(r.paidIdleMs)}</b></div>` : ""}
             <div>Норма месяца (план): <b>${hs(r.normMonthMs)}</b></div>
             <div>Недобор: <b>${hs(r.deficitMs)}</b></div>
             <div>Переработка (суммарно): <b>${hs(r.totalOverMs)}</b></div>
@@ -2883,15 +3261,13 @@
                        <table class="report-table motion-clients-table">
                          <thead><tr><th>Клиент</th><th>Километраж</th><th>В пути</th><th>Сдача</th><th>Мест сдано</th></tr></thead>
                          <tbody>${rt.clients.map((cl) => {
-                           // «Единое название» связки (bundleName) показывается вместо
-                           // адреса у точек, объединяющих нескольких контрагентов на
-                           // одном адресе; если единого названия нет — имя клиента и адрес.
+                           // В колонке «Клиент» показываем только название точки:
+                           // «Единое название» связки, если задано, иначе имя клиента.
+                           // Адрес точки в отчёте маршрутизации не выводится.
                            const label = cl.bundleName || cl.client || "—";
-                           const address = cl.bundleName ? "" : (cl.address || "");
                            return `<tr>
                              <td>
                                <span class="motion-client-name">${escapeHtml(label)}</span>
-                               ${address ? `<span class="motion-client-addr">${escapeHtml(address)}</span>` : ""}
                              </td>
                            <td>${cl.km || 0}</td>
                            <td>${fmtHms(cl.moveSec || 0)}</td>
@@ -4750,10 +5126,35 @@
       invokeNativeScan("driverUnloadCallback", "unload", d, n, cl);
       return;
     }
-    // Fallback без камеры: ручной ввод кода этикетки.
-    const code = prompt("Сканера нет на этом устройстве.\nВведите код этикетки (выгрузка):");
-    if (code == null || !String(code).trim()) { toast("Сканирование отменено"); return; }
-    driverUnloadScanCode(String(code).trim());
+    // Fallback без камеры: ручной ввод кода этикетки. Используем НЕБЛОКИРУЮЩУЮ
+    // модалку вместо нативного prompt(): синхронный prompt() в Android WebView
+    // (без обработчика WebChromeClient) вешает UI — кнопки перестают нажиматься
+    // до перезапуска приложения «на каждой точке».
+    openDriverScanModal();
+  }
+
+  function openDriverScanModal() {
+    if (!el.driverScanModal) { toast("Сканирование недоступно"); return; }
+    if (el.driverScanInput) { el.driverScanInput.value = ""; }
+    try { el.driverScanModal.showModal(); } catch { /* уже открыта */ }
+    if (el.driverScanInput) {
+      // Автофокус на поле ввода. В WebView клавиатура откроется только по
+      // жесту; после показа модалки ставим фокус с небольшой задержкой.
+      setTimeout(() => { try { el.driverScanInput.focus(); } catch { /* ignore */ } }, 120);
+    }
+  }
+
+  function closeDriverScanModal() {
+    if (el.driverScanModal && el.driverScanModal.open) {
+      try { el.driverScanModal.close(); } catch { /* ignore */ }
+    }
+  }
+
+  function submitDriverScan() {
+    const code = el.driverScanInput ? String(el.driverScanInput.value || "").trim() : "";
+    closeDriverScanModal();
+    if (!code) { toast("Сканирование отменено"); return; }
+    driverUnloadScanCode(code);
   }
 
   async function driverUnloadScanCode(code) {
@@ -4775,10 +5176,21 @@
         playScanFeedback(false);
       }
     } catch (e) {
-      // Нет связи: скан не теряем — кладём в офлайн-очередь и локально увеличиваем
-      // счётчик выгруженных мест, чтобы водитель видел прогресс сразу. Отправка
-      // произойдёт автоматически при восстановлении связи (flushOfflineOps).
-      if (isOfflineError(e)) {
+      // Нет связи ИЛИ шлюз/сервер временно не ответили (401 сессии при VPN,
+      // 429, 5xx, таймаут, пробуждение): скан НЕ теряем — кладём в офлайн-очередь
+      // и локально увеличиваем счётчик выгруженных мест, чтобы водитель видел
+      // прогресс сразу. Отправка произойдёт автоматически при восстановлении
+      // связи (flushOfflineOps). Раньше учитывался только чистый offline
+      // (status 0), а 401/502 шлюза при «пропал интернет» уводили в ветку
+      // «Ошибка сканирования» — бокс терялся.
+      if (isOfflineError(e) || isTransientError(e)) {
+        // Дедупликация: если этот самый код уже лежит в офлайн-очереди и ещё не
+        // доставлен, повторно его не добавляем — иначе один бокс засчитается дважды.
+        if (scanAlreadyQueued(normCode)) {
+          toast("Этот бокс уже в очереди отправки");
+          playScanFeedback(true);
+          return;
+        }
         enqueueOfflineOp({
           id: offlineOpId(),
           kind: "scan",
@@ -4791,6 +5203,10 @@
         const cur = findDriverUnloadClient();
         if (cur) {
           cur.unloadDone = (Number(cur.unloadDone) || 0) + 1;
+          // Сохраняем оптимистичный счётчик в localStorage: если водитель
+          // закроет приложение до синхронизации очереди, прогресс выгрузки
+          // переживёт перезапуск (см. persistMyRoutes для стадий маршрута).
+          persistMyRoutes();
         }
         renderMyRoutesList(myRoutesCache);
         return;
@@ -4803,6 +5219,17 @@
     // код через колбэк (webSignal), оставаясь открытым до конца выгрузки, поэтому
     // invokeNativeScan на этом шаге лишь наслоил бы вторую камеру поверх.
     await loadMyRoutes();
+  }
+
+  // Проверяет, есть ли в офлайн-очереди ещё не доставленный скан с таким кодом.
+  function scanAlreadyQueued(code) {
+    const ops = readOfflineOps();
+    return ops.some((o) =>
+      o &&
+      o.kind === "scan" &&
+      o.payload &&
+      String(o.payload.code) === String(code)
+    );
   }
 
   // Колбэк нативного сканера: AndroidBridge.scanQR вызывает window.driverUnloadCallback(payload).
@@ -4885,13 +5312,18 @@
     }
   }
 
-  // Форматирует миллисекунды как «ЧЧ:ММ» (часы, минуты).
+  // Форматирует миллисекунды как «ЧЧ:ММ:СС» (часы:минуты:секунды) — единый формат
+  // для «Путь»/«На точке» в карточках точек, согласованный с живым счётчиком
+  // активной точки (fmtHMS). Раньше было «ЧЧ:ММ» без секунд, из-за чего малые
+  // интервалы вроде 2 минут выглядели как «0:02» и читались как секунды.
   function fmtDuration(ms) {
     if (!ms || isNaN(ms) || ms < 0) return "—";
-    const totalMin = Math.round(ms / 60000);
-    const h = Math.floor(totalMin / 60);
-    const m = totalMin % 60;
-    return `${h}:${String(m).padStart(2, "0")}`;
+    const totalSec = Math.floor(ms / 1000);
+    const pad = (n) => String(n).padStart(2, "0");
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const s = totalSec % 60;
+    return `${pad(h)}:${pad(m)}:${pad(s)}`;
   }
 
   // Форматирует миллисекунды как «ЧЧ:ММ:СС» (часы:минуты:секунды) — для
@@ -5252,9 +5684,11 @@
         renderMyRoutesList(myRoutesCache);
       }
     } catch (e) {
-      // Нет связи: действие не теряем — кладём в локальную офлайн-очередь,
-      // оптимистично переключаем точку и продолжим, когда связь вернётся.
-      if (isOfflineError(e)) {
+      // Нет связи либо шлюз/сервер временно не ответили (401 сессии при VPN,
+      // 429, 5xx, таймаут): действие не теряем — кладём в локальную офлайн
+      // -очередь, оптимистично переключаем точку и продолжим, когда связь
+      // вернётся (flushOfflineOps повторит отправку).
+      if (isOfflineError(e) || isTransientError(e)) {
         enqueueOfflineOp({
           id: offlineOpId(),
           kind: "route",
@@ -5293,7 +5727,7 @@
         renderMyRoutesList(myRoutesCache);
       }
     } catch (e) {
-      if (isOfflineError(e)) {
+      if (isOfflineError(e) || isTransientError(e)) {
         enqueueOfflineOp({
           id: offlineOpId(),
           kind: "route",
@@ -6627,6 +7061,7 @@
     else if (name === "salaries") renderSalaries();
     else if (name === "log") renderLog();
     else if (name === "settings") renderParams();
+    else if (name === "multiplier") renderMultRules();
     else if (name === "admins") renderAdmins();
   }
 
@@ -7385,9 +7820,6 @@
     renderGroupChecks(el.showOverHoursGroups, state.params.showOverHoursGroups || []);
     renderGroupChecks(el.showOverSumGroups, state.params.showOverSumGroups || []);
     renderGroupChecks(el.shipmentGroups, state.params.shipmentGroups || []);
-    if (el.multiplierVal) el.multiplierVal.value = state.params.multiplier;
-    if (el.multiplierFrom) el.multiplierFrom.value = state.params.multFrom || "";
-    if (el.multiplierTo) el.multiplierTo.value = state.params.multTo || "";
     if (el.normVal) el.normVal.value = state.norm;
     if (el.updateVersionCode) el.updateVersionCode.value = state.params.updateVersionCode != null ? state.params.updateVersionCode : "";
     if (el.updateVersionName) el.updateVersionName.value = state.params.updateVersionName || "";
@@ -7398,18 +7830,208 @@
 
   function updateMultiplierStatus() {
     if (!el.multiplierStatus) return;
-    const active = multiplierActive();
-    const hasPeriod = !!(state.params.multFrom && state.params.multTo);
-    const normFrom = state.params.multFrom ? new Date(state.params.multFrom).toLocaleDateString("ru-RU") : "—";
-    const normTo = state.params.multTo ? new Date(state.params.multTo).toLocaleDateString("ru-RU") : "—";
-    el.multiplierStatus.textContent = active
-      ? (hasPeriod
-          ? `Активен сейчас · множитель ×${state.params.multiplier} · ${normFrom} – ${normTo}`
-          : `Активен сейчас · множитель ×${state.params.multiplier} · действует постоянно`)
-      : (hasPeriod
-          ? `Не активен · период ${normFrom} – ${normTo}`
-          : "Множитель не задан (×1)");
+    const p = state.params;
+    const rules = Array.isArray(p.multRules) ? p.multRules : [];
+    const active = multiplierActive(); // применяется ли к текущему пользователю сейчас
+    let text;
+    if (rules.length > 0) {
+      text = `Настроено правил: ${rules.length}`
+        + (active ? " · на вас действует повышенный тариф" : "");
+    } else if (p.multiplier && p.multiplier > 1) {
+      // Легаси-настройка (старые поля) — всё ещё влияет на расчёт.
+      const hasPeriod = !!(p.multFrom && p.multTo);
+      const normFrom = p.multFrom ? new Date(p.multFrom).toLocaleDateString("ru-RU") : "—";
+      const normTo = p.multTo ? new Date(p.multTo).toLocaleDateString("ru-RU") : "—";
+      const gids = p.multGroups || [];
+      const groupNames = gids
+        .map((gid) => { const g = (state.groups || []).find((x) => x.id === gid); return g ? g.name : null; })
+        .filter(Boolean)
+        .join(", ");
+      text = hasPeriod
+        ? `Легаси: ×${p.multiplier} · период ${normFrom} – ${normTo}${groupNames ? ` · группы: ${groupNames}` : " · для всех"}`
+        : `Легаси: ×${p.multiplier} · постоянно${groupNames ? ` · группы: ${groupNames}` : " · для всех"}`
+        + (active ? " · действует на вас" : "");
+    } else {
+      text = "Правил нет — множитель ×1";
+    }
+    el.multiplierStatus.textContent = text;
     el.multiplierStatus.classList.toggle("active", active);
+  }
+
+  // ---- Вкладка «Множитель»: правила «конкретный день + интервал времени» ----
+  function multSubjectName(rule) {
+    if (rule.target === "all") return "Все сотрудники";
+    if (rule.target === "staff") {
+      const s = (state.staff || []).find((x) => String(x.id) === String(rule.targetId));
+      return s ? s.name : `Сотрудник #${rule.targetId}`;
+    }
+    const g = (state.groups || []).find((x) => String(x.id) === String(rule.targetId));
+    return g ? g.name : `Группа #${rule.targetId}`;
+  }
+  function multRuleWindowText(rule) {
+    const date = rule.date ? new Date(rule.date + "T00:00:00").toLocaleDateString("ru-RU") : "—";
+    const from = rule.from ? String(rule.from) : "—";
+    const to = rule.to ? String(rule.to) : "—";
+    return `${date} · ${from}–${to}`;
+  }
+
+  function renderMultSubjectOptions() {
+    if (!el.multRuleTarget || !el.multRuleSubject) return;
+    const target = el.multRuleTarget.value;
+    const label = target === "staff" ? "Сотрудник" : (target === "group" ? "Группа" : "Субъект");
+    if (el.multRuleSubjectLabel) el.multRuleSubjectLabel.textContent = label;
+    if (el.multRuleSubjectField) el.multRuleSubjectField.style.display = target === "all" ? "none" : "";
+    if (target === "all") return;
+    const opts = target === "staff"
+      ? (state.staff || []).map((s) => ({ id: s.id, name: s.name }))
+      : (state.groups || []).map((g) => ({ id: g.id, name: g.name }));
+    el.multRuleSubject.innerHTML = opts.length
+      ? opts.map((o) => `<option value="${escapeHtml(String(o.id))}">${escapeHtml(o.name)}</option>`).join("")
+      : `<option value="" selected>Нет доступных</option>`;
+  }
+
+  function renderMultRules() {
+    updateMultiplierStatus();
+    renderMultSubjectOptions();
+    if (!el.multRuleList) return;
+    const rules = Array.isArray(state.params.multRules) ? state.params.multRules : [];
+    if (!rules.length) {
+      el.multRuleList.innerHTML = `<div class="mult-rule-empty">Правил пока нет — переработка считается по стандартной ставке (×1).</div>`;
+      return;
+    }
+    el.multRuleList.innerHTML = rules.map((r) => `
+      <div class="mult-rule-item">
+        <div class="mult-rule-info">
+          <div class="mult-rule-who"><b>${escapeHtml(multSubjectName(r))}</b> · ×${r.mult}</div>
+          <div class="mult-rule-days-text">Действует: ${escapeHtml(multRuleWindowText(r))}</div>
+        </div>
+        <div class="mult-rule-actions-inline">
+          <button type="button" class="mini-btn mult-rule-edit" data-mult-rule-id="${escapeHtml(r.id)}">Изменить</button>
+          <button type="button" class="mini-btn mult-rule-del" data-mult-rule-id="${escapeHtml(r.id)}">Удалить</button>
+        </div>
+      </div>`).join("");
+  }
+
+  // id правила, которое сейчас редактируем через форму (null = режим добавления).
+  let multRuleEditingId = null;
+
+  function setMultRuleFormMode(editing) {
+    if (el.multRuleFormTitle) {
+      el.multRuleFormTitle.textContent = editing ? "Редактирование правила" : "Новое правило";
+    }
+    if (el.multRuleAddBtn) {
+      el.multRuleAddBtn.textContent = editing ? "Сохранить изменения" : "Добавить правило";
+    }
+    if (el.multRuleCancelBtn) el.multRuleCancelBtn.hidden = !editing;
+  }
+
+  function submitMultRule() {
+    if (!el.multRuleTarget || !el.multRuleValue) return;
+    const target = el.multRuleTarget.value;
+    const targetId = target === "all" ? null : (el.multRuleSubject ? el.multRuleSubject.value : "");
+    if (target !== "all" && !targetId) { toast("Выберите сотрудника или группу"); return; }
+    const date = el.multRuleDate ? String(el.multRuleDate.value || "").trim() : "";
+    if (!date) { toast("Выберите день в календаре — без дня множитель не действует"); return; }
+    const from = el.multRuleFrom ? String(el.multRuleFrom.value || "18:00").trim() : "18:00";
+    const to = el.multRuleTo ? String(el.multRuleTo.value || "21:00").trim() : "21:00";
+    const mult = Number(parseFloat(String(el.multRuleValue.value || "")));
+    if (!Number.isFinite(mult) || mult < 1) { toast("Множитель должен быть ≥ 1"); return; }
+
+    if (!Array.isArray(state.params.multRules)) state.params.multRules = [];
+
+    if (multRuleEditingId) {
+      // Режим редактирования: обновляем существующее правило.
+      const idx = state.params.multRules.findIndex((r) => String(r.id) === String(multRuleEditingId));
+      if (idx === -1) { cancelMultRuleEdit(); toast("Правило не найдено — обновлён список"); return; }
+      state.params.multRules[idx] = Object.assign({}, state.params.multRules[idx], {
+        target, targetId, mult, date, from, to,
+      });
+      cancelMultRuleEdit();
+      renderMultRules();
+      render();
+      toast("Правило обновлено");
+      return;
+    }
+
+    const rule = {
+      id: "r" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+      target,
+      targetId,
+      mult,
+      date,
+      from,
+      to,
+    };
+    state.params.multRules.push(rule);
+    renderMultRules();
+    render();
+    toast("Правило добавлено");
+  }
+
+  function startEditMultRule(ruleId) {
+    if (!ruleId || !Array.isArray(state.params.multRules)) return;
+    const rule = state.params.multRules.find((r) => String(r.id) === String(ruleId));
+    if (!rule) return;
+    multRuleEditingId = rule.id;
+    if (el.multRuleTarget) el.multRuleTarget.value = rule.target;
+    if (el.multRuleTarget) renderMultSubjectOptions();
+    if (el.multRuleSubject) el.multRuleSubject.value = rule.targetId || "";
+    if (el.multRuleDate) el.multRuleDate.value = rule.date || "";
+    if (el.multRuleFrom) el.multRuleFrom.value = rule.from || "";
+    if (el.multRuleTo) el.multRuleTo.value = rule.to || "";
+    if (el.multRuleValue) el.multRuleValue.value = rule.mult;
+    setMultRuleFormMode(true);
+    if (el.multRuleCancelBtn) el.multRuleCancelBtn.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  function cancelMultRuleEdit() {
+    multRuleEditingId = null;
+    if (el.multRuleDate) el.multRuleDate.value = "";
+    if (el.multRuleFrom) el.multRuleFrom.value = "18:00";
+    if (el.multRuleTo) el.multRuleTo.value = "21:00";
+    if (el.multRuleValue) el.multRuleValue.value = "1.5";
+    if (el.multRuleTarget) el.multRuleTarget.value = "all";
+    if (el.multRuleTarget) renderMultSubjectOptions();
+    setMultRuleFormMode(false);
+  }
+
+  function removeMultRule(ruleId) {
+    if (!ruleId || !Array.isArray(state.params.multRules)) return;
+    state.params.multRules = state.params.multRules.filter((r) => String(r.id) !== String(ruleId));
+    renderMultRules();
+    render();
+    toast("Правило удалено");
+  }
+
+  // Сохранение правил на сервер — отдельным вызовом /api/params (админ), через
+  // цепочку, чтобы быстрые клики по «Добавить/Удалить» не гоняли параллельные
+  // POST (см. paramsSaveChain в applyParams).
+  let multRuleSaveChain = Promise.resolve();
+  function persistMultRules() {
+    // Защищаем локальные multRules от фонового опроса pollState, пока POST в
+    // полёте: без этого правила, добавленного только что на клиенте, `paramsDirty`
+    // не поднят, и pollState (раз в 8 с) перезаписывает state.params старой
+    // версией с сервера — правило «исчезает» из списка ещё до подтверждения.
+    paramsDirty = true;
+    multRuleSaveChain = multRuleSaveChain.then(async () => {
+      const st = state.params;
+      const p = {
+        multRules: Array.isArray(st.multRules) ? st.multRules : [],
+        // Оставляем легаси-поля, чтобы старые версии клиента/сервера не потеряли
+        // настройку: при записи правил сбрасываем глобальный легаси-множитель,
+        // иначе старый расчёт и новый конфликтовали бы.
+        multiplier: (Array.isArray(st.multRules) && st.multRules.length ? 1 : st.multiplier),
+      };
+      return api("/api/params", { method: "POST", body: JSON.stringify(p) })
+        .then(() => {
+          paramsDirty = false;
+          toast("Правила множителя сохранены");
+        })
+        .catch(() => {
+          paramsDirty = false;
+          toast("Не удалось сохранить правила — проверьте связь");
+        });
+    });
   }
 
   // Цепочка сохранения параметров: применяем изменения мгновенно на клиенте
@@ -7441,10 +8063,9 @@
       showOverSumGroups: collectGroupChecks(el.showOverSumGroups),
       shipmentGroups: collectGroupChecks(el.shipmentGroups),
     };
-    let m = parseFloat(el.multiplierVal.value);
-    p.multiplier = Number.isFinite(m) && m >= 1 ? m : 1;
-    p.multFrom = el.multiplierFrom.value || null;
-    p.multTo = el.multiplierTo.value || null;
+    // Множитель теперь управляется только через вкладку «Множитель» (multRules):
+    // старые поля params.multiplier/multFrom/multTo не редактируются здесь и
+    // сохраняются как есть (легаси-fallback, пока правил нет).
     let norm = parseFloat(el.normVal.value);
     p.norm = (Number.isFinite(norm) && norm >= 1 && norm <= 24) ? norm : state.norm;
     // Версия обновления Android-APK (управляется из «Параметры»). Пусто = вернуться
@@ -7453,11 +8074,7 @@
     if (el.updateVersionName) p.updateVersionName = el.updateVersionName.value.trim();
     if (el.updateApkUrl) p.updateApkUrl = el.updateApkUrl.value.trim();
     if (el.updateNotes) p.updateNotes = el.updateNotes.value.trim();
-    if (p.multFrom && p.multTo && p.multFrom > p.multTo) {
-      const tmp = p.multFrom;
-      p.multFrom = p.multTo;
-      p.multTo = tmp;
-    }
+    p.multRules = state.params.multRules || [];
     // Мгновенно применяем к текущему состоянию: ползунки и вкладки обновляются
     // сразу, без ожидания ответа сервера (и без перезагрузки страницы).
     state.params = Object.assign({}, state.params, p);
@@ -8069,6 +8686,15 @@
       if (Array.isArray(driverRoutesCache)) renderDriverRoutes(driverRoutesCache);
     });
   }
+  // «Мои маршруты» (водитель): смена выбранного дня перефильтровывает список
+  // маршрутов из уже загруженного кэша. Раньше у этого фильтра не было
+  // обработчика — водитель открывал календарь, выбирал прошедший день, но
+  // список не перерисовывался, и казалось, что «календарь не работает».
+  if (el.myroutesDateFilter) {
+    el.myroutesDateFilter.addEventListener("change", () => {
+      if (Array.isArray(myRoutesCache)) renderMyRoutesList(myRoutesCache);
+    });
+  }
   // Маршруты: смена выбранного дня в фильтре списка перерисовывает маршруты
   // этого дня из уже загруженного кэша и синхронизирует день с «Доставкой».
   if (el.driverRoutesDateFilter) {
@@ -8117,9 +8743,34 @@
     });
   // Автосохранение нормы рабочего дня и множителя подработки — без кнопки.
   if (el.normVal) el.normVal.addEventListener("change", applyParams);
-  if (el.multiplierVal) el.multiplierVal.addEventListener("change", applyParams);
-  if (el.multiplierFrom) el.multiplierFrom.addEventListener("change", applyParams);
-  if (el.multiplierTo) el.multiplierTo.addEventListener("change", applyParams);
+  // ---- Вкладка «Множитель»: интерактив ----
+  if (el.multRuleTarget) {
+    el.multRuleTarget.addEventListener("change", renderMultSubjectOptions);
+  }
+  if (el.multRuleAddBtn) {
+    el.multRuleAddBtn.addEventListener("click", () => {
+      submitMultRule();
+      persistMultRules();
+    });
+  }
+  if (el.multRuleCancelBtn) {
+    el.multRuleCancelBtn.addEventListener("click", cancelMultRuleEdit);
+  }
+  if (el.multRuleList) {
+    el.multRuleList.addEventListener("click", (ev) => {
+      const btn = ev.target.closest && ev.target.closest("[data-mult-rule-id]");
+      if (!btn) return;
+      if (btn.classList.contains("mult-rule-edit")) {
+        startEditMultRule(btn.dataset.multRuleId);
+      } else {
+        removeMultRule(btn.dataset.multRuleId);
+        persistMultRules();
+      }
+    });
+  }
+  if (el.goToMultiplierTab) {
+    el.goToMultiplierTab.addEventListener("click", () => switchAdminSub("multiplier"));
+  }
   // Автосохранение версии обновления Android-приложения.
   // Событие change срабатывает только на blur/Enter и легко «теряет» ввод, если
   // пользователь закрыл модалку, не убрав фокус с поля. Поэтому слушаем input
@@ -8184,9 +8835,26 @@
   document.addEventListener("click", (ev) => {
     const card = ev.target.closest && ev.target.closest(".salary-calc-card");
     if (!card) return;
+    // Клики внутри раскрытого содержимого (сводка, таблица, сетка показателей)
+    // НЕ переключают карточку: там своя прокрутка, и клик по ней должен
+    // прокручивать, а не сворачивать карточку. Сворачивание — по шапке/подписи.
+    if (ev.target.closest && ev.target.closest(".salary-calc-body")) return;
     const body = card.querySelector(".salary-calc-body");
     if (!body) return;
     const open = body.hidden;
+    const skey = card.dataset.skey;
+    // Лениво подставляем дневную детализацию при первом раскрытии карточки
+    // (HTML строился только для свёрнутых карточек; тут заполняем из кэша).
+    if (open && skey) {
+      const tbody = body.querySelector("tbody[data-salary-lazy]");
+      if (tbody && !tbody.dataset.rendered) {
+        const val = el.salaryCalcMonth && el.salaryCalcMonth.value;
+        const [yy, mm] = (val || "").split("-").map(Number);
+        const entry = (yy && mm) ? salaryCalcCache[salaryCalcKey(skey, yy, mm - 1)] : null;
+        tbody.innerHTML = salaryCalcDaysHtml(entry);
+        tbody.dataset.rendered = "1";
+      }
+    }
     body.hidden = !open;
     card.classList.toggle("open", !body.hidden);
     const chev = card.querySelector(".salary-calc-chevron");
@@ -8334,6 +9002,30 @@
         e.preventDefault();
         if (el.routeDeleteConfirm) el.routeDeleteConfirm.click();
       }
+    });
+  }
+  // ----- Ручной ввод кода этикетки при выгрузке (неблокирующая модалка) -----
+  if (el.driverScanOk) {
+    el.driverScanOk.addEventListener("click", submitDriverScan);
+  }
+  if (el.driverScanCancel) {
+    el.driverScanCancel.addEventListener("click", closeDriverScanModal);
+  }
+  if (el.driverScanClose) {
+    el.driverScanClose.addEventListener("click", closeDriverScanModal);
+  }
+  if (el.driverScanInput) {
+    el.driverScanInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        submitDriverScan();
+      }
+    });
+  }
+  if (el.driverScanModal) {
+    el.driverScanModal.addEventListener("cancel", (e) => {
+      e.preventDefault();
+      closeDriverScanModal();
     });
   }
   // ----- Актная запись: показываем, кем сервер видит вошедшего -----
@@ -8550,15 +9242,40 @@
   }
 
   // ------------- Init -------------
+  // Флаг: приложение стартовало офлайн по кэшу (нет связи с сервером).
+  let offlineStarted = false;
   (async function init() {
     try {
       await loadState();
     } catch (e) {
-      el.startBtn.disabled = true;
-      el.finishBtn.disabled = true;
-      el.statusText.textContent = e && e.status === 403 ? "Доступ в приложение закрыт администратором" : "Ошибка загрузки";
-      state.phase = "idle";
-      return;
+      if (e && e.status === 403) {
+        // Доступ к приложению закрыт администратором — таких не пускаем и офлайн.
+        el.startBtn.disabled = true;
+        el.finishBtn.disabled = true;
+        el.statusText.textContent = "Доступ в приложение закрыт администратором";
+        state.phase = "idle";
+        return;
+      }
+      // Нет сети (или шлюз недоступен) при старте: если есть удачный кэш
+      // состояния — продолжаем с него. Кнопку «Начать» НЕ блокируем: водитель
+      // может начать день офлайн, а saveDay уйдёт в офлайн-очередь.
+      const cached = loadStateCache();
+      if (cached) {
+        applyStateCache(cached);
+        offlineStarted = true;
+      } else {
+        el.startBtn.disabled = true;
+        el.finishBtn.disabled = true;
+        el.statusText.textContent = "Ошибка загрузки";
+        state.phase = "idle";
+        return;
+      }
+    }
+
+    // Если старт произошёл офлайн (по кэшу) — показываем внятную метку, чтобы
+    // водитель понимал, что данные ещё не синхронизированы.
+    if (offlineStarted) {
+      showNetBanner("Нет связи — работаем офлайн. Начните день, данные отправятся при появлении сети.");
     }
 
     // The employee is identified automatically from the platform session — show
@@ -8668,7 +9385,7 @@
     // as "отработанное время перестало считаться при свёртывании": the counter
     // was only repainted inside pollState, which browsers throttle in a
     // background/collapsed tab.
-    setInterval(() => { if (!el.pageTimer.hidden) render(); }, 1000);
+    setInterval(() => { tickTimer(); }, 1000);
 
     // Periodically re-save the open segment while it runs. A saved open session is
     // what lets the timer survive a page reload and a tab collapse (the worked time
