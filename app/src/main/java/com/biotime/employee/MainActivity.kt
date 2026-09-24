@@ -852,6 +852,6 @@ class MainActivity : AppCompatActivity() {
 
         // Адрес BIOTIME-приложения (за шлюзом платформы — сессия водителя
         // подхватывается автоматически).
-        const val APP_URL = "https://app-2660de1a180b.vibecode.bitrix24.tech/"
+        const val APP_URL = "https://app-0191dabf28dc.vibecode.bitrix24.tech/"
     }
 }
