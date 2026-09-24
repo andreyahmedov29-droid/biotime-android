@@ -14,8 +14,8 @@ android {
         // Версия APK. Единый источник — version.json в корне репозитория:
         // CI (build-apk.yml) синхронизирует valueCode/versionName из него
         // перед сборкой, поэтому при поднятии версии правьте ТОЛЬКО version.json.
-        versionCode = 36
-        versionName = "1.1.15"
+        versionCode = 37
+        versionName = "1.1.16"
     }
 
     buildTypes {
