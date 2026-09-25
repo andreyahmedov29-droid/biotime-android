@@ -1,0 +1,77 @@
+name: Build Electron (корневая сборка)
+
+# Собирает Windows-версию корневого десктопа BIOTIME (electron/main.js) в
+# NSIS-установщик + portable, используя build-конфиг из корневого package.json.
+#
+# Корневой package.json специально держится «веб-only» (devDependencies пусты),
+# чтобы npm install при VibeCode-деплое ставил ноль пакетов и не превышал лимит
+# времени. Тяжёлые зависимости этой десктоп-сборки (electron + electron-builder)
+# доставляются на CI через --no-save — не трогая package.json и package-lock.json.
+#
+# Запускается:
+#   - по кнопке: вкладка Actions ▸ «Build Electron (корневая сборка)» ▸ Run workflow;
+#   - при пуше в main/master, если менялись файлы приложения/сборки.
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "electron/**"
+      - "server.js"
+      - "app.js"
+      - "index.html"
+      - "styles.css"
+      - "qr.js"
+      - "sw.js"
+      - "package.json"
+      - "package-lock.json"
+      - "version.json"
+  workflow_dispatch: # ручной запуск
+
+jobs:
+  build:
+    # Windows-установщик (NSIS) собираем на windows-latest: electron-builder для
+    # --win не требует Wine (в отличие от ubuntu-раннера).
+    runs-on: windows-latest
+    permissions:
+      contents: write # для публикации Release системным GITHUB_TOKEN, если включите publish
+
+    steps:
+      - name: Checkout репозитория
+        uses: actions/checkout@v5
+
+      - name: Установить Node.js 20
+        uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+          cache: npm
+
+      # Корневой npm ci ставит ноль пакетов (веб-only). electron/electron-builder
+      # доставляем отдельно, не меняя package.json/package-lock (они остаются чистыми
+      # для быстрого веб-деплоя).
+      - name: Установить зависимости
+        shell: bash
+        run: |
+          npm ci
+          npm install --no-save --no-package-lock electron electron-builder
+
+      # Единый источник версии — version.json в корне репозитория.
+      - name: Прочитать версию из version.json
+        id: ver
+        shell: bash
+        run: |
+          echo "VN=$(node -p "require('./version.json').versionName || '1.0.0'")" >> "$GITHUB_OUTPUT"
+          echo "VC=$(node -p "require('./version.json').versionCode || '0'")" >> "$GITHUB_OUTPUT"
+
+      - name: Собрать приложение для Windows (NSIS + portable)
+        shell: bash
+        run: npx electron-builder --win --publish never
+
+      - name: Выгрузить сборку как артефакт workflow
+        uses: actions/upload-artifact@v5
+        with:
+          name: biotime-electron-win
+          path: |
+            dist/*.exe
+            dist/latest.yml
+          if-no-files-found: warn

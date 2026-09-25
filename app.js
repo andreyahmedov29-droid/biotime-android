@@ -25,7 +25,7 @@
     log: [],           // [{ ts, action, ownerId }]
     admins: [],        // [id,...]
     blocked: [],       // [{ id, name, at }] — вход в приложение закрыт администратором
-    params: { showOverHours: true, showOverSum: true, showDrivers: false, adminSeeRoutes: false, driverSeeRoutes: false, showShipment: false, shipmentGroups: [], allowDriverStartWithoutShipment: false, allowFinishUnloadIncomplete: false, routeDeleteCode: "", scanLogLimit: 30000, multiplier: 1, multFrom: null, multTo: null, multGroups: [], multRules: [], updateVersionCode: null, updateVersionName: "", updateApkUrl: "", updateNotes: "" },
+    params: { showOverHours: true, showOverSum: true, showDrivers: false, adminSeeRoutes: false, driverSeeRoutes: false, showShipment: false, shipmentGroups: [], allowDriverStartWithoutShipment: false, allowFinishUnloadIncomplete: false, allowDriverReorderPoints: false, allowWaybill: false, routeDeleteCode: "", scanLogLimit: 30000, multiplier: 1, multFrom: null, multTo: null, multGroups: [], multRules: [], updateVersionCode: null, updateVersionName: "", updateApkUrl: "", updateNotes: "" },
     norm: 9,
     phase: "idle",     // idle | working | paused | finished
     segments: [],      // today's segments
@@ -120,6 +120,36 @@
       state.phase = "idle";
     }
     state.loading = false;
+  }
+
+  // Локальный кэш ОТКРЫТОГО (идущего) таймера. Водитель на APK сворачивает окно,
+  // выключает экран или теряет интернет — сервер может не успеть узнать об
+  // открытом сегменте, и при возврате таймер «обнулялся». Записываем начало дня
+  // в localStorage при «Начать работу» и восстанавливаем при старте, если сервер
+  // не вернул открытый сегмент.
+  const OPEN_SEG_KEY = "biotime.openSeg";
+  function writeOpenSegCache() {
+    try {
+      const seg = openSegment();
+      if (seg && (state.phase === "working" || state.phase === "paused")) {
+        localStorage.setItem(OPEN_SEG_KEY, JSON.stringify({ id: seg.id, start: seg.start, kind: seg.kind || "work" }));
+      } else {
+        localStorage.removeItem(OPEN_SEG_KEY);
+      }
+    } catch { /* приватный режим — просто без кэша */ }
+  }
+  function restoreOpenSegCache() {
+    try {
+      const raw = localStorage.getItem(OPEN_SEG_KEY);
+      if (!raw) return;
+      const c = JSON.parse(raw);
+      if (!c || !c.start) { localStorage.removeItem(OPEN_SEG_KEY); return; }
+      if (state.finishKey === state.dayKey) { localStorage.removeItem(OPEN_SEG_KEY); return; } // день завершён
+      if (openSegment()) return; // сервер уже дал открытый — кэш не нужен
+      const seg = { id: String(c.id || "open"), start: Number(c.start), kind: c.kind === "break" ? "break" : "work", end: null, internal: true };
+      state.segments.push(seg);
+      state.phase = "working";
+    } catch { /* ignore */ }
   }
 
   // Черновики «начало/конец» для раздела «Время работы»: пока время ещё не
@@ -622,7 +652,7 @@
     });
     state.admins = s.admins || [];
     state.blocked = s.blocked || [];
-    state.params = Object.assign({ showOverHours: true, showOverSum: true, showDrivers: false, adminSeeRoutes: false, driverSeeRoutes: false, showShipment: false, shipmentGroups: [], allowDriverStartWithoutShipment: false, allowFinishUnloadIncomplete: false, routeDeleteCode: "", scanLogLimit: 30000, multiplier: 1, multFrom: null, multTo: null, multGroups: [], multRules: [] }, s.params || {});
+    state.params = Object.assign({ showOverHours: true, showOverSum: true, showDrivers: false, adminSeeRoutes: false, driverSeeRoutes: false, showShipment: false, shipmentGroups: [], allowDriverStartWithoutShipment: false, allowFinishUnloadIncomplete: false, allowDriverReorderPoints: false, allowWaybill: false, routeDeleteCode: "", scanLogLimit: 30000, multiplier: 1, multFrom: null, multTo: null, multGroups: [], multRules: [] }, s.params || {});
     state.norm = (s.norm != null && s.norm >= 0 && s.norm <= 24) ? s.norm : 8;
     // Единый опорный пояс (смещение сервера от UTC в минутах). Если сервер его
     // не прислал (старая версия) — фолбэк на локальный пояс устройства.
@@ -662,7 +692,21 @@
       // the ticking timer. Keep the locally running session instead.
       const localOpen = openSegment();
       const serverOpen = serverSegs.some((sg) => sg.kind === "work" && sg.end == null);
-      if (localOpen && (state.phase === "working" || state.phase === "paused") && !serverOpen) {
+      // День, который пользователь реально завершил кнопкой «Завершить работу»:
+      // в этом случае сервер без открытого сегмента — это НЕ отставание, а факт
+      // закрытия (реегрессию не воскрешаем). finishKey ставится только явным
+      // завершением (см. сохранение дня), фоновый сбой его не трогает.
+      const dayFinishedLocally = state.finishKey === state.dayKey;
+      // Защищаем бегущий таймер независимо от того, в какой фазе просыпается
+      // приложение после свёртывания/пересоздания WebView: пока есть локальный
+      // открытый сегмент и день не завершён — серверное «без открытого» не
+      // регрессирует (раньше защита срабатывала только при phase working/paused,
+      // и водитель на мобильном терял таймер, если фаза при сворачивании сбилась).
+      // Сегмент переносим/держим, только если он относится к ТЕКУЩЕМУ дню —
+      // иначе вчерашний незакрытый сегмент вёл бы к раздутому времени (см. fix в
+      // refreshToday): он «ужимается» в свой день и сюда не проваливается.
+      const localOpenToday = localOpen && dayKeyOf(localOpen.start) === state.dayKey;
+      if (localOpenToday && !dayFinishedLocally && !serverOpen) {
         // server is behind this live session — do not regress the running timer.
       } else {
         state.segments = serverSegs;
@@ -836,7 +880,15 @@
       // background and the sync dropped the open session), keep the local open
       // segment so the timer never resets/stopped when the window is minimised.
       const localOpen = openSegment();
-      if (localOpen && !serverSegs.some((sg) => sg.kind === "work" && sg.end == null && sg.id === localOpen.id)) {
+      // Важно: локальный открытый сегмент переносим в «сегодня» ТОЛЬКО если он
+      // сам относится к текущему дню. Иначе вчерашний незакрытый сегмент (если
+      // вчера не нажали «Завершить») «переезжал» бы в сегодняшние сегменты,
+      // раздувал отработанное время (например 09:36 при реальных ~5 ч) и держал
+      // таймер открытым от вчерашнего start — сервер же в «Эфире» считает по
+      // факту и показывал расходящееся значение.
+      if (localOpen
+        && dayKeyOf(localOpen.start) === state.dayKey
+        && !serverSegs.some((sg) => sg.kind === "work" && sg.end == null && sg.id === localOpen.id)) {
         serverSegs.push(localOpen);
       }
     }
@@ -1346,6 +1398,7 @@
     motionTable: $("motionTable"), motionBody: $("motionBody"),
     netBanner: $("netBanner"), netBannerText: $("netBannerText"), netRetry: $("netRetry"),
     saveDriverRouteBtn: $("saveDriverRouteBtn"), driverRoutesList: $("driverRoutesList"), driverRoutesCount: $("driverRoutesCount"),
+    routeWaybillsBlock: $("routeWaybillsBlock"), routeWaybillsList: $("routeWaybillsList"),
     autoRouteBtn: $("autoRouteBtn"), routeBaseAddress: $("routeBaseAddress"), autoRouteStatus: $("autoRouteStatus"),
     driverRoutesDateFilter: $("driverRoutesDateFilter"),
     liveSummary: $("liveSummary"), liveList: $("liveList"), liveBadge: $("liveBadge"),
@@ -1375,6 +1428,7 @@
     allowDriverStartWithoutShipment: $("allowDriverStartWithoutShipment"),
     allowFinishUnloadIncomplete: $("allowFinishUnloadIncomplete"),
     allowDriverReorderPoints: $("allowDriverReorderPoints"),
+    allowWaybill: $("allowWaybill"),
     routeDeleteCode: $("routeDeleteCode"),
     scanLogLimit: $("scanLogLimit"),
     routeDeleteModal: $("routeDeleteModal"), routeDeleteInput: $("routeDeleteInput"),
@@ -1403,6 +1457,14 @@
     multRuleAddBtn: $("multRuleAddBtn"), multRuleCancelBtn: $("multRuleCancelBtn"),
     multRuleFormTitle: $("multRuleFormTitle"), multRuleList: $("multRuleList"),
     goToMultiplierTab: $("goToMultiplierTab"),
+    waybillModal: $("waybillModal"), waybillTitle: $("waybillTitle"),
+    waybillClose: $("waybillClose"), waybillFile: $("waybillFile"),
+    waybillStatus: $("waybillStatus"), waybillArtInput: $("waybillArtInput"),
+    waybillQtyInput: $("waybillQtyInput"),
+    waybillScanBtn: $("waybillScanBtn"), waybillList: $("waybillList"),
+    waybillFinishBtn: $("waybillFinishBtn"),
+    waybillBoxCur: $("waybillBoxCur"), waybillNewBoxBtn: $("waybillNewBoxBtn"),
+    waybillDelBoxSel: $("waybillDelBoxSel"), waybillDelBoxBtn: $("waybillDelBoxBtn"),
     updateVersionCode: $("updateVersionCode"), updateVersionName: $("updateVersionName"),
     updateApkUrl: $("updateApkUrl"), updateNotes: $("updateNotes"),
     backupExportBtn: $("backupExportBtn"), backupAppBtn: $("backupAppBtn"), backupImportFile: $("backupImportFile"), backupStatus: $("backupStatus"),
@@ -1453,6 +1515,7 @@
     }
     state.segments.push({ start: Date.now(), end: null, kind: "work", id: uid() });
     state.phase = "working";
+    writeOpenSegCache(); // помним начало дня локально — переживёт сворачивание/потерю сети
     // Трекер запускается только у водителя (не-водители не шлют координаты).
     syncDriverToNative();
     if (state.isDriver) syncWorkActiveToNative(true);
@@ -1478,6 +1541,7 @@
     }
     state.phase = "finished";
     state.finishKey = state.dayKey; // day finished — prevent an open segment re-living
+    writeOpenSegCache(); // открытого больше нет — чистим локальный кэш таймера
     try { localStorage.setItem(FINISH_KEY, state.dayKey || ""); } catch { /* приватный режим */ }
     syncWorkActiveToNative(false);
     render();
@@ -2659,8 +2723,9 @@
   // погрузки, выгрузка — для выгрузки).
   function applyScanlogFilters(entries) {
     const q = scanlogSearchText.trim().toLowerCase();
-    const activeAction = scanlogFilterAction === "unload" ? "unload" : "load";
-    const activeDate = activeAction === "load" ? scanlogDateLoad : scanlogDateUnload;
+    const isWaybill = scanlogFilterAction === "waybill";
+    const activeAction = isWaybill ? "waybill" : (scanlogFilterAction === "unload" ? "unload" : "load");
+    const activeDate = isWaybill ? null : (activeAction === "load" ? scanlogDateLoad : scanlogDateUnload);
     return entries.filter((e) => {
       if (q && !String(e.client || "").toLowerCase().includes(q)) return false;
       if (e.action !== activeAction) return false;
@@ -2681,9 +2746,22 @@
       return;
     }
     if (el.scanlogEmpty) el.scanlogEmpty.hidden = true;
+    const isWaybillView = scanlogFilterAction === "waybill";
     // Русские названия статусов мест в журнале (для складской погрузки/выгрузки).
     const STATUS_RU = { created: "Создана", loaded: "Отгружен", delivered: "Выгружен" };
     const rows = entries.map((e) => {
+      if (isWaybillView) {
+        const miss = !!e.missing;
+        return `<tr class="${miss ? "scanlog-missing" : "scanlog-ok"}">
+          <td class="scanlog-time" data-label="Дата/время">${e.ts ? fmtDateTimeSec(e.ts) : "—"}</td>
+          <td class="scanlog-user" data-label="Оператор">${escapeHtml(e.userName || "—")}</td>
+          <td data-label="Клиент">${escapeHtml(e.client || "—")}</td>
+          <td class="scanlog-code" data-label="Позиция">${escapeHtml(e.code || "—")}</td>
+          <td data-label="Наименование">${escapeHtml(e.name || "—")}</td>
+          <td class="scanlog-box" data-label="Бокс">${escapeHtml(e.box || "—")}</td>
+          <td data-label="Кол-во">${miss ? "не найдено" : (Number(e.qty) || "—")}</td>
+        </tr>`;
+      }
       const isLoad = e.action === "load";
       const actionLabel = isLoad ? "Погрузка" : (e.action === "unload" ? "Выгрузка" : (e.action || "—"));
       // Номер места и общее число мест: «1 из 2». Общее число приходит с сервера
@@ -2701,9 +2779,10 @@
         <td data-label="Статус">${escapeHtml(statusRu)}</td>
       </tr>`;
     }).join("");
-    el.scanlogTable.innerHTML = `<thead><tr>
-      <th>Время</th><th>Пользователь</th><th>Действие</th><th>Клиент</th><th>Место</th><th>Статус</th>
-    </tr></thead><tbody>${rows}</tbody>`;
+    const thead = isWaybillView
+      ? `<thead><tr><th>Дата/время</th><th>Оператор</th><th>Клиент</th><th>Позиция</th><th>Наименование</th><th>Бокс</th><th>Кол-во</th></tr></thead>`
+      : `<thead><tr><th>Время</th><th>Пользователь</th><th>Действие</th><th>Клиент</th><th>Место</th><th>Статус</th></tr></thead>`;
+    el.scanlogTable.innerHTML = thead + `<tbody>${rows}</tbody>`;
   }
   function fmtDateTimeSec(ts) {
     const d = new Date(ts);
@@ -3698,8 +3777,12 @@
     const collapseBtn = dActive
       ? `<button type="button" class="delivery-collapse route-collapse is-locked" disabled title="Активный маршрут нельзя свернуть">▾</button>`
       : `<button type="button" class="delivery-collapse route-collapse" data-route-collapse title="Свернуть/развернуть">▸</button>`;
-    // По умолчанию маршруты показываются свёрнутыми (активные — раскрытыми).
-    const dCollapsed = dActive ? "" : " route-collapsed";
+    // По умолчанию неактивные маршруты свёрнуты, но если водитель вручную
+    // развернул карточку (expandedShipmentCards), она ДОЛЖНА остаться раскрытой
+    // и при последующих перерисовках (автообновление раз в N сек) — иначе карточка
+    // «сама схлопывается» через пару секунд. Активный маршрут всегда раскрыт.
+    const dExpanded = !dActive && expandedShipmentCards.has(String(d.id));
+    const dCollapsed = dActive ? "" : (dExpanded ? "" : " route-collapsed");
     return `
       <div class="delivery-card${dCollapsed}">
         <div class="delivery-card-head">
@@ -3710,7 +3793,7 @@
           ${statusBadge}
           ${collapseBtn}
         </div>
-        <div class="route-collapsible"${dActive ? "" : " hidden"}>${stops}</div>
+        <div class="route-collapsible"${dActive || dExpanded ? "" : " hidden"}>${stops}</div>
       </div>
     `;
   }
@@ -3886,6 +3969,9 @@
   // через loadShipments каждые несколько секунд, и без него раскрытая завершённая
   // отгрузка при перерисовке снова рендерилась бы свёрнутой («сама сворачивается»).
   const expandedShipmentCards = new Set();
+  // Карточки отгрузки, которые пользователь явно СВЕРНУЛ. По умолчанию раскрыты:
+  // склад должен сразу видеть клиентов и кнопку «Сборка», без лишних кликов.
+  const collapsedShipmentCards = new Set();
   // Аналогичный набор для «Моих маршрутов» водителя: раздел автообновляется через
   // loadMyRoutes каждые несколько секунд, и без него раскрытая карточка маршрута
   // при перерисовке снова сворачивалась бы, из-за чего маршрут «сразу исчезал».
@@ -3908,13 +3994,43 @@
       if (shipDone) badge = `<span class="rms-status delivered">Отгружен</span>`;
       else if (shipStarted) badge = `<span class="rms-status active">Отгрузка идёт</span>`;
       else badge = `<span class="rms-status idle">Ожидает отгрузки</span>`;
-      const clients = (r.clients || []).map((c) => {
+      const waybillOn = !!state.params.allowWaybill;
+      const clients = (r.clients || []).map((c, ci) => {
         const members = Array.isArray(c.members) && c.members.length > 0 ? c.members : null;
+        // Состав по боксам (если велась сборка): группируем собранные детали по
+        // коду бокса — те же боксы потом сканируются при отгрузке.
+        let boxesHtml = "";
+        const wb = r.waybills && r.waybills[ci];
+        const items = wb && wb.items ? wb.items : [];
+        const byBox = {};
+        const boxOrder = [];
+        items.forEach((it) => {
+          if (!it.box) return;
+          if (!byBox[it.box]) { byBox[it.box] = []; boxOrder.push(it.box); }
+          byBox[it.box].push(it);
+        });
+        if (boxOrder.length) {
+          boxesHtml = `<div class="shipment-client-boxes">` + boxOrder.map((b) => {
+            const dets = byBox[b];
+            // Удаление бокса из отгрузки — та же защита, что в сборке: бокс с
+            // деталями удалить нельзя (сервер вернёт отказ).
+            const delBtn = `<button type="button" class="shipment-del-box" title="Удалить бокс"
+              data-shipment-delbox="${escapeHtml(r.id)}:${ci}:${escapeHtml(b)}">✕</button>`;
+            // Собранные детали внутри бокса в отгрузке не показываем — только код
+            // бокса и (для склада) кнопку удаления.
+            return `<div class="shipment-client-box"><span class="shipment-client-box-code">${escapeHtml(b)}</span>${delBtn}</div>`;
+          }).join("") + `</div>`;
+        }
+        const wbBtn = waybillOn
+          ? `<button type="button" class="ctrl ctrl-soft shipment-waybill-btn" data-waybill-open="${escapeHtml(r.id)}:${ci}">Сборка</button>`
+          : "";
         return `
           <div class="shipment-client shipment-client-center">
             <span class="shipment-client-name">${escapeHtml(members ? (c.bundleName || c.address || c.client || "Связка") : (c.client || "—"))}</span>
             ${members ? `<span class="shipment-client-sub">${members.map((m) => escapeHtml(m.client)).join(", ")}</span>` : ""}
             ${(Number(c.loadedCount) || 0) > 0 ? `<span class="shipment-client-count">Мест: ${Number(c.loadedCount) || 0}</span>` : ""}
+            ${boxesHtml}
+            ${wbBtn}
           </div>
         `;
       }).join("");
@@ -3930,9 +4046,20 @@
       } else if (shipStarted) {
         btn = "";
       } else {
-        btn = `<button type="button" class="ctrl ctrl-primary" data-shipment-start="${escapeHtml(r.id)}">Начать отгрузку</button>`;
+        // При включённых накладных — нельзя начать, пока нет накладной на каждого
+        // клиента маршрута (иначе склад не видит, что собирать).
+        const wbReady = !waybillOn || (r.clients || []).every((_, ci) => {
+          const wb = r.waybills && r.waybills[ci];
+          return wb && Array.isArray(wb.items) && wb.items.length > 0;
+        });
+        btn = wbReady
+          ? `<button type="button" class="ctrl ctrl-primary" data-shipment-start="${escapeHtml(r.id)}">Начать отгрузку</button>`
+          : `<button type="button" class="ctrl" disabled title="Сначала загрузите расходную накладную">Начать отгрузку</button>`;
       }
-      const printBtn = (shipStarted && !shipDone)
+      // Боксы печатаются при сборке («Новый бокс»), поэтому в отгрузке кнопка
+      // «Печать этикеток» не нужна (если накладные/сборка включены) — этикетки
+      // уже напечатаны, а в отгрузке их остаётся только отсканировать.
+      const printBtn = (shipStarted && !shipDone && !waybillOn)
         ? `<button type="button" class="ctrl ctrl-soft" data-shipment-print="${escapeHtml(r.id)}">Печать этикеток</button>`
         : "";
       // Идущую отгрузку (склад уже работает с маршрутом) свернуть нельзя —
@@ -3941,7 +4068,7 @@
       const shipLocked = shipStarted && !shipDone;
       // Свёрнута, если нельзя заблокировать (раскрыта всегда при идущей отгрузке)
       // и пользователь не раскрыл её вручную (сохраняем между автообновлениями).
-      const shipCollapsed = !shipLocked && !expandedShipmentCards.has(String(r.id));
+      const shipCollapsed = !shipLocked && collapsedShipmentCards.has(String(r.id));
       const shipCollapseBtn = shipLocked
         ? `<button type="button" class="route-collapse is-locked" disabled title="Идущую отгрузку нельзя свернуть">▾</button>`
         : `<button type="button" class="route-collapse" data-route-collapse title="Свернуть/развернуть">${shipCollapsed ? "▸" : "▾"}</button>`;
@@ -3971,6 +4098,9 @@
       el.shipmentListActive.querySelectorAll("[data-shipment-print]").forEach((btn) => {
         btn.addEventListener("click", () => openPrintLabels(btn.dataset.shipmentPrint));
       });
+      el.shipmentListActive.querySelectorAll("[data-shipment-delbox]").forEach((btn) => {
+        btn.addEventListener("click", () => deleteBoxFromShipment(btn.dataset.shipmentDelbox));
+      });
     }
     if (el.shipmentListDone) {
       el.shipmentListDone.innerHTML = doneList.length
@@ -3981,6 +4111,360 @@
       });
     }
     applyShipmentCollapseUI();
+  }
+
+  // ---- Расходная накладная (сборка: загрузка xlsx + скан артикула) ----
+  let waybillRouteId = null;
+  let waybillClientIdx = 0;
+  // Локальная копия накладной, не зависящая от асинхронного кэша shipmentsCache:
+  // из-за гонки после загрузки файла кэш ещё старый, и список показывал
+  // «Товаров нет» при загруженных 41 позиции.
+  let waybillLocal = null;
+  let waybillPoll = null;
+  // Автообновление состояния сборки: оператор держит окно открытым на телефоне,
+  // а сканер работает на ПК — периодически перечитываем накладную с сервера и
+  // перерисовываем зелёные строки / кол-ва, чтобы видно было «прямо сейчас».
+  function stopWaybillPoll() {
+    if (waybillPoll) { clearInterval(waybillPoll); waybillPoll = null; }
+  }
+  function startWaybillPoll() {
+    stopWaybillPoll();
+    waybillPoll = setInterval(async () => {
+      try {
+        if (!el.waybillModal || !el.waybillModal.open) { stopWaybillPoll(); return; }
+        const r = await api("/api/shipments");
+        const route = (r && r.routes || []).find((x) => String(x.id) === String(waybillRouteId));
+        const fresh = route && route.waybills && route.waybills[waybillClientIdx];
+        if (fresh && Array.isArray(fresh.items)) {
+          waybillLocal = { items: fresh.items.map((x) => Object.assign({}, x)) };
+          renderWaybill();
+        }
+        renderWaybillDelBox(); // боксы тоже актуализируем — новый бокс виден без перезахода
+      } catch { /* сеть в моменте недоступна — пропускаем такт */ }
+    }, 2500);
+  }
+  function focusWaybillScan() {
+    if (el.waybillArtInput) {
+      try { el.waybillArtInput.focus(); } catch { /* ignore */ }
+    }
+  }
+  // ——— Боксы сборки ———
+  let waybillBox = "";       // текущий бокс (код этикетки места)
+  let waybillPrinting = false; // печатаем бокс из окна СБОРКИ (не открывать модалку отгрузки)
+  let waybillPendingArt = ""; // деталь, ожидающая свой бокс (скан: деталь → «МЕСТО» → бокс)
+  function setWaybillBox(box) {
+    waybillBox = String(box || "").trim();
+    if (el.waybillBoxCur) el.waybillBoxCur.textContent = waybillBox ? `Бокс: ${waybillBox}` : "Бокс: —";
+    if (el.waybillArtInput) el.waybillArtInput.value = "";
+    setWaybillStatus(waybillBox ? `Бокс выбран: ${waybillBox} — можно сканировать детали` : "Выберите бокс");
+    if (el.waybillNewBoxBtn) el.waybillNewBoxBtn.classList.toggle("active", !waybillBox);
+    focusWaybillScan();
+  }
+  function waybillNewBox() {
+    // Печатаем ОДИН новый бокс для текущего клиента сразу, без перехода на вкладку
+    // «Отгрузка»: настраиваем печать и печатаем 1 место (append). Стикер «вылезает»
+    // прямо из окна сборки — сборщику остаётся отсканировать его код.
+    setWaybillBox("");
+    if (waybillRouteId) {
+      printRouteId = waybillRouteId;
+      printClientIndex = waybillClientIdx;
+      if (el.printPlacesQty) el.printPlacesQty.value = "1";
+      waybillPrinting = true;
+      doPrintLabels(false);
+    }
+    setWaybillStatus("Новый бокс напечатан — отсканируйте его (код BG…)");
+    renderWaybillDelBox();
+    // Этикетка нового бокса создаётся на сервере асинхронно (печать); когда она
+    // появится — сразу отображаем её в списке боксов, без перезахода в сборку.
+    setTimeout(() => { try { renderWaybillDelBox(); } catch { /* ignore */ } }, 350);
+    focusWaybillScan();
+  }
+  // Список созданных боксов для удаления (заполняет select).
+  async function renderWaybillDelBox() {
+    const sel = el.waybillDelBoxSel;
+    if (!sel) return;
+    let boxes = [];
+    if (waybillRouteId) {
+      try {
+        const r = await api(`/api/routes/${encodeURIComponent(waybillRouteId)}/waybill/boxes?clientIndex=${waybillClientIdx}`);
+        boxes = (r && r.boxes) || [];
+      } catch { boxes = []; }
+    }
+    const prev = sel.value;
+    sel.innerHTML = boxes.length
+      ? `<option value="">— выберите бокс —</option>` + boxes.map((b) => `<option value="${escapeHtml(b.box)}">${escapeHtml(b.box)} (дет.: ${b.details})</option>`).join("")
+      : `<option value="">Боксов нет</option>`;
+    if (prev && boxes.some((b) => b.box === prev)) sel.value = prev;
+  }
+  async function deleteWaybillBox() {
+    const box = el.waybillDelBoxSel ? el.waybillDelBoxSel.value : "";
+    if (!box) { setWaybillStatus("Выберите бокс для удаления"); return; }
+    try {
+      const r = await api(`/api/routes/${encodeURIComponent(waybillRouteId)}/waybill/box/delete`, {
+        method: "POST",
+        body: JSON.stringify({ clientIndex: waybillClientIdx, box }),
+      });
+      if (r && r.ok) {
+        setWaybillStatus(`Бокс ${box} удалён`);
+        renderWaybillDelBox();
+        renderWaybill();
+        loadShipments();
+      } else {
+        setWaybillStatus((r && r.error) || "Не удалось удалить бокс");
+      }
+    } catch (e) {
+      setWaybillStatus((e && e.message) || "В боксе деталь — переразместите в другой бокс");
+    }
+    focusWaybillScan();
+  }
+  function waybillGet() {
+    const r = (shipmentsCache || []).find((x) => String(x.id) === String(waybillRouteId));
+    return r && r.waybills && r.waybills[waybillClientIdx] ? r.waybills[waybillClientIdx] : null;
+  }
+  // Удаление бокса из ОТГРУЗКИ: тот же эндпоинт /waybill/box/delete, где сервер
+  // запрещает удалять бокс с деталями («переразместите в другой бокс»).
+  async function deleteBoxFromShipment(key) {
+    const parts = String(key || "").split(":"); // routeId:clientIdx:box
+    if (parts.length < 3) return;
+    const routeId = parts[0];
+    const clientIdx = Number(parts[1]);
+    const box = parts.slice(2).join(":");
+    try {
+      const r = await api(`/api/routes/${encodeURIComponent(routeId)}/waybill/box/delete`, {
+        method: "POST",
+        body: JSON.stringify({ clientIndex: clientIdx, box }),
+      });
+      if (r && r.ok) {
+        toast(`Бокс ${box} удалён`);
+      } else {
+        toast((r && r.error) || "Не удалось удалить бокс");
+        playScanFeedback(false);
+      }
+      loadShipments();
+    } catch (e) {
+      toast((e && e.message) || "В боксе деталь — переразместите в другой бокс");
+      playScanFeedback(false);
+      loadShipments();
+    }
+  }
+  // Удаляет загруженную накладную у клиента (сборку можно отменить, пока нет
+  // собранных деталей/боксов — сервер сам откажет, если они есть).
+  function openWaybill(routeId, clientIdx) {
+    waybillRouteId = routeId;
+    waybillClientIdx = Number(clientIdx) || 0;
+    waybillBox = "";
+    waybillPendingArt = "";
+    if (el.waybillBoxCur) el.waybillBoxCur.textContent = "Бокс: —";
+    const cached = waybillGet();
+    waybillLocal = cached && cached.items ? { items: cached.items.map((x) => Object.assign({}, x)) } : null;
+    if (el.waybillArtInput) el.waybillArtInput.value = "";
+    if (el.waybillFile) el.waybillFile.value = "";
+    if (el.waybillTitle) {
+      const r = (shipmentsCache || []).find((x) => String(x.id) === String(routeId));
+      const cl = r && r.clients[waybillClientIdx];
+      el.waybillTitle.textContent = "Накладная · " + (cl ? (cl.client || cl.bundleName || cl.address || `Клиент ${waybillClientIdx + 1}`) : "Клиент");
+    }
+    const wb = waybillLocal;
+    setWaybillStatus(wb ? `Загружено позиций: ${wb.items.length}` : "Накладная не загружена на этого клиента");
+    // Накладная уже привязана к точке в рамках отгрузки — повторно загрузить
+    // нельзя (прогресс хранится на сервере и не слетает при перезаходе).
+    if (el.waybillFile) {
+      el.waybillFile.disabled = !!wb;
+      const fileRow = el.waybillFile.closest(".file-row");
+      if (fileRow) fileRow.style.display = wb ? "none" : "";
+    }
+    startWaybillPoll();
+    renderWaybill();
+    renderWaybillDelBox();
+    try { el.waybillModal.showModal(); } catch { /* уже открыта */ }
+    // Сканер работает «не вставая в строку»: фокус всегда на поле штрихкода.
+    setTimeout(focusWaybillScan, 120);
+  }
+  function closeWaybill() {
+    stopWaybillPoll();
+    if (el.waybillModal && el.waybillModal.open) { try { el.waybillModal.close(); } catch { /* ignore */ } }
+  }
+  function setWaybillStatus(t) {
+    if (el.waybillStatus) el.waybillStatus.textContent = t;
+  }
+  function renderWaybill() {
+    if (!el.waybillList) return;
+    const wb = waybillLocal;
+    if (!wb || !wb.items || !wb.items.length) {
+      el.waybillList.innerHTML = `<div class="mult-rule-empty">Товаров нет. Загрузите .xlsx.</div>`;
+      return;
+    }
+    const doneAll = wb.items.every((it) =>
+      (Number(it.scanned) || 0) >= (Number(it.qty) || 0) || !!it.missing
+    );
+    const codedOne = wb.items.filter((it) => (Number(it.scanned) || 0) > 0).length;
+    const missCount = wb.items.filter((it) => !!it.missing).length;
+    setWaybillStatus(
+      `Собрано позиций: ${codedOne}/${wb.items.length}${missCount ? ` · не найдено: ${missCount}` : ""}`
+      + (doneAll ? " · сборка готова — можно начать отгрузку" : "")
+    );
+    // Завершение сборки доступно, когда весь товар собран или помечен «не найдено»
+    // (комбинированно): кнопка просто закрывает окно — сервер при начале отгрузки
+    // сам проверяет готовность.
+    if (el.waybillFinishBtn) el.waybillFinishBtn.disabled = !doneAll;
+    el.waybillList.innerHTML = wb.items.map((it, i) => {
+      const left = Math.max(0, (Number(it.qty) || 0) - (Number(it.scanned) || 0));
+      const done = Number(it.scanned) >= Number(it.qty);
+      const miss = !!it.missing;
+      const cls = ["waybill-item", done ? " done" : "", miss ? " missing" : ""].join(" ");
+      const mark = miss
+        ? `<span class="waybill-mark">не найдено</span>`
+        : (done ? `<span class="waybill-mark">${it.box ? "бокс " + escapeHtml(String(it.box).slice(0, 18)) : "собрано"}</span>` : "");
+      return `<div class="${cls}" data-waybill-index="${i}" data-waybill-art="${escapeHtml(it.art)}">
+        <div class="waybill-item-art">${escapeHtml(it.art)}</div>
+        <div class="waybill-item-name">${escapeHtml(it.name || "")}</div>
+        <div class="waybill-item-qty">${Number(it.scanned) || 0}/${Number(it.qty)}</div>
+        ${mark}
+      </div>`;
+    }).join("");
+  }
+  async function toggleMissingWaybill(idx) {
+    if (!waybillLocal || !waybillLocal.items) { setWaybillStatus("Сначала загрузите накладную"); return; }
+    const item = waybillLocal.items[idx];
+    if (!item) { setWaybillStatus("Позиция не найдена"); return; }
+    if (!item || (Number(item.scanned) || 0) >= (Number(item.qty) || 0)) {
+      setWaybillStatus("Нельзя пометить собранную полностью позицию");
+      return;
+    }
+    const art = String(item.art);
+    const next = !item.missing;
+    try {
+      const r = await api("/api/routes/" + encodeURIComponent(waybillRouteId) + "/waybill/missing", {
+        method: "POST",
+        body: JSON.stringify({ clientIndex: waybillClientIdx, index: idx, art, on: next }),
+      });
+      if (r && r.ok) {
+        item.missing = next;
+        setWaybillStatus(next ? `Позиция ${art} помечена как «не найдено»` : `Пометка ${art} снята`);
+        renderWaybill();
+        loadShipments();
+      } else {
+        setWaybillStatus((r && r.error) || "Ошибка сохранения пометки");
+      }
+    } catch (e) {
+      setWaybillStatus((e && e.message) || "Ошибка: не удалось пометить");
+    }
+    focusWaybillScan();
+  }
+  function uploadWaybill() {
+    const file = el.waybillFile && el.waybillFile.files && el.waybillFile.files[0];
+    if (!file) { setWaybillStatus("Выберите файл .xlsx"); return; }
+    if (waybillLocal && waybillLocal.items && waybillLocal.items.length > 0) {
+      setWaybillStatus("Накладная уже привязана к этой точке — новая загрузка недоступна");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = async () => {
+      setWaybillStatus("Загружаю накладную…");
+      const b64 = String(reader.result).split(",")[1] || "";
+      try {
+        const r = await api("/api/routes/" + encodeURIComponent(waybillRouteId) + "/waybill", {
+          method: "POST",
+          body: JSON.stringify({ clientIndex: waybillClientIdx, fileB64: b64 }),
+        });
+        if (r && r.ok) {
+          waybillLocal = { items: (r.items || []).map((x) => Object.assign({}, x)) };
+          const total = (waybillLocal.items || []).reduce((s, it) => s + (Number(it.scanned) || 0), 0);
+          setWaybillStatus(`Загружено позиций: ${waybillLocal.items.length}${total ? " · собрано " + total : ""}`);
+          renderWaybill();
+          loadShipments(); // обновляем родительский список в фоне
+          focusWaybillScan();
+        } else {
+          setWaybillStatus((r && r.error) || "Не удалось загрузить накладную");
+        }
+      } catch (e) {
+        setWaybillStatus((e && e.message) || "Ошибка загрузки");
+      }
+    };
+    reader.onerror = () => setWaybillStatus("Не удалось прочитать файл");
+    reader.readAsDataURL(file);
+  }
+  async function scanWaybill() {
+    if (!waybillLocal || !waybillLocal.items) {
+      setWaybillStatus("Сначала загрузите накладную");
+      return;
+    }
+    const val = el.waybillArtInput ? String(el.waybillArtInput.value || "").trim() : "";
+    if (!val) { setWaybillStatus("Введите/отсканируйте код"); focusWaybillScan(); return; }
+    // Сборка: ДЕТАЛЬ → «МЕСТО», затем БОКС → «ХОРОШО»/«ПЛОХО». Бокс и артикул
+    // сканируются в ОДНОМ поле, без кнопок и курсора. Порядок определяет, что
+    // сейчас скан: если есть деталь, ожидающая место, — следующий скан это бокс
+    // (код может быть любым, не обязательно «BG…»).
+    if (waybillPendingArt) {
+      // Шаг 2: отсканирован бокс (ожидалась деталь). Привязываем её к этому боксу.
+      // Успех = «ХОРОШО», ошибка привязки = «ПЛОХО».
+      // Если отсканированный код — на самом деле деталь из накладной (а не бокс),
+      // не превращаем её в бокс и не добавляем: это ошибка. Сначала — настоящий бокс.
+      const isAnArt = (waybillLocal.items || []).some((it) => String(it.art) === val);
+      if (isAnArt) {
+        setWaybillStatus("ПЛОХО · " + val + " — это деталь, а не бокс. Отсканируйте бокс");
+        playScanFeedback(false);
+        if (el.waybillArtInput) el.waybillArtInput.value = "";
+        focusWaybillScan();
+        return;
+      }
+      const art = waybillPendingArt;
+      const scanQty = Math.max(1, Number(el.waybillQtyInput && el.waybillQtyInput.value) || 1);
+      setWaybillBox(val);
+      try {
+        const r = await api("/api/routes/" + encodeURIComponent(waybillRouteId) + "/waybill/scan", {
+          method: "POST",
+          body: JSON.stringify({ clientIndex: waybillClientIdx, art, box: val, qty: scanQty }),
+        });
+        if (r && r.ok) {
+          if (r.rebound) {
+            const it = waybillLocal.items.find((x) => String(x.art) === art);
+            if (it) it.box = r.item && r.item.box != null ? r.item.box : val;
+            setWaybillStatus(`ХОРОШО · ${art} → бокс ${r.item && r.item.box || val} (перенос)`);
+            playScanFeedback(true);
+          } else {
+            const item = waybillLocal.items.find((x) => String(x.art) === art && (Number(x.scanned) || 0) < (Number(x.qty) || 0) && !x.missing);
+            if (item) {
+              item.scanned = (r.item && r.item.scanned != null) ? r.item.scanned : (Number(item.scanned) + scanQty);
+              item.box = r.item && r.item.box != null ? r.item.box : val;
+            }
+            const done = (waybillLocal.items || []).filter((it) => Number(it.scanned) >= Number(it.qty)).length;
+            setWaybillStatus(`ХОРОШО · ${item && item.art} → бокс ${val} · осталось ${r.left} · готово ${done}/${waybillLocal.items.length}`);
+            playScanFeedback(r.left > 0);
+          }
+          waybillPendingArt = "";
+          renderWaybill();
+          loadShipments();
+        } else {
+          setWaybillStatus("ПЛОХО · " + ((r && r.error) || "Деталь не привязалась к боксу"));
+          playScanFeedback(false);
+          renderWaybill();
+        }
+      } catch (e) {
+        setWaybillStatus("ПЛОХО · " + ((e && e.message) || "Ошибка привязки к боксу"));
+        playScanFeedback(false);
+      }
+    } else if (String(val).startsWith("BG" + waybillRouteId + "-")) {
+      // Явный код этикетки места без ожидающей детали — просто выбираем бокс.
+      setWaybillBox(val);
+      setWaybillStatus(`Бокс выбран: ${val} — отсканируйте деталь`);
+      playScanFeedback(true);
+    } else {
+      // Шаг 1: отсканирована деталь. Если она есть в накладной — «МЕСТО» (ждём бокс),
+      // если нет — «ПЛОХО».
+      const hasArt = (waybillLocal.items || []).some((it) => String(it.art) === val);
+      if (!hasArt) {
+        setWaybillStatus("ПЛОХО · деталь " + val + " не найдена в накладной");
+        playScanFeedback(false);
+      } else {
+        waybillPendingArt = val;
+        setWaybillStatus("МЕСТО · деталь " + val + " — отсканируйте бокс");
+        playScanFeedback(true);
+      }
+    }
+    if (el.waybillArtInput) el.waybillArtInput.value = "";
+    // Сканер «не вставая в строку»: возвращаем фокус на поле штрихкода.
+    focusWaybillScan();
   }
 
   // ---- Печать этикеток отгрузки (склад: выбирает клиента и кол-во мест) ----
@@ -4044,14 +4528,15 @@
     // печати start = 0 (места 1..qty). При «Допечатать места» стартуем со следующего
     // свободного номера: если у выбранного клиента уже создано N мест, новые будут
     // N+1..N+qty, а старые (в т.ч. уже отсканированные) не трогаем.
-    let start = 0;
-    if (append) {
-      try {
-        const cur = await api(`/api/labels?routeId=${encodeURIComponent(printRouteId)}&clientIndex=${idx}`);
-        start = cur && Array.isArray(cur.labels) ? cur.labels.length : (Array.isArray(scanLabels) ? scanLabels.length : 0);
-      } catch {
-        start = Array.isArray(scanLabels) ? scanLabels.length : 0;
-      }
+    // Накопительная печать: каждое нажатие добавляет qty новых мест СВЕРХ уже
+    // созданных (начиная со следующего номера). Если указано 1 — каждый клик даёт
+    // ровно один новый стикер. Места не пересоздаются с первого номера.
+    let start;
+    try {
+      const cur = await api(`/api/labels?routeId=${encodeURIComponent(printRouteId)}&clientIndex=${idx}`);
+      start = cur && Array.isArray(cur.labels) ? cur.labels.length : (Array.isArray(scanLabels) ? scanLabels.length : 0);
+    } catch {
+      start = Array.isArray(scanLabels) ? scanLabels.length : 0;
     }
     const total = start + qty;
     // Дата отгрузки на стикере — в формате ДД.ММ.ГГГГ (r.date/день приходят как
@@ -4064,7 +4549,7 @@
     const area = el.printArea;
     area.innerHTML = "";
     for (let i = 1; i <= qty; i++) {
-      const place = append ? start + i : i;
+      const place = start + i;
       const code = codeBase + place;
       const card = document.createElement("div");
       card.className = "label-card";
@@ -4098,14 +4583,10 @@
     try {
       api("/api/labels", {
         method: "POST",
-        body: JSON.stringify({ routeId: printRouteId, clientIndex: idx, qty, mode: append ? "append" : "replace" }),
+        body: JSON.stringify({ routeId: printRouteId, clientIndex: idx, qty, mode: "append" }),
       }).then((r) => {
         if (r && Array.isArray(r.labels)) {
-          if (append) {
-            toast(`Допечатано мест: ${qty}. Всего у клиента: ${r.labels.length}`);
-          } else {
-            toast(`Создано мест: ${r.labels.length} — можно сканировать при погрузке/выгрузке`);
-          }
+          toast(`Допечатано мест: ${qty}. Всего у клиента: ${r.labels.length}`);
           refreshPrintLabels();
         }
       }).catch(() => {});
@@ -4120,9 +4601,21 @@
     // возвращает модалку, если просмотрщик Коворка всё же сбросит её окно.
     if (window.AndroidBridge && typeof window.AndroidBridge.scanQR === "function") {
       setTimeout(() => { try { window.print(); } catch { /* ignore */ } }, 60);
+    } else if (isElectronDesktop()) {
+      // Настольная сборка (Electron): main.js перехватывает window.print() и
+      // печатает молча (без окна) содержимое #printArea. Поэтому печатаем именно
+      // window.print() на главной странице, а не iframe — иначе тихий перехватчик
+      // Electron не срабатывает (а именно это и было причиной «печать не идёт»).
+      setTimeout(() => { try { window.print(); } catch { /* ignore */ } }, 60);
     } else {
-      printStickersViaIframe(ensurePrintModalRestored);
+      // Печать бокса из окна СБОРКИ: не открываем модалку печати отгрузки и не
+      // перекидываемся на вкладку «Отгрузка» — стикер печатается и окно сборки
+      // остаётся на месте.
+      printStickersViaIframe(waybillPrinting ? (function () {}) : ensurePrintModalRestored);
     }
+    // Печать бокса из «Сборки» завершена — флаг больше не нужен (callback уже
+    // выбран на момент вызова печати, поэтому сброс безопасен).
+    waybillPrinting = false;
   }
 
   // Стикерные стили 58×58 мм, продублированные для печатного iframe. Идентичны
@@ -4158,6 +4651,15 @@
   // сдвинутым далеко за пределы видимой области (off-screen): он не виден
   // глазу, но браузер печатает именно его содержимое (58×58 мм), а не главный
   // документ. Фолбэка на window.print() нет — он и вызывал «вылет».
+  // Настольная сборка (Electron): window.print() на главной странице перехватывается
+  // в electron/main.js и печатает молча (#printArea, без окна). Возвращает true,
+  // если приложение запущено внутри настольной оболочки.
+  function isElectronDesktop() {
+    try {
+      return typeof navigator !== "undefined"
+        && /electron\//i.test(String(navigator.userAgent || ""));
+    } catch { return false; }
+  }
   function printStickersViaIframe(restoreModal) {
     const area = el.printArea;
     if (!area) return;
@@ -4372,7 +4874,11 @@
         `<div class="label-code">${escapeHtml(code)}</div>`;
       area.appendChild(card);
     });
-    printStickersViaIframe(ensureAppendModalRestored);
+    if (isElectronDesktop()) {
+      setTimeout(() => { try { window.print(); } catch { /* ignore */ } }, 60);
+    } else {
+      printStickersViaIframe(ensureAppendModalRestored);
+    }
   }
 
   // ---- Сканирование этикеток (погрузка/выгрузка) — Шаг 3 ----
@@ -4662,6 +5168,8 @@
     const area = el.printArea;
     if (area) { area.innerHTML = ""; area.appendChild(card); }
     if (window.AndroidBridge && typeof window.AndroidBridge.scanQR === "function") {
+      setTimeout(() => { try { window.print(); } catch { /* ignore */ } }, 60);
+    } else if (isElectronDesktop()) {
       setTimeout(() => { try { window.print(); } catch { /* ignore */ } }, 60);
     } else {
       printStickersViaIframe(function restoreAfterSinglePrint() {});
@@ -5481,7 +5989,26 @@
         const createdNoteHtml = unCreated > 0
           ? `<div class="rms-unload-note">⚠ ${unCreated} место не погружено складом — выгрузка счёрчена без него</div>`
           : "";
+        // Содержимое боксов этой точки для водителя: сгруппировано по коду бокса —
+        // водитель видит, какие детали лежат в каждом боксе (из накладной сборки).
+        const wbBoxesHtml = (() => {
+          const wbi = r.waybills && r.waybills[i];
+          const items = wbi && Array.isArray(wbi.items) ? wbi.items : [];
+          const byBox = {};
+          const order = [];
+          items.forEach((it) => {
+            if (!it.box || (Number(it.scanned) || 0) <= 0) return;
+            if (!byBox[it.box]) { byBox[it.box] = []; order.push(it.box); }
+            byBox[it.box].push(it);
+          });
+          if (!order.length) return "";
+          // Водителю показываем только коды боксов, без собранных деталей внутри.
+          return `<div class="rms-waybill-boxes">` + order.map((b) =>
+            `<div class="rms-waybill-box"><span class="rms-waybill-box-code">${escapeHtml(b)}</span></div>`
+          ).join("") + `</div>`;
+        })();
         let unloadBlock = `<div class="rms-unload">
+          ${wbBoxesHtml}
           ${unloadCountHtml}
           ${createdNoteHtml}
           <div class="rms-stop-actions">
@@ -6018,6 +6545,82 @@
     loadBaseKm(groups);
     // Начали новое построение — суммарный км мостов ещё не подгрузился.
     routeBuildKm = null;
+    renderRouteWaybillsBlock();
+  }
+
+  // Накладные, загруженные диспетчером, по ключу адреса точки (=== stopKeyOf).
+  const routeWaybills = new Map(); // addrKeyLower -> items[]
+  const stopKeyOf2 = (c) =>
+    String((c && (c.bundleAddress || c.address)) || "").trim().toLowerCase();
+  function routeWaybillState(addrKey) {
+    if (!routeWaybills.has(addrKey)) return null;
+    const e = routeWaybills.get(addrKey);
+    const items = e && e.items;
+    return { items, count: items ? items.length : 0, buyer: (e && e.buyer) || "" };
+  }
+  // Показывает блок загрузки накладных: по одной строке на выбранную точку.
+  function renderRouteWaybillsBlock() {
+    if (!el.routeWaybillsBlock || !el.routeWaybillsList) return;
+    const on = !!state.params.allowWaybill;
+    if (!on || routeOrderIds.length === 0) {
+      el.routeWaybillsBlock.hidden = true;
+      return;
+    }
+    // По накладной на КАЖДОГО выбранного клиента (в т.ч. на каждого клиента
+    // связки на одном адресе). В сборке накладные клиентов одной точки сложатся.
+    const stops = [];
+    for (const id of routeOrderIds) {
+      const c = driverClientsCache.find((x) => String(x.id) === String(id));
+      if (!c) continue;
+      stops.push({ key: String(c.id), label: (c.client || c.bundleName || c.bundleAddress || c.address || "Клиент") });
+    }
+    const rows = stops.map((s) => {
+      const st = routeWaybillState(s.key);
+      const delBtn = st
+        ? `<button type="button" class="route-waybill-del" title="Удалить загруженную накладную"
+             data-waybill-del-key="${escapeHtml(s.key)}">✕</button>`
+        : "";
+      return `<div class="route-waybill-row">
+        <span class="route-waybill-label">${escapeHtml(s.label)}</span>
+        <span class="route-waybill-state">${st ? `загружено: ${st.count} поз.` : "не загружено"}</span>
+        ${delBtn}
+        <label class="ctrl ctrl-soft route-waybill-upload"> Загрузить .xlsx
+          <input type="file" accept=".xlsx" data-waybill-key="${escapeHtml(s.key)}" hidden />
+        </label>
+      </div>`;
+    }).join("");
+    el.routeWaybillsBlock.hidden = false;
+    el.routeWaybillsList.innerHTML = rows;
+    el.routeWaybillsList.querySelectorAll("input[type=file]").forEach((inp) => {
+      inp.addEventListener("change", () => routeUploadWaybill(inp));
+    });
+    el.routeWaybillsList.querySelectorAll("[data-waybill-del-key]").forEach((b) => {
+      b.addEventListener("click", () => {
+        routeWaybills.delete(b.dataset.waybillDelKey);
+        toast("Накладная удалена");
+        renderRouteWaybillsBlock();
+      });
+    });
+  }
+  async function routeUploadWaybill(inp) {
+    const key = inp.dataset.waybillKey;
+    const file = inp.files && inp.files[0];
+    if (!file) return;
+    const r2 = new FileReader();
+    r2.onload = async () => {
+      const b64 = String(r2.result).split(",")[1] || "";
+      try {
+        const r = await api("/api/waybill/parse", { method: "POST", body: JSON.stringify({ fileB64: b64 }) });
+        const items = (r && r.items) || [];
+        routeWaybills.set(key, { items, buyer: (r && r.buyer) || "" });
+        toast(items.length ? `Накладная загружена: ${items.length} поз.` : "В накладной нет позиций");
+      } catch (e) {
+        routeWaybills.set(key, { items: [], buyer: "" });
+        toast((e && e.message) || "Не удалось разобрать накладную");
+      }
+      renderRouteWaybillsBlock();
+    };
+    r2.readAsDataURL(file);
   }
 
   // Асинхронно подгружает км между соседними выбранными клиентами (по дорогам
@@ -6625,9 +7228,21 @@
       let editDelBtns;
       if (routeDone) {
         editDelBtns = delLockedBtn;
-      } else if (routeActive || routeInShipment) {
+      } else if (routeActive) {
+        // Ведётся водителем прямо сейчас — состав зафиксирован: правка недоступна,
+        // удаление только по коду, есть «Разблокировать» для залипших состояний.
         editDelBtns = delLockedBtn + `${canUnlock ? unlockBtn : ""}`;
+      } else if (routeInShipment) {
+        // Склад уже взял маршрут в сборку/отгрузку, но диспетчер отвечает за
+        // состав остановок — ему разрешено РЕДАКТИРОВАТЬ маршрут. Удаление — по
+        // коду (занятый), плюс «Разблокировать» на случай залипшего статуса.
+        editDelBtns = `
+          <button type="button" class="drv-ico-btn driver-route-edit" data-id="${escapeHtml(r.id)}" title="Редактировать точки" aria-label="Редактировать точки маршрута">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20h4L18.5 9.5a2.1 2.1 0 0 0-3-3L5 17v3z"/><path d="M13.5 6.5l3 3"/></svg>
+          </button>
+          ${delLockedBtn}${canUnlock ? unlockBtn : ""}`;
       } else {
+        // Обычный маршрут — редактирование и удаление без кода.
         editDelBtns = `<button type="button" class="drv-ico-btn driver-route-edit" data-id="${escapeHtml(r.id)}" title="Редактировать точки" aria-label="Редактировать точки маршрута">
 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20h4L18.5 9.5a2.1 2.1 0 0 0-3-3L5 17v3z"/><path d="M13.5 6.5l3 3"/></svg>
 </button>
@@ -6793,6 +7408,33 @@
       toast("Укажите дату, водителя и выберите хотя бы одного клиента");
       return;
     }
+    // Накладные обязательны перед созданием маршрута (если включены): у каждой
+    // точки должен быть загружен .xlsx. Накладную принимает диспетчер.
+    const waybillOn2 = !!state.params.allowWaybill;
+    const waybills = [];
+    if (waybillOn2) {
+      let missingName = "";
+      for (let i = 0; i < chosen.length; i++) {
+        const s = chosen[i];
+        // Накладные каждого клиента связки (одного адреса) складываем в одну.
+        const key = String((s.address || s.bundleName || s.client) || "").trim().toLowerCase();
+        const items = [];
+        for (const id of routeOrderIds) {
+          const c = driverClientsCache.find((x) => String(x.id) === String(id));
+          if (!c) continue;
+          if (stopKeyOf2(c) !== key) continue;
+          const e = routeWaybills.get(String(c.id));
+          if (e && Array.isArray(e.items) && e.items.length) items.push(...e.items);
+        }
+        if (!items.length) { missingName = (s.client || s.bundleName || s.address || `Точка ${i + 1}`); break; }
+        waybills.push({ clientIndex: i, items });
+      }
+      if (missingName) {
+        toast(`Загрузите расходную накладную на «${missingName}» перед созданием маршрута`);
+        renderRouteWaybillsBlock();
+        return;
+      }
+    }
     try {
       // Предупреждение о пересечении: клиент уже в другом маршруте этого же
       // водителя на ту же дату. Разрешаем сохранить, но предупреждаем.
@@ -6831,8 +7473,8 @@
             // карточка списка показывала то же число, что и построение.
             (Number.isFinite(Number(routeBuildKm)) ? { km: routeBuildKm } : {}),
             editingRouteId
-              ? { action: "update", id: editingRouteId, date, driverId, driverName, clients: chosen }
-              : { date, driverId, driverName, clients: chosen }
+              ? { action: "update", id: editingRouteId, date, driverId, driverName, clients: chosen, waybills }
+              : { date, driverId, driverName, clients: chosen, waybills }
           )
         ),
       });
@@ -6845,6 +7487,7 @@
       if (el.routeClientSearch) el.routeClientSearch.value = "";
       renderRouteClientOptions();
       renderRouteClientSelected();
+      routeWaybills.clear();
       toast("Маршрут сохранён");
     } catch (e) {
       toast(e.message);
@@ -7005,6 +7648,23 @@
     });
     renderRouteClientOptions();
     renderRouteClientSelected();
+    // Восстанавливаем загруженные накладные (позиции + контрагент) из сохранённого
+    // маршрута: иначе после перезагрузки блок показывает «не загружено», а число
+    // позиций и название контрагента «съезжают». Ключи считаем так же, как в
+    // renderRouteWaybillsBlock — по выбранным объектам клиентов из кэша.
+    routeWaybills.clear();
+    (r.clients || []).forEach((rc, i) => {
+      const wb = r.waybills && r.waybills[i];
+      if (!wb || !Array.isArray(wb.items) || !wb.items.length) return;
+      const cid = routeOrderIds[i];
+      const c = driverClientsCache.find((x) => String(x.id) === String(cid));
+      const key = c ? (stopKeyOf2(c) || "id:" + String(cid)) : "id:" + String(cid);
+      routeWaybills.set(key, {
+        items: wb.items.map((x) => Object.assign({}, x)),
+        buyer: String((wb && wb.buyer) || ""),
+      });
+    });
+    renderRouteWaybillsBlock();
     switchRouteSubtab("route");
     toast("Редактирование маршрута: меняйте точки и нажмите «Сохранить маршрут»");
   }
@@ -7815,6 +8475,7 @@
     if (el.allowDriverStartWithoutShipment) el.allowDriverStartWithoutShipment.checked = !!state.params.allowDriverStartWithoutShipment;
     if (el.allowFinishUnloadIncomplete) el.allowFinishUnloadIncomplete.checked = !!state.params.allowFinishUnloadIncomplete;
     if (el.allowDriverReorderPoints) el.allowDriverReorderPoints.checked = !!state.params.allowDriverReorderPoints;
+    if (el.allowWaybill) el.allowWaybill.checked = !!state.params.allowWaybill;
     if (el.routeDeleteCode) el.routeDeleteCode.value = state.params.routeDeleteCode || "";
     if (el.scanLogLimit) el.scanLogLimit.value = state.params.scanLogLimit != null ? state.params.scanLogLimit : 30000;
     renderGroupChecks(el.showOverHoursGroups, state.params.showOverHoursGroups || []);
@@ -8057,6 +8718,7 @@
       allowDriverStartWithoutShipment: !!el.allowDriverStartWithoutShipment.checked,
       allowFinishUnloadIncomplete: !!el.allowFinishUnloadIncomplete.checked,
       allowDriverReorderPoints: !!el.allowDriverReorderPoints.checked,
+      allowWaybill: !!el.allowWaybill.checked,
       routeDeleteCode: el.routeDeleteCode ? el.routeDeleteCode.value.trim() : "",
       scanLogLimit: el.scanLogLimit ? (Number(el.scanLogLimit.value) || 30000) : 30000,
       showOverHoursGroups: collectGroupChecks(el.showOverHoursGroups),
@@ -8419,7 +9081,10 @@
       if (card.hasAttribute("data-myroute")) {
         if (collapsedNow) expandedMyRouteCards.delete(idStr);
         else expandedMyRouteCards.add(idStr);
-      } else {
+      } else if (card.classList.contains("shipment-card")) {
+        if (collapsedNow) collapsedShipmentCards.add(idStr);
+        else collapsedShipmentCards.delete(idStr);
+      } else if (card.classList.contains("delivery-card")) {
         if (collapsedNow) expandedShipmentCards.delete(idStr);
         else expandedShipmentCards.add(idStr);
       }
@@ -8736,7 +9401,7 @@
   // Единое автосохранение всех тумблеров параметров: любой переключатель сразу
   // сохраняет полный набор через applyParams() (последовательно, без гонки) и
   // мгновенно обновляет вкладки.
-  ["showOverHours", "showOverSum", "showDrivers", "adminSeeRoutes", "driverSeeRoutes", "showShipment", "allowDriverStartWithoutShipment", "allowFinishUnloadIncomplete", "allowDriverReorderPoints"]
+  ["showOverHours", "showOverSum", "showDrivers", "adminSeeRoutes", "driverSeeRoutes", "showShipment", "allowDriverStartWithoutShipment", "allowFinishUnloadIncomplete", "allowDriverReorderPoints", "allowWaybill"]
     .forEach((key) => {
       const el2 = el[key];
       if (el2) el2.addEventListener("change", applyParams);
@@ -9028,6 +9693,41 @@
       closeDriverScanModal();
     });
   }
+  // ----- Расходная накладная: открытие из отгрузки + модалка -----
+  document.addEventListener("click", (ev) => {
+    const wb = ev.target.closest && ev.target.closest("[data-waybill-open]");
+    if (!wb || !state.params.allowWaybill) return;
+    const parts = String(wb.dataset.waybillOpen || "").split(":");
+    ev.preventDefault();
+    openWaybill(parts[0], Number(parts[1] || 0));
+  });
+  if (el.waybillClose) el.waybillClose.addEventListener("click", closeWaybill);
+  if (el.waybillFile) el.waybillFile.addEventListener("change", uploadWaybill);
+  if (el.waybillScanBtn) el.waybillScanBtn.addEventListener("click", scanWaybill);
+  if (el.waybillNewBoxBtn) el.waybillNewBoxBtn.addEventListener("click", waybillNewBox);
+  if (el.waybillDelBoxBtn) el.waybillDelBoxBtn.addEventListener("click", deleteWaybillBox);
+  if (el.waybillFinishBtn) {
+    el.waybillFinishBtn.addEventListener("click", () => {
+      closeWaybill();
+      toast("Сборка завершена — можно начать отгрузку");
+    });
+  }
+  if (el.waybillList) {
+    el.waybillList.addEventListener("click", (ev) => {
+      const row = ev.target.closest && ev.target.closest("[data-waybill-art]");
+      if (!row) return;
+      ev.preventDefault();
+      toggleMissingWaybill(Number(row.dataset.waybillIndex));
+    });
+  }
+  if (el.waybillArtInput) {
+    el.waybillArtInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); scanWaybill(); }
+    });
+  }
+  if (el.waybillModal) {
+    el.waybillModal.addEventListener("cancel", (e) => { e.preventDefault(); closeWaybill(); });
+  }
   // ----- Актная запись: показываем, кем сервер видит вошедшего -----
   function openAccountModal() {
     const d = (state.me && state.me.diag) || {};
@@ -9120,7 +9820,10 @@
       btn.addEventListener("click", () => {
         el.scanlogFilters.querySelectorAll(".scanlog-filter").forEach((b) => b.classList.remove("is-active"));
         btn.classList.add("is-active");
-        scanlogFilterAction = btn.dataset.action === "unload" ? "unload" : "load";
+        // Вкладка «Сборка» (waybill) показывает только сканы деталей накладной —
+        // в неё НЕ попадают погрузка (load) и выгрузка (unload).
+        const act = btn.dataset.action;
+        scanlogFilterAction = (act === "unload" || act === "waybill") ? act : "load";
         // Показываем дату, соответствующую активной вкладке: «Отгрузка за дату» —
         // во вкладке «Погрузка», «Выгрузка за дату» — во вкладке «Выгрузка».
         if (el.scanlogLoadDateField) el.scanlogLoadDateField.hidden = scanlogFilterAction !== "load";
@@ -9277,6 +9980,9 @@
     if (offlineStarted) {
       showNetBanner("Нет связи — работаем офлайн. Начните день, данные отправятся при появлении сети.");
     }
+    // Восстанавливаем открытый таймер из локального кэша, если сервер (из-за
+    // сворачивания/потери сети) не вернул его — чтобы «время работы» не обнулялось.
+    restoreOpenSegCache();
 
     // The employee is identified automatically from the platform session — show
     // who is signed in so the auto login is visible and unambiguous.
@@ -9301,7 +10007,10 @@
     // A moderator may edit only their own group members' days: hide the admin-only
     // tabs so they cannot reach other management sections. The "Журнал" tab is the
     // exception — a moderator can open it to audit their group members (-only view).
-    const adminOnlySubs = ["groups", "salaries", "settings", "admins"];
+    // Вкладки, видимые ТОЛЬКО администраторам. Модератор входит только в свои
+    // группы, поэтому управление группами/окладами/настройками/множителем и
+    // списком админов — только для ADMIN. «Оклады» (salaries) уже здесь.
+    const adminOnlySubs = ["groups", "salaries", "settings", "admins", "multiplier"];
     el.adminTabs.querySelectorAll(".atab").forEach((t) => {
       let visible;
       if (t.dataset.sub === "log") visible = state.isAdmin || state.isModerator;
@@ -9334,6 +10043,21 @@
       } catch { /* ignore */ }
     }
     render();
+    // Перерисовываем уже открытую вкладку из уже полученных данных (без повторных
+    // сетевых запросов) сразу и ещё пару раз по мере прихода стартовых ответов
+    // портала — данные появляются, как только готовы, без «закрыть и открыть».
+    const rerenderActive = () => {
+      try {
+        if (!el.pageShipment.hidden) renderShipments();
+        if (!el.pageDrivers.hidden) renderDriverRoutes(driverRoutesCache);
+        if (!el.pageMyRoutes.hidden) renderMyRoutes();
+        if (!el.pageScanlog.hidden) refreshScanlogView();
+        if (!el.pageCalendar.hidden) renderCalendar();
+      } catch { /* не критично */ }
+    };
+    rerenderActive();
+    setTimeout(rerenderActive, 300);
+    setTimeout(rerenderActive, 900);
     // Автообновление Android-APK: веб (со сессией) опрашивает сервер и, если там
     // версия выше установленной, показывает окно обновления.
     showAppVersion();
@@ -9393,14 +10117,18 @@
     // `saveDay` after "Начать работу" and on `persistOnUnload` is fragile on mobile,
     // where `pagehide`/`beforeunload` often never fires when the app is killed, so
     // the open segment may be missing from the server after an abrupt close.
+    // Сохраняем чаще (20 с вместо 60 с) и НЕ отбрасываем сохранение при свёрнутом
+    // окне: у водителя приложение лежит в фоне/экраны выключены, и частый (пусть
+    // даже фоновый) сейв надёжнее сохраняет открытый таймер на сервере. fetch в
+    // фоне может быть троттлится, но попытка не помешает; локальный таймер всё
+    // равно держится до возврата.
     setInterval(() => {
-      if (document.hidden) return;            // collapsed — the local state still holds it
       if (!openSegment()) return;
       api("/api/day", {
         method: "POST",
         body: JSON.stringify({ key: state.dayKey, segments: state.segments }),
       }).catch(() => {});
-    }, 60000);
+    }, 20000);
 
     // Online presence: ping the server regularly so the admin / moderator "В эфире"
     // tab can show who is online right now.
@@ -9486,7 +10214,10 @@
       const stillOpen = hadOpen && state.segments.some(
         (sg) => sg.kind === "work" && sg.end == null && sg.id === hadOpen.id
       );
-      if (hadOpen && !stillOpen) {
+      // Восстанавливаем только сегмент ТЕКУЩЕГО дня: переезд вчерашнего
+      // незакрытого сегмента в сегодня раздувал «отработано» и держал таймер
+      // от вчерашнего start (та же причина, что и в refreshToday/pollState).
+      if (hadOpen && dayKeyOf(hadOpen.start) === state.dayKey && !stillOpen) {
         state.segments.push(hadOpen);
         state.phase = "working";
       }

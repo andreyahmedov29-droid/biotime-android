@@ -430,6 +430,11 @@
               <div class="rms-selected" id="routeClientSelected"></div>
             </div>
 
+            <div class="drv-route-waybills" id="routeWaybillsBlock" hidden>
+              <div class="drv-route-label">Расходные накладные (обязательно перед созданием)</div>
+              <div class="route-waybills-list" id="routeWaybillsList"></div>
+            </div>
+
             <div class="rms-auto-route">
               <div class="drv-field">
                 <label class="drv-field-label" for="routeBaseAddress">База (адрес отправления)</label>
@@ -619,6 +624,7 @@
         <div class="scanlog-filters" id="scanlogFilters">
           <button type="button" class="mini-btn scanlog-filter is-active" data-action="load" role="tab">Погрузка</button>
           <button type="button" class="mini-btn scanlog-filter" data-action="unload" role="tab">Выгрузка</button>
+          <button type="button" class="mini-btn scanlog-filter" data-action="waybill" role="tab">Сборка</button>
         </div>
 
         <div class="scanlog-ranges" id="scanlogRanges">
@@ -987,6 +993,16 @@
               <span class="slider"></span>
             </label>
           </div>
+          <div class="setting-row">
+            <div class="setting-text">
+              <span class="setting-title">Расходные накладные при сборке</span>
+              <span class="setting-sub">Разрешить складу загружать расходную накладную по маршруту/клиенту и собирать товар по сканированию штрихкода артикула (раздел «Отгрузка»). Если выключено — возможность скрыта.</span>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="allowWaybill" />
+              <span class="slider"></span>
+            </label>
+          </div>
         </div>
 
         <div class="params-section">
@@ -1232,6 +1248,38 @@
       <div class="route-confirm-actions" style="margin-top:16px; display:flex; gap:8px; justify-content:flex-end;">
         <button type="button" class="ctrl" id="driverScanCancel">Отмена</button>
         <button type="button" class="ctrl ctrl-finish" id="driverScanOk">Сканировать</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Модалка расходной накладной (склад при сборке) -->
+  <dialog class="modal" id="waybillModal">
+    <div class="postpone-card">
+      <div class="modal-head">
+        <h3 id="waybillTitle">Расходная накладная</h3>
+        <button class="icon-btn modal-close" id="waybillClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <div class="waybill-body">
+        <div class="waybill-status" id="waybillStatus"></div>
+        <div class="waybill-scan-row">
+          <input class="text-input" id="waybillArtInput" type="text" autocomplete="off" spellcheck="false"
+                 placeholder="Штрихкод / артикул" enterkeyhint="go" />
+          <input class="text-input waybill-qty-input" id="waybillQtyInput" type="number" min="1" step="1"
+                 value="1" title="Кол-во на стикере (если >1)" />
+          <button type="button" class="ctrl ctrl-primary" id="waybillScanBtn">Сканировать</button>
+        </div>
+        <div class="waybill-box-row">
+          <span class="waybill-box-cur" id="waybillBoxCur">Бокс: —</span>
+          <button type="button" class="ctrl ctrl-soft" id="waybillNewBoxBtn">Новый бокс</button>
+        </div>
+        <div class="waybill-del-box-row">
+          <select id="waybillDelBoxSel" class="select-input"></select>
+          <button type="button" class="ctrl ctrl-danger" id="waybillDelBoxBtn">Удалить бокс</button>
+        </div>
+        <div class="waybill-list" id="waybillList"></div>
+        <div class="waybill-finish-row">
+          <button type="button" class="ctrl ctrl-primary" id="waybillFinishBtn" disabled>Завершить сборку</button>
+        </div>
       </div>
     </div>
   </dialog>

@@ -434,6 +434,9 @@ function defaultDb() {
       // группа → «для всех». Старые поля multiplier/multFrom/multTo/multGroups —
       // легаси-fallback, пока multRules пуст (обратная совместимость).
       multRules: [],
+      // Разрешить складу загружать расходную накладную по маршруту/клиенту и
+      // собирать товар по скану штрихкода артикула (раздел «Отгрузка»).
+      allowWaybill: false,
       // Версия обновления Android-APK, управляемая из «Параметры» приложения.
       // Пусто = берутся значения из окружения APP_UPDATE_* (или жёсткие дефолты ниже).
       updateVersionCode: null,
@@ -2283,6 +2286,222 @@ function serverDayMult(staffId, date) {
   return mult;
 }
 
+// Логирует событие сборки накладной в Журнал (action = "waybill"): клиент точки,
+// время, артикул, наименование и кол-во позиции. Пометка «не найдено» тоже пишется
+// (scanned сохраняет текущее значение для первичного скана).
+function logWaybillScan(route, clientIndex, item, missing, body, user) {
+  const scanLogLimit = Number(db.params && db.params.scanLogLimit) || 30000;
+  db.scanLog = db.scanLog || [];
+  const cl = route.clients && route.clients[clientIndex];
+  const clientName = (cl && (cl.client || cl.bundleName || cl.address)) || "";
+  db.scanLog.push({
+    ts: Date.now(),
+    action: "waybill",
+    userId: user.id != null ? String(user.id) : null,
+    userName: (user.name != null ? String(user.name) : ""),
+    client: String(clientName || "").slice(0, 120),
+    code: String(item.art || ""),
+    name: String(item.name || "").slice(0, 200),
+    qty: Number(item.qty) || 0,
+    missing: !!missing,
+    box: String(item.box || "").slice(0, 60),
+  });
+  if (db.scanLog.length > scanLogLimit) db.scanLog = db.scanLog.slice(-scanLogLimit);
+}
+
+function listWaybillBoxes(route, clientIndex) {
+  const wb = route && route.waybills && route.waybills[clientIndex];
+  const items = wb && Array.isArray(wb.items) ? wb.items : [];
+  const boxes = [];
+  const seen = new Set();
+  const detailByBox = {};
+  items.forEach((it) => {
+    if (!it.box) return;
+    if (!detailByBox[String(it.box)]) detailByBox[String(it.box)] = 0;
+    if ((Number(it.scanned) || 0) > 0) detailByBox[String(it.box)] += 1;
+  });
+  items.forEach((it) => {
+    if (!it.box || seen.has(String(it.box))) return;
+    seen.add(String(it.box));
+    boxes.push({ box: String(it.box), details: detailByBox[String(it.box)] || 0 });
+  });
+  // Пустые созданные боксы (печатные места без привязанных деталей) тоже попадают
+  // в список — чтобы их можно было выбрать и удалить.
+  if (route && db && Array.isArray(db.labels)) {
+    db.labels.forEach((l) => {
+      if (String(l.routeId) !== String(route.id) || Number(l.clientIndex) !== Number(clientIndex)) return;
+      if (!l.code || seen.has(String(l.code))) return;
+      seen.add(String(l.code));
+      boxes.push({ box: String(l.code), details: detailByBox[String(l.code)] || 0 });
+    });
+  }
+  return boxes;
+}
+
+// ---- Расходная накладная (xlsx) — разбор без внешних пакетов ----
+// xlsx = zip-архив с XML (sharedStrings.xml + worksheets/sheet1.xml). Парсим
+// вручную: распаковываем только нужные записи (zlib.inflateRawSync), извлекаем
+// строки из листа, подставляя общие строки. Ожидаемые колонки: артикул,
+// наименование, кол-во (первая строка — заголовок).
+
+function zipRead(buf, targetPath) {
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= 0; i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) return null;
+  const count = buf.readUInt16LE(eocd + 10);
+  const cdStart = buf.readUInt32LE(eocd + 16);
+  let pos = cdStart;
+  for (let n = 0; n < count; n++) {
+    if (pos + 46 > buf.length) break;
+    if (buf.readUInt32LE(pos) !== 0x02014b50) break;
+    const method = buf.readUInt16LE(pos + 10);
+    const compSize = buf.readUInt32LE(pos + 20);
+    const nameLen = buf.readUInt16LE(pos + 28);
+    const extraLen = buf.readUInt16LE(pos + 30);
+    const commentLen = buf.readUInt16LE(pos + 32);
+    const localOff = buf.readUInt32LE(pos + 42);
+    const name = buf.toString("utf8", pos + 46, pos + 46 + nameLen);
+    if (name === targetPath) {
+      const lNameLen = buf.readUInt16LE(localOff + 26);
+      const lExtraLen = buf.readUInt16LE(localOff + 28);
+      const dataStart = localOff + 30 + lNameLen + lExtraLen;
+      const comp = buf.slice(dataStart, dataStart + compSize);
+      try {
+        return method === 0 ? comp : require("zlib").inflateRawSync(comp);
+      } catch { return null; }
+    }
+    pos += 46 + nameLen + extraLen + commentLen;
+  }
+  return null;
+}
+
+function xlsxText(s) {
+  const out = [];
+  let m;
+  const re = /<t[^>]*>([^<]*)<\/t>|<v[^>]*>([^<]*)<\/v>/g;
+  while ((m = re.exec(s)) !== null) out.push(m[1] || m[2] || "");
+  return out.join("");
+}
+
+function xlsxColIndex(letter) {
+  let n = 0;
+  const s = String(letter || "").toUpperCase();
+  for (let i = 0; i < s.length; i++) n = n * 26 + (s.charCodeAt(i) - 64);
+  return n;
+}
+
+// Извлекает поле вида «Покупатель: …» из строк xlsx (контрагент в расходной
+// накладной). Значение может стоять в той же ячейке после «:» либо правее
+// (в объединённой ячейке). Возвращает строку или "".
+function extractXlsxField(rows, labelRe, cellVal) {
+  for (const row of rows) {
+    const cells = row.cells;
+    for (const col in cells) {
+      const t = String(cellVal(cells[col])).trim();
+      const m = labelRe.exec(t);
+      if (!m) continue;
+      const rest = t.slice(m[0].length).replace(/^[\s:]+/, "").trim();
+      if (rest) return rest;
+      let best = "", bestIdx = -1;
+      const baseIdx = xlsxColIndex(col);
+      for (const c2 in cells) {
+        const ic = xlsxColIndex(c2);
+        if (ic > baseIdx) {
+          const v = String(cellVal(cells[c2])).trim();
+          if (v && ic > bestIdx) { best = v; bestIdx = ic; }
+        }
+      }
+      return best;
+    }
+  }
+  return "";
+}
+
+function parseXlsxItems(buf) {
+  const shared = zipRead(buf, "xl/sharedStrings.xml");
+  const sheet = zipRead(buf, "xl/worksheets/sheet1.xml") || zipRead(buf, "xl/worksheets/sheet.xml");
+  if (!sheet) return { items: [], error: "Внутри xlsx не найден лист" };
+  const sharedStrings = [];
+  if (shared) {
+    const re = /<si>(.*?)<\/si>/gs;
+    let m;
+    while ((m = re.exec(String(shared))) !== null) sharedStrings.push(xlsxText(m[1]));
+  }
+
+  // Разбираем лист в список строк { cells: {col: {t, v}} } — с типом ячейки
+  // (s=общая строка, n=число, inlineStr и т.п.) и сырым значением.
+  const rowRe = /<row[^>]*>(.*?)<\/row>/gs;
+  const stringsByRow = [];
+  let rowMatch;
+  const cellVal = (c) => {
+    if (!c) return "";
+    if (c.t === "s") return sharedStrings[Number(c.v)] != null ? sharedStrings[Number(c.v)] : "";
+    return String(c.v != null ? c.v : "");
+  };
+  while ((rowMatch = rowRe.exec(String(sheet))) !== null) {
+    const rowXml = rowMatch[1];
+    const cells = {};
+    const cellParts = rowXml.split("<c ");
+    for (let ci = 1; ci < cellParts.length; ci++) {
+      const part = cellParts[ci];
+      const rM = /r="([A-Z]+)[0-9]+"/.exec(part);
+      if (!rM) continue;
+      const col = rM[1];
+      const tM = /t="([^"]*)"/.exec(part);
+      const type = tM ? tM[1] : "";
+      let val = "";
+      const vM = /<v>([^<]*)<\/v>/.exec(part);
+      const isM = /<is>([\s\S]*?)<\/is>/.exec(part);
+      if (vM) val = vM[1];
+      else if (isM) {
+        const t = /<t[^>]*>([^<]*)<\/t>/.exec(isM[1]);
+        val = t ? t[1] : "";
+      }
+      cells[col] = { t: type, v: val };
+    }
+    stringsByRow.push({ cells });
+  }
+
+  // Определяем колонки по заголовкам: ищем строку, где в разных ячейках стоят
+  // «Артикул», «Товар», «Количество». Это устойчиво к разнесённой вёрстке 1С.
+  const headerRow = stringsByRow.find(({ cells }) =>
+    Object.values(cells).some((c) => String(cellVal(c)).trim() === "Артикул")
+  );
+  let colArt = "B", colName = "C", colQty = "D";
+  if (headerRow) {
+    for (const col in headerRow.cells) {
+      const txt = String(cellVal(headerRow.cells[col])).trim();
+      if (txt === "Артикул") colArt = col;
+      else if (txt === "Товар" || txt === "Наименование") colName = col;
+      else if (/Кол-во|Количество/i.test(txt)) colQty = col;
+    }
+  }
+
+  const items = [];
+  const afterHeader = headerRow
+    ? stringsByRow.slice(stringsByRow.indexOf(headerRow) + 1)
+    : stringsByRow;
+  const buyer = extractXlsxField(stringsByRow, /^Покупатель\s*:/i, cellVal);
+  for (const { cells } of afterHeader) {
+    const art = String(cellVal(cells[colArt])).trim();
+    const name = String(cellVal(cells[colName])).trim();
+    const qtyRaw = String(cellVal(cells[colQty])).trim().replace(",", ".");
+    if (!art || !Number.isFinite(parseFloat(qtyRaw)) || parseFloat(qtyRaw) <= 0) continue;
+    if (/Всего наименований/i.test(name) || /^Отпустил/i.test(name) || /^Получил/i.test(name)) continue;
+    let cleanName = name;
+    if (cleanName.startsWith(art + " ") || cleanName.startsWith(art + "•") || cleanName.startsWith(art + "\t")) {
+      cleanName = cleanName.slice(art.length).replace(/^[\s\p{P}\p{S}]+/u, "").trim();
+    }
+    items.push({ art, name: (cleanName || name), qty: parseFloat(qtyRaw), scanned: 0 });
+  }
+  if (!items.length) {
+    return { items, error: "Не удалось найти строки с артикулом. Проверьте, что в накладной есть колонки «Артикул», «Товар», «Количество»." };
+  }
+  return { items, buyer };
+}
+
 function liveRows(actor, dbData) {
   const staff = visibleStaff(actor, dbData);
   const now = Date.now();
@@ -2496,6 +2715,10 @@ async function handleApi(req, res, urlPath) {
     const prevOwn = segmentsFor(user.id, prev);
     const prevEntry = prev && prev.byEmployee && prev.byEmployee[user.id] ? prev.byEmployee[user.id] : null;
     const prevFinished = !!(prevEntry && prevEntry.finished);
+    // Ручная правка админа по времени на этот день (см. PUT /api/admin/day):
+    // пока стоит флаг, живые тики сотрудника не должны возвращать реальное
+    // время поверх вручную заданного.
+    const adminLock = !!(prevEntry && prevEntry.adminLock);
     const prevOpen = prevOwn.find((s) => s.kind === "work" && s.end == null) || null;
     const incomingHasOpen = Array.isArray(segments) && segments.some((s) => s.kind === "work" && s.end == null);
     // П.1 — защита от дубля «закрытый + открытый»: явное «Завершить работу».
@@ -2513,6 +2736,12 @@ async function handleApi(req, res, urlPath) {
       for (const s of merged) {
         if (s && typeof s === "object" && s.end == null) s.end = finishTime;
       }
+    } else if (adminLock) {
+      // Живое сохранение идущего таймера не имеет права трогать день, который
+      // админ отредактировал вручную: оставляем серверные (админские) сегменты,
+      // чтобы «07:00» не «съехал» на реальное «08:00». Явное «Завершить работу»
+      // (finish) выше по-прежнему применяется и закрывает день.
+      merged = prevOwn.slice();
     } else if (prevFinished) {
       // П.2 — защита от гонки: день уже закрыт («Завершить работу» было).
       // Фоновая вкладка с ещё идущим таймером каждые ~8 c шлёт сюда открытый
@@ -2542,6 +2771,7 @@ async function handleApi(req, res, urlPath) {
     day.byEmployee[user.id] = {
       segments: merged,
       finished: finish || prevFinished,
+      adminLock: adminLock,
     };
     if (prevStatuses) day.statuses = prevStatuses;
     db.days[key] = day;
@@ -2917,6 +3147,12 @@ async function handleApi(req, res, urlPath) {
     day.byEmployee[ownerId] = {
       segments,
       finished: !segments.some((s) => s && typeof s === "object" && s.end == null),
+      // Ручная правка админа приоритетнее живого таймера: пока запись помечена,
+      // фоновые сохранения сотрудника (POST /api/day без явного finish) НЕ
+      // перезаписывают вручную заданное время (иначе «поставил 07:00, а через
+      // время стало 08:00» из-за реального таймера сотрудника). Снимается, когда
+      // сотрудник явно завершит день или админ отредактирует заново.
+      adminLock: true,
     };
     if (prev && prev.statuses && typeof prev.statuses === "object") day.statuses = prev.statuses;
     db.days[key] = day;
@@ -2998,6 +3234,9 @@ async function handleApi(req, res, urlPath) {
     }
     if (typeof body.allowDriverReorderPoints === "boolean") {
       p.allowDriverReorderPoints = body.allowDriverReorderPoints;
+    }
+    if (typeof body.allowWaybill === "boolean") {
+      p.allowWaybill = body.allowWaybill;
     }
     // Код удаления завершённого маршрута (админ задаёт в «Параметры»). Пустая
     // строка = удаление завершённого маршрута запрещено вообще.
@@ -3331,6 +3570,33 @@ async function handleApi(req, res, urlPath) {
     const route = (db.driverRoutes || []).find((r) => String(r.id) === String(routeId));
     if (!route) return sendJson(res, 404, { error: "Маршрут не найден" });
     if (!route.progress) route.progress = { status: "idle", baseLat: null, baseLon: null, baseAddress: "" };
+    // Если включены расходные накладные — не начинаем отгрузку, пока нет накладной
+    // на каждый клиент маршрута (склад при сборке должен видеть, что собирать).
+    if (db.params && db.params.allowWaybill === true) {
+      const clients = Array.isArray(route.clients) ? route.clients : [];
+      const missing = clients.findIndex((_, i) => {
+        const wb = route.waybills && route.waybills[i];
+        return !wb || !Array.isArray(wb.items) || wb.items.length === 0;
+      });
+      if (missing >= 0) {
+        return sendJson(res, 409, {
+          error: `Загрузите расходную накладную на клиента «${(route.clients[missing].client || route.clients[missing].bundleName || route.clients[missing].address || (missing + 1)).slice(0, 60)}», чтобы начать отгрузку`,
+        });
+      }
+      // Сборка считается готовой, если каждая позиция либо собрана (scanned>=qty),
+      // либо помечена как «не найдено» (missing). Только тогда можно завершить
+      // сборку и начать отгрузку.
+      const notReady = clients.findIndex((_, i) => {
+        const wb = route.waybills && route.waybills[i];
+        const items = (wb && wb.items) || [];
+        return items.some((it) => (Number(it.scanned) || 0) < (Number(it.qty) || 0) && !it.missing);
+      });
+      if (notReady >= 0) {
+        return sendJson(res, 409, {
+          error: `Сборка для клиента «${(route.clients[notReady].client || route.clients[notReady].bundleName || route.clients[notReady].address || (notReady + 1)).slice(0, 60)}» не завершена: остались несобранные позиции`,
+        });
+      }
+    }
     if (!route.progress.shipmentStartedAt) {
       route.progress.shipmentStartedAt = Date.now();
       route.progress.shipmentStartedBy = user.id != null ? String(user.id) : null;
@@ -3446,6 +3712,167 @@ async function handleApi(req, res, urlPath) {
     return sendJson(res, 200, { ok: true, id, code: String(label.code || "") });
   }
 
+  // ---- Расходная накладная по маршруту/клиенту (склад при сборке) ----
+  // Включить: «Параметры» → allowWaybill. Хранится в маршруте:
+  //   route.waybills[clientIndex] = { items: [{art,name,qty,scanned,missing}] }
+  // Загрузка: POST /api/routes/:id/waybill { clientIndex, fileB64 }.
+  // Сканирование: POST /api/routes/:id/waybill/scan { clientIndex, art }.
+  let wm = urlPath.match(/^\/api\/routes\/([^/]+)\/waybill(\/(scan|missing))?$/) || null;
+  // Разбор xlsx для формы создания маршрута (диспетчер): возвращает позиции без
+  // сохранения — их отдаст сам POST создания маршрута.
+  if (urlPath === "/api/waybill/parse" && method === "POST") {
+    if (!admin) return sendJson(res, 403, { ok: false, error: "forbidden" });
+    const body = await readBody(req);
+    const b64 = String(body.fileB64 || "");
+    if (!b64) return sendJson(res, 422, { ok: false, error: "Файл не передан" });
+    let buf;
+    try { buf = Buffer.from(b64, "base64"); } catch { return sendJson(res, 400, { ok: false, error: "Неверные данные файла" }); }
+    if (!buf || buf.length < 100) return sendJson(res, 400, { ok: false, error: "Файл пуст или повреждён" });
+    const parsed = parseXlsxItems(buf);
+    if (parsed.error) return sendJson(res, 400, { ok: false, error: parsed.error });
+    return sendJson(res, 200, { ok: true, items: parsed.items, buyer: parsed.buyer || "" });
+  }
+  // Боксы клиента накладной.
+  if (method === "GET" && urlPath.match(/^\/api\/routes\/([^/]+)\/waybill\/boxes$/)) {
+    const q = req.url.split("?")[1] || "";
+    const qr = new URLSearchParams(q);
+    const routeId = urlPath.match(/^\/api\/routes\/([^/]+)\/waybill\/boxes$/)[1];
+    const clientIndex = Number(qr.get("clientIndex"));
+    const route = (db.driverRoutes || []).find((rr) => String(rr.id) === String(routeId));
+    return sendJson(res, 200, { ok: true, boxes: listWaybillBoxes(route, clientIndex) });
+  }
+  // Удаление бокса: нельзя, если в нём есть привязанные детали. Клиент сначала
+  // показывает предупреждение «в боксе деталь — переразместите в другой бокс».
+  if (method === "POST" && urlPath.match(/^\/api\/routes\/([^/]+)\/waybill\/box\/delete$/)) {
+    const routeId = urlPath.match(/^\/api\/routes\/([^/]+)\/waybill\/box\/delete$/)[1];
+    const body = await readBody(req);
+    const clientIndex = Number(body.clientIndex);
+    const box = String(body.box || "").trim();
+    const route = (db.driverRoutes || []).find((rr) => String(rr.id) === String(routeId));
+    const wb = route && route.waybills && route.waybills[clientIndex];
+    const items = wb && Array.isArray(wb.items) ? wb.items : [];
+    const inBox = items.filter((it) => String(it.box) === box && (Number(it.scanned) || 0) > 0);
+    if (inBox.length > 0) {
+      return sendJson(res, 409, {
+        ok: false,
+        error: `В боксе ${box} — деталей: ${inBox.length}. Переразместите их в другой бокс перед удалением`,
+      });
+    }
+    // Удаляем связанную этикетку места (бокс) и снимаем пустые привязки.
+    db.labels = (db.labels || []).filter((l) =>
+      (String(l.code) !== box) && !(String(l.routeId) === String(routeId) && Number(l.clientIndex) === clientIndex && String(l.code) === box)
+    );
+    items.forEach((it) => { if (String(it.box) === box) it.box = ""; });
+    await persistDb();
+    return sendJson(res, 200, { ok: true, boxes: listWaybillBoxes(route, clientIndex) });
+  }
+  if (wm && method === "POST") {
+    const routeId = wm[1];
+    const action = wm[2] ? wm[2].slice(1) : (wm[0].endsWith("/waybill") ? "upload" : "");
+    if (!db.params || db.params.allowWaybill !== true) {
+      return sendJson(res, 403, { ok: false, error: "Расходные накладные отключены администратором" });
+    }
+    const route = (db.driverRoutes || []).find((r) => String(r.id) === String(routeId));
+    if (!route) return sendJson(res, 404, { ok: false, error: "Маршрут не найден" });
+    const body = await readBody(req);
+    const clientIndex = Number(body.clientIndex);
+    if (!Number.isInteger(clientIndex) || clientIndex < 0) {
+      return sendJson(res, 422, { ok: false, error: "bad clientIndex" });
+    }
+    if (!route.waybills) route.waybills = {};
+    route.waybills[clientIndex] = route.waybills[clientIndex] || { items: [] };
+    const wb = route.waybills[clientIndex];
+    if (action === "scan") {
+      const art = String(body.art || "").trim();
+      if (!art) return sendJson(res, 422, { ok: false, error: "Пустой артикул" });
+      // Деталь привязывается к боксу (коду этикетки места). Бокс обязателен:
+      // если его не отсканировали/не создали — сборщику нельзя принять деталь.
+      const box = String(body.box || "").trim();
+      if (!box) return sendJson(res, 400, { ok: false, error: "Создайте бокс / отсканируйте его перед приёмкой детали" });
+      // Поштучный приём по ЗАПИСЯМ: один и тот же артикул может встречаться в
+      // накладной несколько раз (разными строками). Находим первую ещё не
+      // собранную строку с этим артикулом — сканирование не «съедает» разом все
+      // строки одинакового артикула, а каждую собирает по отдельности.
+      const item = wb.items.find((it) =>
+        String(it.art) === art && (Number(it.scanned) || 0) < (Number(it.qty) || 0) && !it.missing
+      );
+      if (!item) {
+        // Перепривязка: деталь уже собран (строки с артикулом полны). При
+        // повторном скане той же детали меняем её бокс (переносим в другой бокс).
+        const existing = wb.items.find((it) => String(it.art) === art);
+        if (existing) {
+          existing.box = box;
+          route.at = Date.now();
+          await persistDb();
+          return sendJson(res, 200, {
+            ok: true,
+            rebound: true,
+            item: { art: existing.art, name: existing.name, qty: existing.qty, scanned: existing.scanned, missing: !!existing.missing, box: existing.box },
+            left: 0,
+          });
+        }
+        return sendJson(res, 404, { ok: false, error: "Артикул не найден в накладной" });
+      }
+      const left = item.qty - item.scanned;
+      if (left <= 0) return sendJson(res, 409, { ok: false, error: "Этот артикул уже собран полностью" });
+      // Кол-во на отсканированном стикере (обычно 1; если на стикере указано больше
+      // — например «4» — сборщик сканирует один раз и засчитывается сразу 4).
+      let qty = Math.max(1, Number(body.qty) || 1);
+      if (qty > left) qty = left; // не больше остатка строки
+      item.scanned += qty;
+      item.box = box; // привязка детали к боксу (повторный скан детали с др. боксом = перепривязка)
+      if (item.missing) item.missing = false; // нашли — снимаем пометку «не найдено»
+      logWaybillScan(route, clientIndex, item, false, body, user);
+      route.at = Date.now();
+      await persistDb();
+      return sendJson(res, 200, {
+        ok: true,
+        item: { art: item.art, name: item.name, qty: item.qty, scanned: item.scanned, missing: !!item.missing, box: item.box },
+        missing: !!item.missing,
+        left: Math.max(0, item.qty - item.scanned),
+      });
+    }
+    if (action === "missing") {
+      const art = String(body.art || "").trim();
+      if (!art) return sendJson(res, 422, { ok: false, error: "Пустой артикул" });
+      // Пометка «не найдено» привязана к КОНКРЕТНОЙ строке накладной (индекс),
+      // а не к артикулу: одинаковый артикул может повторяться разными строками,
+      // и каждая помечается отдельно (иначе пометка «прыгала» на первую строку).
+      const idx = Number(body.index);
+      const item = (Number.isInteger(idx) && idx >= 0 && idx < wb.items.length && String(wb.items[idx].art) === art)
+        ? wb.items[idx]
+        : wb.items.find((it) => String(it.art) === art);
+      if (!item) return sendJson(res, 404, { ok: false, error: "Артикул не найден в накладной" });
+      const on = body.on === true;
+      item.missing = on;
+      route.at = Date.now();
+      await persistDb();
+      return sendJson(res, 200, {
+        ok: true,
+        item: { art: item.art, name: item.name, qty: item.qty, scanned: item.scanned, missing: !!item.missing },
+      });
+    }
+    // Загрузка накладной: разбираем xlsx из base64. Повторно на ту же точку —
+    // нельзя: накладная уже привязана в рамках этой отгрузки.
+    if (wb.items && wb.items.length > 0) {
+      return sendJson(res, 409, { ok: false, error: "Накладная для этой точки уже загружена и привязана к отгрузке" });
+    }
+    const b64 = String(body.fileB64 || "");
+    if (!b64) return sendJson(res, 422, { ok: false, error: "Файл не передан" });
+    let buf;
+    try { buf = Buffer.from(b64, "base64"); } catch { return sendJson(res, 400, { ok: false, error: "Неверные данные файла" }); }
+    if (!buf || buf.length < 100) return sendJson(res, 400, { ok: false, error: "Файл пуст или повреждён" });
+    const parsed = parseXlsxItems(buf);
+    if (parsed.error) return sendJson(res, 400, { ok: false, error: parsed.error });
+    if (!parsed.items.length) return sendJson(res, 400, { ok: false, error: "В накладной нет позиций" });
+    wb.items = parsed.items.map((x) => Object.assign({}, x, { missing: false }));
+    wb.buyer = parsed.buyer || "";
+    wb.loadedAt = Date.now();
+    route.at = Date.now();
+    await persistDb();
+    return sendJson(res, 200, { ok: true, items: wb.items });
+  }
+
   // Сканирование места: POST /api/labels/scan { code, action: "load"|"unload" }
   //  - load   (погрузка, склад):  created → loaded
   //  - unload (выгрузка, водитель): loaded → delivered
@@ -3519,6 +3946,18 @@ async function handleApi(req, res, urlPath) {
     // не пишем, чтобы в журнал попадало ровно одно первое сканирование на место.
     let changed = false;
     if (action === "load") {
+      // Бокс (= место) можно погрузить, только если в нём собраны детали накладной
+      // (собирали ли мы этот маршрут вообще — проверяем наличие waybills на клиенте).
+      const wbRoute = db.driverRoutes.find((rd) => String(rd.id) === String(found.routeId));
+      const wbForClient = wbRoute && wbRoute.waybills && wbRoute.waybills[found.clientIndex];
+      if (wbForClient && Array.isArray(wbForClient.items) && wbForClient.items.length > 0) {
+        const hasInBox = wbForClient.items.some(
+          (it) => String(it.box) === String(found.code) && (Number(it.scanned) || 0) > 0
+        );
+        if (!hasInBox) {
+          return sendJson(res, 409, { error: "В этом боксе нет собранных деталей — завершите сборку" });
+        }
+      }
       if (found.status === "loaded" || found.status === "delivered") {
         warning = found.status === "delivered" ? "Место уже отгружено и выгружено" : "Место уже погружено";
       } else {
@@ -3837,14 +4276,14 @@ async function handleApi(req, res, urlPath) {
       const id = String(body.id || "");
       const found = (db.driverRoutes || []).find((r) => r.id === id);
       if (!found) return sendJson(res, 404, { error: "Маршрут не найден" });
-      // Маршрут запрещено редактировать, если он завершён, взят в работу водителем
-      // или склад уже начал сборку/отгрузку: состав и порядок остановок зафиксированы.
-      // Причину блокировки показываем точечно: «ведётся водителем» / «в сборке на
-      // складе» — чтобы пользователь понимал, почему маршрут недоступен для правки.
+      // Маршрут запрещено редактировать, если он завершён или взят в работу
+      // водителем: состав и порядок остановок зафиксированы. Если же СКЛАД уже
+      // начал сборку/отгрузку (shipmentStartedAt), диспетчеру разрешено править
+      // маршрут — он, а не склад, отвечает за актуальный состав остановок.
+      // Причину блокировки показываем точечно (см. routeLockReason).
       if (found.progress) {
         const locked = found.progress.status === "done"
-          || found.progress.status === "active"
-          || !!found.progress.shipmentStartedAt;
+          || found.progress.status === "active";
         if (locked) {
           return sendJson(res, 409, { error: routeLockReason(found.progress) });
         }
@@ -3895,6 +4334,40 @@ async function handleApi(req, res, urlPath) {
     if (!date || !driverId || clients.length === 0) {
       return sendJson(res, 400, { error: "Укажите дату, водителя и хотя бы одного клиента" });
     }
+    // Расходные накладные по клиентам маршрута: диспетчер загружает их при
+    // составлении маршрута (ДО создания). Каждая: { clientIndex, items }.
+    const wbOn = db.params && db.params.allowWaybill === true;
+    const waybillsArr = [];
+    if (Array.isArray(body.waybills)) {
+      for (const w of body.waybills) {
+        const idx = Number(w && w.clientIndex);
+        if (!Number.isInteger(idx) || idx < 0 || idx >= clients.length) continue;
+        const items = Array.isArray(w.items)
+          ? w.items
+              .map((it) => ({
+                art: String((it && it.art) || "").trim(),
+                name: String((it && it.name) || "").trim(),
+                qty: Number(it && it.qty) > 0 ? Number(it.qty) : 1,
+                scanned: 0,
+                missing: false,
+              }))
+              .filter((it) => it.art)
+          : [];
+        if (items.length > 0) {
+          waybillsArr.push({ clientIndex: idx, items, buyer: String((w && w.buyer) || "").trim() });
+        }
+      }
+    }
+    if (wbOn) {
+      const missingIdx = clients.findIndex((_, i) =>
+        !waybillsArr.some((w) => w.clientIndex === i && w.items.length > 0)
+      );
+      if (missingIdx >= 0) {
+        return sendJson(res, 409, {
+          error: `Загрузите расходную накладную на клиента «${(clients[missingIdx].client || clients[missingIdx].bundleName || clients[missingIdx].address || (missingIdx + 1)).slice(0, 60)}» перед созданием маршрута`,
+        });
+      }
+    }
     db.driverRoutes = db.driverRoutes || [];
     // На одну дату и водителя маршруты различаются ИМЕНЕМ слота (которое задаёт
     // диспетчер): одно и то же имя заменяет существующий маршрут, разные имена —
@@ -3921,6 +4394,12 @@ async function handleApi(req, res, urlPath) {
       // здесь не занят (locked проверен выше), поэтому перепривязка безопасна.
       relinkRouteLabels(db.driverRoutes[existIdx].id, clients, db.labels);
       db.driverRoutes[existIdx].at = Date.now();
+      if (waybillsArr.length) {
+        if (!db.driverRoutes[existIdx].waybills) db.driverRoutes[existIdx].waybills = {};
+        waybillsArr.forEach((w) => {
+          db.driverRoutes[existIdx].waybills[w.clientIndex] = { items: w.items, buyer: String(w.buyer || ""), loadedAt: Date.now() };
+        });
+      }
       if (Number.isFinite(Number(body.km)) && Number(body.km) >= 0) {
         db.driverRoutes[existIdx].km = Math.round(Number(body.km) * 10) / 10;
       }
@@ -3937,6 +4416,9 @@ async function handleApi(req, res, urlPath) {
           : undefined,
         addedBy: user.id,
         at: Date.now(),
+        waybills: waybillsArr.length
+          ? Object.fromEntries(waybillsArr.map((w) => [w.clientIndex, { items: w.items, buyer: String(w.buyer || ""), loadedAt: Date.now() }]))
+          : undefined,
       });
     }
     if (db.driverRoutes.length > 3000) db.driverRoutes = db.driverRoutes.slice(-3000);

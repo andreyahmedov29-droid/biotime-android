@@ -17,7 +17,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
 
     /// Адрес BIOTIME-приложения — тот же, что открывает WebView.
     /// Держите синхронно с ViewController.appURL.
-  private let baseURL = "https://app-2660de1a180b.vibecode.bitrix24.tech"
+  private let baseURL = "https://app-0191dabf28dc.vibecode.bitrix24.tech"
     private let updateInterval: TimeInterval = 15 // секунды, как в Android-обёртке
 
     private let manager = CLLocationManager()

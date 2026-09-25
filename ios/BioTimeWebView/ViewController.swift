@@ -15,7 +15,7 @@ class ViewController: UIViewController {
 
     // Адрес BIOTIME-приложения. Держите синхронно с LocationTracker.baseURL
     // (он используется фоновым трекером для отправки координат).
-  private let appURL = URL(string: "https://app-2660de1a180b.vibecode.bitrix24.tech")!
+  private let appURL = URL(string: "https://app-0191dabf28dc.vibecode.bitrix24.tech")!
 
     private var webView: WKWebView!
 

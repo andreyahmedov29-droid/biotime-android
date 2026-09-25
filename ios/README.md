@@ -79,7 +79,7 @@ iPhone. Чтобы выпустить для команды:
   фоновый режим (`UIBackgroundModes: location`); `AppDelegate` запускает трекер
   при старте.
 - Адрес (в `ViewController.swift` и `LocationTracker.swift`) — реальный
-`app-2660de1a180b.vibecode.bitrix24.tech`; держите их синхронно.
+`app-0191dabf28dc.vibecode.bitrix24.tech`; держите их синхронно.
 
 Что проверить при первом запуске:
 1. iOS спросит доступ к местоположению — выбрать **«Разрешить всегда»**
