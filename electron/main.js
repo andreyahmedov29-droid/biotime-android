@@ -35,10 +35,12 @@ let _cfgPathUsed = "";
 // Актуальный адрес веб-версии. Он же используется в «автомиграции»: если в
 // biotime.config.json на компьютере лежит устаревший appUrl, его не нужно чистить
 // вручную — при первом запуске новой сборки Electron сам заменит его на этот.
-// Работаем на старом (рабочем) приложении. Адресов миграции нет — настольная
-// сборка не должна перезаписывать appUrl на другой адрес.
+// Работаем на рабочем приложении app-2660de1a180b. Если в biotime.config.json
+// остался несуществующий адрес app-0191dabf28dc (от прежней автомиграции), при
+// старте сборка перезапишет его на рабочий app-2660de1a180b — иначе окно грузит
+// удалённый сервер и показывает «Приложение не найдено».
 const CURRENT_APP_URL = "https://app-2660de1a180b.vibecode.bitrix24.tech";
-const LEGACY_APP_URLS = [];
+const LEGACY_APP_URLS = ["app-0191dabf28dc.vibecode.bitrix24.tech"];
 try {
   // Толерантный поиск конфига: папки userData ("BIOTIME"/"biotime-desktop") и
   // имена файла (biotime.config.json / biotime.config), чтобы не зависеть от того,
@@ -241,7 +243,9 @@ async function createWindow() {
   mainWindow.webContents.on("print", (event, wc) => {
     event.preventDefault();
     const printOpts = {
-      silent: true,                     // без диалога предпросмотра
+      // ВСЕГДА показываем окно выбора принтера (silent: false). Так при «Новый бокс»
+      // и печати стикеров диалог выбора принтера гарантированно появляется.
+      silent: false,
       printBackground: true,
       margins: { marginType: "none" },  // этикетка без полей
       pageSize: { width: 58000, height: 58000 }, // 58×58 мм (микроны)

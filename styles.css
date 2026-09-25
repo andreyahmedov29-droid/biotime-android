@@ -5,6 +5,31 @@
    focus-состояния, плавные переходы, аккуратный адаптив.
    ========================================================================== */
 
+/* Режим для слабых устройств (ТСД/Android-WebView, класс low-motion на <html>):
+   отключаем тяжёлые CSS-переходы и анимации. При частых перерисовках интерфейса
+   (опросы каждые 5–10 с, секундные таймеры) это сильно снижает нагрузку на CPU. */
+html.low-motion *,
+html.low-motion *::before,
+html.low-motion *::after {
+  transition: none !important;
+  animation: none !important;
+  /* Тяжёлые фильтры (размытия) перерисовывают всё при прокрутке — на слабом
+     устройстве отключаем их полностью. */
+  filter: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: none !important;
+}
+
+/* На слабых устройствах не размечаем и не отрисовываем элементы списков вне
+   экрана во время прокрутки — это заметно ускоряет прокрутку длинных списков. */
+html.low-motion .waybill-item,
+html.low-motion .shipment-client,
+html.low-motion .rms-stop {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 52px;
+}
+
 :root {
   /* Палитра */
   --bg: #08090d;

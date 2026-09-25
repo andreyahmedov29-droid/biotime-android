@@ -2320,13 +2320,9 @@ function listWaybillBoxes(route, clientIndex) {
     if (!detailByBox[String(it.box)]) detailByBox[String(it.box)] = 0;
     if ((Number(it.scanned) || 0) > 0) detailByBox[String(it.box)] += 1;
   });
-  items.forEach((it) => {
-    if (!it.box || seen.has(String(it.box))) return;
-    seen.add(String(it.box));
-    boxes.push({ box: String(it.box), details: detailByBox[String(it.box)] || 0 });
-  });
-  // Пустые созданные боксы (печатные места без привязанных деталей) тоже попадают
-  // в список — чтобы их можно было выбрать и удалить.
+  // В список попадают ТОЛЬКО настоящие боксы — созданные/напечатанные этикетки
+  // мест (db.labels). Значения it.box, которые не являются настоящими боксами
+  // (например, ошибочно записанные артикулы), в список НЕ включаем.
   if (route && db && Array.isArray(db.labels)) {
     db.labels.forEach((l) => {
       if (String(l.routeId) !== String(route.id) || Number(l.clientIndex) !== Number(clientIndex)) return;

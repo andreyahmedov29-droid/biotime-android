@@ -8,8 +8,9 @@
 // Версия кэша обязана меняться при каждом деплое, иначе stale-while-revalidate
 // отдаёт клиентам старый app.js: новая кнопка в HTML есть, а её обработчик из
 // свежего скрипта ещё не подхвачен → «нажимаю, ничего не происходит».
-// v19: добавлен баннер «Доступно обновление» с мягким релоадом (app.js/index.html).
-const CACHE = "biotime-v19";
+// v20: app.js сделан network-first, чтобы свежие фиксы доходили до всех ПК без
+// ручной чистки кэша (и принудительный cache-busting через ?v= в index.html).
+const CACHE = "biotime-v20";
 const PRECACHE = [
   "./",
   "./index.html",
@@ -66,6 +67,24 @@ self.addEventListener("fetch", (event) => {
   }
 
   // Статика — stale-while-revalidate.
+  // app.js — network-first: всегда тянем свежий скрипт с сервера, кэш используем
+  // только как офлайн-фолбэк. Так новые правки (напр. печать) доезжают до всех
+  // ПК автоматически, и старый закэшированный app.js не «застревает».
+  if (url.pathname.endsWith("/app.js")) {
+    event.respondWith(
+      fetch(req)
+        .then((res) => {
+          if (res && res.ok) {
+            const copy = res.clone();
+            caches.open(CACHE).then((cache) => cache.put(req, copy));
+          }
+          return res;
+        })
+        .catch(() => caches.match(req))
+    );
+    return;
+  }
+
   event.respondWith(
     caches.match(req).then((cached) => {
       const fresh = fetch(req)

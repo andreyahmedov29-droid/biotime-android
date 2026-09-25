@@ -1,6 +1,17 @@
 (() => {
   "use strict";
 
+  // Слабый WebView/ТСД (APK на Android): включаем режим low-motion — отключаем
+  // тяжёлые CSS-переходы и анимации. При частых перерисовках (опросы каждые
+  // 5–10 с, секундные таймеры) это заметно снижает нагрузку на слабый CPU.
+  try {
+    const ua = (typeof navigator !== "undefined" && navigator.userAgent) || "";
+    if (typeof window !== "undefined" &&
+        (window.AndroidBridge || /Android/i.test(ua))) {
+      document.documentElement.classList.add("low-motion");
+    }
+  } catch (_) { /* не критично */ }
+
   // UI-only preference keeps living in localStorage (per browser). Everything else is server-side.
   const COLLAPSE_KEY = "biotime.collapsed";
   const FINISH_KEY = "biotime.finishKey";
@@ -1119,6 +1130,21 @@
       if (state.segments[i].kind === "work" && state.segments[i].end == null) return state.segments[i];
     }
     return null;
+  }
+
+  // ------------- Боксы: человекочитаемое отображение -------------
+  // В интерфейсе и на стикере показываем «Бокс N» (N — номер из кода этикетки,
+  // последний сегмент «...-N»). Настоящий «кракозябристый» код при этом хранится в
+  // QR и используется при сканировании. Если номер выделить не получается —
+  // показываем сам код как есть.
+  function waybillBoxNumber(box) {
+    const s = String(box == null ? "" : box).trim();
+    const m = /\-(\d+)$/.exec(s);
+    return m ? m[1] : "";
+  }
+  function waybillBoxName(box) {
+    const n = waybillBoxNumber(box);
+    return n ? "Бокс " + n : (String(box == null ? "" : box) || "");
   }
 
   // ------------- Formatting -------------
@@ -4024,12 +4050,13 @@
         const wbBtn = waybillOn
           ? `<button type="button" class="ctrl ctrl-soft shipment-waybill-btn" data-waybill-open="${escapeHtml(r.id)}:${ci}">Сборка</button>`
           : "";
+        // В отгрузке у клиента показываем только кнопку «Сборка» — список боксов
+        // и крестики удаления скрыты (состав боксов см. в окне сборки).
         return `
           <div class="shipment-client shipment-client-center">
             <span class="shipment-client-name">${escapeHtml(members ? (c.bundleName || c.address || c.client || "Связка") : (c.client || "—"))}</span>
             ${members ? `<span class="shipment-client-sub">${members.map((m) => escapeHtml(m.client)).join(", ")}</span>` : ""}
             ${(Number(c.loadedCount) || 0) > 0 ? `<span class="shipment-client-count">Мест: ${Number(c.loadedCount) || 0}</span>` : ""}
-            ${boxesHtml}
             ${wbBtn}
           </div>
         `;
@@ -4154,7 +4181,7 @@
   let waybillPendingArt = ""; // деталь, ожидающая свой бокс (скан: деталь → «МЕСТО» → бокс)
   function setWaybillBox(box) {
     waybillBox = String(box || "").trim();
-    if (el.waybillBoxCur) el.waybillBoxCur.textContent = waybillBox ? `Бокс: ${waybillBox}` : "Бокс: —";
+    if (el.waybillBoxCur) el.waybillBoxCur.textContent = waybillBox ? `Бокс: ${waybillBoxNumber(waybillBox)}` : "Бокс: —";
     if (el.waybillArtInput) el.waybillArtInput.value = "";
     setWaybillStatus(waybillBox ? `Бокс выбран: ${waybillBox} — можно сканировать детали` : "Выберите бокс");
     if (el.waybillNewBoxBtn) el.waybillNewBoxBtn.classList.toggle("active", !waybillBox);
@@ -4165,6 +4192,9 @@
     // «Отгрузка»: настраиваем печать и печатаем 1 место (append). Стикер «вылезает»
     // прямо из окна сборки — сборщику остаётся отсканировать его код.
     setWaybillBox("");
+    // Новый бокс начинает новый цикл: сбрасываем ожидающую деталь, чтобы следующий
+    // скан детали шёл как «МЕСТО», а не как бокс.
+    waybillPendingArt = "";
     if (waybillRouteId) {
       printRouteId = waybillRouteId;
       printClientIndex = waybillClientIdx;
@@ -4172,7 +4202,10 @@
       waybillPrinting = true;
       doPrintLabels(false);
     }
-    setWaybillStatus("Новый бокс напечатан — отсканируйте его (код BG…)");
+    // На ТСД печать не делаем (стикер — с ПК), поэтому и сообщение честное.
+    setWaybillStatus(canPrintHere()
+      ? "Новый бокс напечатан — отсканируйте его (код BG…)"
+      : "Бокс создан — распечатайте стикер с ПК, затем отсканируйте его");
     renderWaybillDelBox();
     // Этикетка нового бокса создаётся на сервере асинхронно (печать); когда она
     // появится — сразу отображаем её в списке боксов, без перезахода в сборку.
@@ -4192,7 +4225,7 @@
     }
     const prev = sel.value;
     sel.innerHTML = boxes.length
-      ? `<option value="">— выберите бокс —</option>` + boxes.map((b) => `<option value="${escapeHtml(b.box)}">${escapeHtml(b.box)} (дет.: ${b.details})</option>`).join("")
+      ? `<option value="">— выберите бокс —</option>` + boxes.map((b) => `<option value="${escapeHtml(b.box)}">${escapeHtml(waybillBoxName(b.box))}</option>`).join("")
       : `<option value="">Боксов нет</option>`;
     if (prev && boxes.some((b) => b.box === prev)) sel.value = prev;
   }
@@ -4452,9 +4485,14 @@
     } else {
       // Шаг 1: отсканирована деталь. Если она есть в накладной — «МЕСТО» (ждём бокс),
       // если нет — «ПЛОХО».
-      const hasArt = (waybillLocal.items || []).some((it) => String(it.art) === val);
-      if (!hasArt) {
+      const artRows = (waybillLocal.items || []).filter((it) => String(it.art) === val);
+      if (!artRows.length) {
         setWaybillStatus("ПЛОХО · деталь " + val + " не найдена в накладной");
+        playScanFeedback(false);
+      } else if (artRows.every((it) => (Number(it.scanned) || 0) >= (Number(it.qty) || 1))) {
+        // Артикул уже отсканирован полностью (кол-во исчерпано) — повторный скан
+        // не привязываем к боксу, сообщаем об этом.
+        setWaybillStatus("Уже отсканировано · " + val);
         playScanFeedback(false);
       } else {
         waybillPendingArt = val;
@@ -4564,7 +4602,7 @@
       card.innerHTML =
         logoHtml +
         `<div class="label-order">Отгрузка ${escapeHtml(dateStr)}</div>` +
-        `<div class="label-name" style="margin-top:1mm">${append ? (start + i) + " из " + total : i + " из " + qty}</div>` +
+        `` +
         (() => {
           // QR на этикетке — крупный и читаемый (~70px ≈ 18.5 мм): стикер
           // квадратный 58×58 мм, высоты с запасом хватает. Раньше драйвер
@@ -4574,7 +4612,9 @@
           const px = (q && q.size) ? 70 : 0;
           return `<div class="label-qr">${px && q.src ? `<img alt="QR" width="${px}" height="${px}" src="${q.src}" />` : ""}</div>`;
         })() +
-        `<div class="label-code">${escapeHtml(code)}</div>`;
+        // На стикере вместо «кракозябистого» кода показываем «Бокс N»; сам код
+        // остаётся в QR (создаётся выше через buildQrImage(code)).
+        `<div class="label-code">${escapeHtml(waybillBoxName(code))}</div>`;
       area.appendChild(card);
     }
     // Синхронизируем напечатанные места с серверным хранилищем этикеток (Шаг 2):
@@ -4600,7 +4640,8 @@
     // основной документ; страховка ensurePrintModalRestored дополнительно
     // возвращает модалку, если просмотрщик Коворка всё же сбросит её окно.
     if (window.AndroidBridge && typeof window.AndroidBridge.scanQR === "function") {
-      setTimeout(() => { try { window.print(); } catch { /* ignore */ } }, 60);
+      // Android/ТСД: WebView не печатает через window.print() — стикер распечатывают
+      // с ПК (браузер/Electron). Здесь бокс уже создан (см. выше), печать не трогаем.
     } else if (isElectronDesktop()) {
       // Настольная сборка (Electron): main.js перехватывает window.print() и
       // печатает молча (без окна) содержимое #printArea. Поэтому печатаем именно
@@ -4608,9 +4649,9 @@
       // Electron не срабатывает (а именно это и было причиной «печать не идёт»).
       setTimeout(() => { try { window.print(); } catch { /* ignore */ } }, 60);
     } else {
-      // Печать бокса из окна СБОРКИ: не открываем модалку печати отгрузки и не
-      // перекидываемся на вкладку «Отгрузка» — стикер печатается и окно сборки
-      // остаётся на месте.
+      // Браузер: возвращаем проверенный скрытый iframe (этот способ «работал раньше»
+      // и не перезагружает основной документ). Внутри printStickersViaIframe есть
+      // запасной window.print(), если печать из iframe в среде заблокирована.
       printStickersViaIframe(waybillPrinting ? (function () {}) : ensurePrintModalRestored);
     }
     // Печать бокса из «Сборки» завершена — флаг больше не нужен (callback уже
@@ -4660,6 +4701,13 @@
         && /electron\//i.test(String(navigator.userAgent || ""));
     } catch { return false; }
   }
+  // Может ли эта точка печатать стикер прямо здесь: Electron — да (тихо), браузер —
+  // да (через диалог peчати), Android/ТСД — нет (WebView не печатает; стикер с ПК).
+  function canPrintHere() {
+    if (isElectronDesktop()) return true;
+    if (window.AndroidBridge && typeof window.AndroidBridge.scanQR === "function") return false;
+    return true;
+  }
   function printStickersViaIframe(restoreModal) {
     const area = el.printArea;
     if (!area) return;
@@ -4686,15 +4734,23 @@
     let pending = imgs.length || 0;
     const removed = () => { setTimeout(() => { try { document.body.removeChild(iframe); } catch { /* ignore */ } }, 1000); };
     const go = () => {
+      let printed = false;
       try {
         iframe.contentWindow.focus();
         iframe.contentWindow.print();
+        printed = true;
       } catch {
-        // Печать из iframe заблокирована средой — НЕ печатаем главный документ
-        // (это сбросит состояние и «выкинет» из Отгрузки), просто подскажем.
-        toast("Печать этикеток недоступна в этом просмотрщике. Откройте приложение в обычном браузере.");
+        printed = false;
       }
       removed();
+      if (!printed) {
+        // Печать из iframe заблокирована средой (часто на складских/встроенных
+        // браузерах). Открываем системный диалог печати на главном документе —
+        // благодаря @media print напечатается только #printArea (стикер).
+        try {
+          window.print();
+        } catch (_) { /* окна печати нет вообще */ }
+      }
       // Страховка для Коворка: встроенный просмотрщик после print() может сбросить
       // модальное окно. Если передан колбэк восстановления — вызываем его с
       // небольшой задержкой, чтобы печать успела отпустить диалог.
@@ -4869,9 +4925,9 @@
       card.innerHTML =
         logoHtml +
         `<div class="label-order">Отгрузка ${escapeHtml(dateStr)}</div>` +
-        `<div class="label-name" style="margin-top:1mm">${place} из ${total}</div>` +
+        `` +
         `<div class="label-qr">${px && q.src ? `<img alt="QR" width="${px}" height="${px}" src="${q.src}" />` : ""}</div>` +
-        `<div class="label-code">${escapeHtml(code)}</div>`;
+        `<div class="label-code">${escapeHtml(waybillBoxName(code))}</div>`;
       area.appendChild(card);
     });
     if (isElectronDesktop()) {
@@ -5162,9 +5218,9 @@
     card.innerHTML =
       logoHtml +
       `<div class="label-order">Отгрузка ${escapeHtml(dateStr)}</div>` +
-      `<div class="label-name" style="margin-top:1mm">${Number(l.place) || ""} из ${scanLabels.length}</div>` +
+      `` +
       `<div class="label-qr">${px && q.src ? `<img alt="QR" width="${px}" height="${px}" src="${q.src}" />` : ""}</div>` +
-      `<div class="label-code">${escapeHtml(code)}</div>`;
+      `<div class="label-code">${escapeHtml(waybillBoxName(code))}</div>`;
     const area = el.printArea;
     if (area) { area.innerHTML = ""; area.appendChild(card); }
     if (window.AndroidBridge && typeof window.AndroidBridge.scanQR === "function") {
@@ -6004,7 +6060,7 @@
           if (!order.length) return "";
           // Водителю показываем только коды боксов, без собранных деталей внутри.
           return `<div class="rms-waybill-boxes">` + order.map((b) =>
-            `<div class="rms-waybill-box"><span class="rms-waybill-box-code">${escapeHtml(b)}</span></div>`
+            `<div class="rms-waybill-box"><span class="rms-waybill-box-code">${escapeHtml(waybillBoxName(b))}</span></div>`
           ).join("") + `</div>`;
         })();
         let unloadBlock = `<div class="rms-unload">
@@ -9224,6 +9280,20 @@
     bumpScanCount();
     doScanLabel("load", code);
   };
+  // Единая точка приёма кода с нативного сканера ТСД (AndroidBridge.onBarcode /
+  // onScan и глобальные window-колбэки). Если открыто окно СБОРКИ — уводим код в
+  // поле сборки и запускаем скан (деталь→«МЕСТО», бокс→«ХОРОШО»). Если открыта
+  // «Отгрузка» — это погрузка/выгрузка мест (handleExternalScanCode выше).
+  const routeExternalScanCode = (raw) => {
+    const code = String(raw == null ? "" : raw).trim();
+    if (!code) return;
+    if (el.waybillModal && el.waybillModal.open) {
+      if (el.waybillArtInput) el.waybillArtInput.value = code;
+      try { scanWaybill(); } catch (_) { /* не критично */ }
+      return;
+    }
+    handleExternalScanCode(code);
+  };
   // (A) Клавиатурный перехват (capture-фаза). Срабатывает всегда при открытом
   // окне «Отгрузка», независимо от фокуса (только избегаем дубля с полем).
   if (scanSource === "external" || !(window.AndroidBridge && typeof window.AndroidBridge.scanQR === "function")) {
@@ -9279,7 +9349,7 @@
         if (typeof window[name] !== "function") {
           window[name] = (data) => {
             const code = (data && (data.code !== undefined ? data.code : data.text !== undefined ? data.text : data)) || "";
-            handleExternalScanCode(String(code).trim());
+            routeExternalScanCode(String(code).trim());
           };
         }
       } catch (_) {}
@@ -9289,14 +9359,14 @@
       if (window.AndroidBridge && typeof window.AndroidBridge.onScan === "function") {
         const orig = window.AndroidBridge.onScan;
         window.AndroidBridge.onScan = function() {
-          handleExternalScanCode(String(arguments.length ? arguments[0] : "").trim());
+          routeExternalScanCode(String(arguments.length ? arguments[0] : "").trim());
           try { return orig.apply(this, arguments); } catch (_) { return undefined; }
         };
       }
       if (window.AndroidBridge && typeof window.AndroidBridge.onBarcode === "function") {
         const orig = window.AndroidBridge.onBarcode;
         window.AndroidBridge.onBarcode = function() {
-          handleExternalScanCode(String(arguments.length ? arguments[0] : "").trim());
+          routeExternalScanCode(String(arguments.length ? arguments[0] : "").trim());
           try { return orig.apply(this, arguments); } catch (_) { return undefined; }
         };
       }
@@ -9725,6 +9795,44 @@
       if (e.key === "Enter") { e.preventDefault(); scanWaybill(); }
     });
   }
+  // Скан на ТСД БЕЗ фокуса в поле: ловим ввод аппаратного сканера (клавиатурная
+  // инжекция) на уровне окна, пока открыта Сборка. Если фокус в поле — поле само
+  // обрабатывает Enter (не дублируем).
+  let wbScanBuf = "";
+  let wbScanTs = 0;
+  let wbScanTimer = null;
+  const wbSendScan = () => {
+    const code = String(wbScanBuf).trim();
+    wbScanBuf = ""; wbScanTs = 0;
+    if (wbScanTimer) { clearTimeout(wbScanTimer); wbScanTimer = null; }
+    if (code) {
+      if (el.waybillArtInput) el.waybillArtInput.value = code;
+      try { scanWaybill(); } catch (_) { /* не критично */ }
+    }
+  };
+  window.addEventListener("keydown", (ev) => {
+    if (!el.waybillModal || !el.waybillModal.open) return;
+    // В поле (ручной ввод) — не дублируем, оно само вызывает скан по Enter.
+    const ae = document.activeElement;
+    if (ae && el.waybillArtInput && ae === el.waybillArtInput) return;
+    if (ev.ctrlKey || ev.altKey || ev.metaKey) return;
+    const t = Date.now();
+    if (wbScanTs && (t - wbScanTs) > 200) wbScanBuf = "";
+    const k = ev.key;
+    if (k === "Enter") {
+      if (wbScanBuf) { ev.preventDefault(); ev.stopPropagation(); wbSendScan(); }
+      else wbScanBuf = "";
+      return;
+    }
+    if (k && k.length === 1) {
+      wbScanBuf += k;
+      wbScanTs = t;
+      if (wbScanTimer) clearTimeout(wbScanTimer);
+      wbScanTimer = setTimeout(wbSendScan, 300);
+    } else {
+      wbScanBuf = "";
+    }
+  }, true);
   if (el.waybillModal) {
     el.waybillModal.addEventListener("cancel", (e) => { e.preventDefault(); closeWaybill(); });
   }
