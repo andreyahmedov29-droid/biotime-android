@@ -4185,6 +4185,12 @@ body.hide-over-sum .earned-cell { display: none !important; }
 .waybill-mark box { color: var(--green-soft); }
 .waybill-del-box-row { display: flex; gap: 8px; align-items: center; flex: 0 0 auto; }
 .waybill-del-box-row .select-input { flex: 1 1 auto; }
+.waybill-del-box-list { display: flex; flex-direction: column; gap: 4px; flex: 1 1 auto; max-height: 180px; overflow: auto; }
+.waybill-del-box-item { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border: 1px solid var(--stroke, rgba(255,255,255,.12)); border-radius: 8px; cursor: pointer; font-size: 13px; }
+.waybill-del-box-item .waybill-del-box-code { font-family: var(--font-mono); font-weight: 700; }
+.waybill-del-box-item .waybill-del-box-note { opacity: .7; }
+.waybill-del-box-item.is-locked { opacity: .6; cursor: not-allowed; }
+.waybill-del-box-item input:disabled { cursor: not-allowed; }
 /* Читаемость селектора бокса в сборке: всегда светлый фон и тёмный текст,
    чтобы код бокса и счётчик деталей были чётко видны — в том числе при
    фокусе, когда строка выделяется. */

@@ -1490,7 +1490,7 @@
     waybillScanBtn: $("waybillScanBtn"), waybillList: $("waybillList"),
     waybillFinishBtn: $("waybillFinishBtn"),
     waybillBoxCur: $("waybillBoxCur"), waybillNewBoxBtn: $("waybillNewBoxBtn"),
-    waybillDelBoxSel: $("waybillDelBoxSel"), waybillDelBoxBtn: $("waybillDelBoxBtn"),
+    waybillDelBoxList: $("waybillDelBoxList"), waybillDelBoxBtn: $("waybillDelBoxBtn"),
     updateVersionCode: $("updateVersionCode"), updateVersionName: $("updateVersionName"),
     updateApkUrl: $("updateApkUrl"), updateNotes: $("updateNotes"),
     backupExportBtn: $("backupExportBtn"), backupAppBtn: $("backupAppBtn"), backupImportFile: $("backupImportFile"), backupStatus: $("backupStatus"),
@@ -4216,10 +4216,10 @@
     setTimeout(() => { try { renderWaybillDelBox(); } catch { /* ignore */ } }, 350);
     focusWaybillScan();
   }
-  // Список созданных боксов для удаления (заполняет select).
+  // Список созданных боксов для удаления (чекбоксы; боксы с деталями недоступны).
   async function renderWaybillDelBox() {
-    const sel = el.waybillDelBoxSel;
-    if (!sel) return;
+    const boxList = el.waybillDelBoxList;
+    if (!boxList) return;
     let boxes = [];
     if (waybillRouteId) {
       try {
@@ -4227,31 +4227,43 @@
         boxes = (r && r.boxes) || [];
       } catch { boxes = []; }
     }
-    const prev = sel.value;
-    sel.innerHTML = boxes.length
-      ? `<option value="">— выберите бокс —</option>` + boxes.map((b) => `<option value="${escapeHtml(b.box)}">${escapeHtml(waybillBoxName(b.box))}</option>`).join("")
-      : `<option value="">Боксов нет</option>`;
-    if (prev && boxes.some((b) => b.box === prev)) sel.value = prev;
+    if (!boxes.length) {
+      boxList.innerHTML = '<span class="empty-hint">Боксов нет</span>';
+      return;
+    }
+    boxList.innerHTML = boxes.map((b) => {
+      const hasDetails = Number(b.details) > 0;
+      const code = String(b.box || "");
+      return `<label class="waybill-del-box-item${hasDetails ? " is-locked" : ""}" title="${hasDetails ? "В боксе детали — удалить нельзя" : escapeHtml(code)}">
+        <input type="checkbox" class="waybill-del-box-check" value="${escapeHtml(code)}" ${hasDetails ? "disabled" : ""}>
+        <span class="waybill-del-box-code">${escapeHtml(waybillBoxName(code))}</span>
+        ${hasDetails ? `<span class="waybill-del-box-note">· с деталями</span>` : ""}
+      </label>`;
+    }).join("");
   }
   async function deleteWaybillBox() {
-    const box = el.waybillDelBoxSel ? el.waybillDelBoxSel.value : "";
-    if (!box) { setWaybillStatus("Выберите бокс для удаления"); return; }
-    try {
-      const r = await api(`/api/routes/${encodeURIComponent(waybillRouteId)}/waybill/box/delete`, {
-        method: "POST",
-        body: JSON.stringify({ clientIndex: waybillClientIdx, box }),
-      });
-      if (r && r.ok) {
-        setWaybillStatus(`Бокс ${box} удалён`);
-        renderWaybillDelBox();
-        renderWaybill();
-        loadShipments();
-      } else {
-        setWaybillStatus((r && r.error) || "Не удалось удалить бокс");
-      }
-    } catch (e) {
-      setWaybillStatus((e && e.message) || "В боксе деталь — переразместите в другой бокс");
+    const boxList = el.waybillDelBoxList;
+    const checks = boxList ? Array.from(boxList.querySelectorAll(".waybill-del-box-check:checked")) : [];
+    const boxes = checks.map((c) => c.value).filter(Boolean);
+    if (!boxes.length) { setWaybillStatus("Отметьте боксы для удаления"); return; }
+    let ok = 0, blocked = 0, failed = 0;
+    for (const box of boxes) {
+      try {
+        const r = await api(`/api/routes/${encodeURIComponent(waybillRouteId)}/waybill/box/delete`, {
+          method: "POST",
+          body: JSON.stringify({ clientIndex: waybillClientIdx, box }),
+        });
+        if (r && r.ok) ok += 1;
+        else if (r && !r.ok && /детал|переразмест/i.test((r.error || ""))) blocked += 1;
+        else failed += 1;
+      } catch (e) { blocked += 1; }
     }
+    if (ok) setWaybillStatus(`Удалено боксов: ${ok}`);
+    else if (blocked) setWaybillStatus("Боксы с деталями удалить нельзя");
+    else if (failed) setWaybillStatus("Не удалось удалить выбранные боксы");
+    renderWaybillDelBox();
+    renderWaybill();
+    loadShipments();
     focusWaybillScan();
   }
   function waybillGet() {
