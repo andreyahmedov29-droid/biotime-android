@@ -1490,6 +1490,7 @@
     waybillScanBtn: $("waybillScanBtn"), waybillList: $("waybillList"),
     waybillFinishBtn: $("waybillFinishBtn"),
     waybillBoxCur: $("waybillBoxCur"), waybillNewBoxBtn: $("waybillNewBoxBtn"),
+    waybillBoxQty: $("waybillBoxQty"),
     waybillDelBoxList: $("waybillDelBoxList"), waybillDelBoxBtn: $("waybillDelBoxBtn"),
     updateVersionCode: $("updateVersionCode"), updateVersionName: $("updateVersionName"),
     updateApkUrl: $("updateApkUrl"), updateNotes: $("updateNotes"),
@@ -4201,14 +4202,19 @@
     if (waybillRouteId) {
       printRouteId = waybillRouteId;
       printClientIndex = waybillClientIdx;
-      if (el.printPlacesQty) el.printPlacesQty.value = "1";
+      // Кол-во для «Нового бокса»: по умолчанию 1, можно ввести сколько угодно
+      // стикеров (печать нескольких боксов за раз). Ограничено 1..200.
+      const multiQty = Math.max(1, Math.min(200, Number(el.waybillBoxQty && el.waybillBoxQty.value) || 1));
+      if (el.waybillBoxQty) el.waybillBoxQty.value = String(multiQty);
+      if (el.printPlacesQty) el.printPlacesQty.value = String(multiQty);
       waybillPrinting = true;
       doPrintLabels(false);
     }
     // На ТСД печать не делаем (стикер — с ПК), поэтому и сообщение честное.
+    const multiQty = Math.max(1, Number(el.waybillBoxQty && el.waybillBoxQty.value) || 1);
     setWaybillStatus(canPrintHere()
-      ? "Новый бокс напечатан — отсканируйте его (код BG…)"
-      : "Бокс создан — распечатайте стикер с ПК, затем отсканируйте его");
+      ? (`Новых боксов напечатано: ${multiQty} — отсканируйте их (код BG…)`)
+      : (`Создано боксов: ${multiQty} — распечатайте стикеры с ПК, затем отсканируйте их`));
     playScanFeedback(true, "Новый бокс");
     renderWaybillDelBox();
     // Этикетка нового бокса создаётся на сервере асинхронно (печать); когда она
