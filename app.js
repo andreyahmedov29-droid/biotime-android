@@ -9032,7 +9032,7 @@
         });
         const j = await res.json().catch(() => ({}));
         if (!res.ok) {
-          toast((j && j.error) || "Не удалось восстановить базу");
+          toast((j && j.error) || `Не удалось восстановить базу (HTTP ${res.status})`);
           return;
         }
         if (el.backupStatus) {

@@ -5734,20 +5734,28 @@ async function handleApi(req, res, urlPath) {
       norm: Number.isFinite(incoming.norm) ? incoming.norm : (prev && Number.isFinite(prev.norm) ? prev.norm : 9),
     };
     // Bring restored data into the canonical shape (drops members not in staff, etc.).
-    migrateDays(db);
-    db.groups = db.groups.map((g) => normalizeGroup(g, db.staff));
-    await persistDb();
-    return sendJson(res, 200, {
-      ok: true,
-      restored: {
-        staff: db.staff.length,
-        days: Object.keys(db.days).length,
-        groups: db.groups.length,
-        clients: db.driverClients.length,
-        routes: db.driverRoutes.length,
-        log: db.log.length,
-      },
-    });
+    // Оборачиваем в try/catch: если нормализация упала (битая структура бэкапа),
+    // возвращаем понятную ошибку, а не обрыв соединения (иначе клиент показывает
+    // бессодержательное «Не удалось восстановить» без причины).
+    try {
+      migrateDays(db);
+      db.groups = db.groups.map((g) => normalizeGroup(g, db.staff));
+      await persistDb();
+      return sendJson(res, 200, {
+        ok: true,
+        restored: {
+          staff: db.staff.length,
+          days: Object.keys(db.days).length,
+          groups: db.groups.length,
+          clients: db.driverClients.length,
+          routes: db.driverRoutes.length,
+          log: db.log.length,
+        },
+      });
+    } catch (err) {
+      console.error("restore failed:", err);
+      return sendJson(res, 500, { error: "Ошибка восстановления: " + (err && err.message ? err.message : String(err)) });
+    }
   }
 
   // ---- GET /api/admin/backup/auto  (list automatic backups) ----
