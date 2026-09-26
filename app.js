@@ -4478,38 +4478,48 @@
       const art = waybillPendingArt;
       const scanQty = Math.max(1, Number(el.waybillQtyInput && el.waybillQtyInput.value) || 1);
       setWaybillBox(val);
+      // Мгновенный отклик: зеленим строку и озвучиваем «Хорошо» СРАЗУ при скане,
+      // не дожидаясь ответа сервера (портальный /waybill/scan может идти секунды).
+      waybillPendingArt = "";
+      const it0 = waybillLocal.items.find((x) => String(x.art) === art && (Number(x.scanned) || 0) < (Number(x.qty) || 0) && !x.missing);
+      if (it0) {
+        it0.scanned = Math.min(Number(it0.scanned || 0) + scanQty, Number(it0.qty) || 1);
+        it0.box = val;
+      }
+      renderWaybill();
+      playScanFeedback(true, "Хорошо");
+      setWaybillStatus(`ХОРОШО · ${art} → бокс ${val}`);
+      // Серверное подтверждение в фоне; при отказе откатываем оптимистичный скан.
       try {
         const r = await api("/api/routes/" + encodeURIComponent(waybillRouteId) + "/waybill/scan", {
           method: "POST",
           body: JSON.stringify({ clientIndex: waybillClientIdx, art, box: val, qty: scanQty }),
         });
         if (r && r.ok) {
-          if (r.rebound) {
-            const it = waybillLocal.items.find((x) => String(x.art) === art);
-            if (it) it.box = r.item && r.item.box != null ? r.item.box : val;
-            setWaybillStatus(`ХОРОШО · ${art} → бокс ${r.item && r.item.box || val} (перенос)`);
-            playScanFeedback(true, "Хорошо");
-          } else {
-            const item = waybillLocal.items.find((x) => String(x.art) === art && (Number(x.scanned) || 0) < (Number(x.qty) || 0) && !x.missing);
-            if (item) {
-              item.scanned = (r.item && r.item.scanned != null) ? r.item.scanned : (Number(item.scanned) + scanQty);
-              item.box = r.item && r.item.box != null ? r.item.box : val;
-            }
-            const done = (waybillLocal.items || []).filter((it) => Number(it.scanned) >= Number(it.qty)).length;
-            setWaybillStatus(`ХОРОШО · ${item && item.art} → бокс ${val} · осталось ${r.left} · готово ${done}/${waybillLocal.items.length}`);
-            playScanFeedback(r.left > 0, "Хорошо");
+          const item = waybillLocal.items.find((x) => String(x.art) === art);
+          if (item && r.item) {
+            item.scanned = (r.item.scanned != null) ? r.item.scanned : item.scanned;
+            item.box = (r.item && r.item.box != null) ? r.item.box : item.box;
           }
-          waybillPendingArt = "";
+          if (r.rebound) {
+            setWaybillStatus(`ХОРОШО · ${art} → бокс ${r.item && r.item.box || val} (перенос)`);
+          } else {
+            const done = (waybillLocal.items || []).filter((it) => Number(it.scanned) >= Number(it.qty)).length;
+            setWaybillStatus(`ХОРОШО · ${art} → бокс ${val} · осталось ${r.left} · готово ${done}/${waybillLocal.items.length}`);
+          }
           renderWaybill();
           loadShipments();
         } else {
+          if (it0) it0.scanned = Math.max(0, Number(it0.scanned || 0) - scanQty);
           setWaybillStatus("ПЛОХО · " + ((r && r.error) || "Деталь не привязалась к боксу"));
-          playScanFeedback(false);
+          playScanFeedback(false, "Плохо");
           renderWaybill();
         }
       } catch (e) {
+        if (it0) it0.scanned = Math.max(0, Number(it0.scanned || 0) - scanQty);
         setWaybillStatus("ПЛОХО · " + ((e && e.message) || "Ошибка привязки к боксу"));
-        playScanFeedback(false);
+        playScanFeedback(false, "Плохо");
+        renderWaybill();
       }
     } else if (String(val).startsWith("BG" + waybillRouteId + "-")) {
       // Явный код этикетки места без ожидающей детали — просто выбираем бокс.
