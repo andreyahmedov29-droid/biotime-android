@@ -1491,6 +1491,8 @@
     waybillFinishBtn: $("waybillFinishBtn"),
     waybillBoxCur: $("waybillBoxCur"), waybillNewBoxBtn: $("waybillNewBoxBtn"),
     waybillBoxQty: $("waybillBoxQty"),
+    boxDetailsModal: $("boxDetailsModal"), boxDetailsList: $("boxDetailsList"),
+    boxDetailsTitle: $("boxDetailsTitle"), boxDetailsClose: $("boxDetailsClose"),
     waybillDelBoxList: $("waybillDelBoxList"), waybillDelBoxBtn: $("waybillDelBoxBtn"),
     updateVersionCode: $("updateVersionCode"), updateVersionName: $("updateVersionName"),
     updateApkUrl: $("updateApkUrl"), updateNotes: $("updateNotes"),
@@ -4245,16 +4247,40 @@
     boxList.innerHTML = boxes.map((b) => {
       const hasDetails = Number(b.details) > 0;
       const code = String(b.box || "");
-      return `<label class="waybill-del-box-item${hasDetails ? " is-locked" : ""}" title="${hasDetails ? "В боксе детали — удалить нельзя" : escapeHtml(code)}">
+      const name = escapeHtml(waybillBoxName(code));
+      return `<div class="waybill-del-box-item${hasDetails ? " is-locked has-content" : ""}"${hasDetails ? ` data-box-open="${escapeHtml(code)}"` : ""} title="${hasDetails ? "Нажмите, чтобы посмотреть содержимое (удалить нельзя)" : name}">
         <input type="checkbox" class="waybill-del-box-check" value="${escapeHtml(code)}" ${hasDetails ? "disabled" : ""}>
-        <span class="waybill-del-box-code">${escapeHtml(waybillBoxName(code))}</span>
+        <span class="waybill-del-box-code">${name}</span>
         ${hasDetails ? `<span class="waybill-del-box-note">· с деталями</span>` : ""}
-      </label>`;
+      </div>`;
     }).join("");
     // Возвращаем отметки ранее отмеченным боксам (кроме ставших «с деталями»).
     boxList.querySelectorAll(".waybill-del-box-check").forEach((cb) => {
       if (checkedBefore.has(cb.value)) cb.checked = true;
     });
+    // Клик по боксу с деталями — открываем модалку с его содержимым.
+    boxList.querySelectorAll("[data-box-open]").forEach((it) => {
+      it.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        openBoxDetails(it.getAttribute("data-box-open"));
+      });
+    });
+  }
+  // Модалка «содержимое бокса»: показывает детали, привязанные к боксу.
+  function openBoxDetails(box) {
+    const items = (waybillLocal && waybillLocal.items ? waybillLocal.items : [])
+      .filter((it) => String(it.box) === String(box));
+    if (!el.boxDetailsList || !el.boxDetailsModal) return;
+    if (el.boxDetailsTitle) el.boxDetailsTitle.textContent = "Содержимое бокса · " + waybillBoxNumber(box);
+    el.boxDetailsList.innerHTML = items.length
+      ? items.map((it) => `
+          <div class="waybill-box-detail">
+            <span class="wbd-art">${escapeHtml(it.art)}</span>
+            <span class="wbd-name">${escapeHtml(it.name || "")}</span>
+            <span class="wbd-qty">${Number(it.scanned) || 0}/${Number(it.qty) || 0}</span>
+          </div>`).join("")
+      : '<div class="empty-hint">В боксе нет деталей</div>';
+    try { el.boxDetailsModal.showModal(); } catch (_) { /* уже открыта */ }
   }
   async function deleteWaybillBox() {
     const boxList = el.waybillDelBoxList;
@@ -9842,6 +9868,8 @@
   if (el.waybillScanBtn) el.waybillScanBtn.addEventListener("click", scanWaybill);
   if (el.waybillNewBoxBtn) el.waybillNewBoxBtn.addEventListener("click", waybillNewBox);
   if (el.waybillDelBoxBtn) el.waybillDelBoxBtn.addEventListener("click", deleteWaybillBox);
+  if (el.boxDetailsClose) el.boxDetailsClose.addEventListener("click", () => { try { el.boxDetailsModal.close(); } catch {} });
+  if (el.boxDetailsModal) el.boxDetailsModal.addEventListener("click", (ev) => { if (ev.target === el.boxDetailsModal) { try { el.boxDetailsModal.close(); } catch {} } });
   if (el.waybillFinishBtn) {
     el.waybillFinishBtn.addEventListener("click", () => {
       closeWaybill();
