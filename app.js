@@ -4231,6 +4231,11 @@
       boxList.innerHTML = '<span class="empty-hint">Боксов нет</span>';
       return;
     }
+    // Сохраняем отмеченные боксы перед перерисовкой (список часто обновляется
+    // после сканов/отгрузки), чтобы галочки не «слетали» при ре-рендере.
+    const checkedBefore = new Set(
+      Array.from(boxList.querySelectorAll(".waybill-del-box-check:checked")).map((c) => c.value)
+    );
     boxList.innerHTML = boxes.map((b) => {
       const hasDetails = Number(b.details) > 0;
       const code = String(b.box || "");
@@ -4240,6 +4245,10 @@
         ${hasDetails ? `<span class="waybill-del-box-note">· с деталями</span>` : ""}
       </label>`;
     }).join("");
+    // Возвращаем отметки ранее отмеченным боксам (кроме ставших «с деталями»).
+    boxList.querySelectorAll(".waybill-del-box-check").forEach((cb) => {
+      if (checkedBefore.has(cb.value)) cb.checked = true;
+    });
   }
   async function deleteWaybillBox() {
     const boxList = el.waybillDelBoxList;
