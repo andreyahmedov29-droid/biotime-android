@@ -4457,6 +4457,15 @@
         focusWaybillScan();
         return;
       }
+      // Защита: код бокса должен быть реальной этикеткой места (BG<routeId>-…),
+      // а не случайным кодом/артикулом — иначе деталь не должна привязываться.
+      if (!String(val).startsWith("BG" + waybillRouteId + "-")) {
+        setWaybillStatus("ПЛОХО · " + val + " — это не код бокса. Отсканируйте настоящий бокс");
+        playScanFeedback(false);
+        if (el.waybillArtInput) el.waybillArtInput.value = "";
+        focusWaybillScan();
+        return;
+      }
       const art = waybillPendingArt;
       const scanQty = Math.max(1, Number(el.waybillQtyInput && el.waybillQtyInput.value) || 1);
       setWaybillBox(val);
