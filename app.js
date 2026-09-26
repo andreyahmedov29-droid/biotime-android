@@ -4488,13 +4488,19 @@
       // не дожидаясь ответа сервера (портальный /waybill/scan может идти секунды).
       waybillPendingArt = "";
       const it0 = waybillLocal.items.find((x) => String(x.art) === art && (Number(x.scanned) || 0) < (Number(x.qty) || 0) && !x.missing);
+      const remBefore = it0 ? Math.max(0, (Number(it0.qty) || 0) - (Number(it0.scanned) || 0)) : 0;
       if (it0) {
         it0.scanned = Math.min(Number(it0.scanned || 0) + scanQty, Number(it0.qty) || 1);
         it0.box = val;
       }
+      // Предупреждение при переборе: оператор ввёл больше, чем осталось — счёт
+      // обрежется по остатку (счёт не меняем, просто сообщаем о сокращении).
+      const clamped = remBefore > 0 && scanQty > remBefore;
       renderWaybill();
       playScanFeedback(true, "Хорошо");
-      setWaybillStatus(`ХОРОШО · ${art} → бокс ${val}`);
+      setWaybillStatus(clamped
+        ? `ХОРОШО · ${art} → бокс ${val} · оставалось ${remBefore} — засчитано ${remBefore}`
+        : `ХОРОШО · ${art} → бокс ${val}`);
       // Серверное подтверждение в фоне; при отказе откатываем оптимистичный скан.
       try {
         const r = await api("/api/routes/" + encodeURIComponent(waybillRouteId) + "/waybill/scan", {
@@ -4511,7 +4517,10 @@
             setWaybillStatus(`ХОРОШО · ${art} → бокс ${r.item && r.item.box || val} (перенос)`);
           } else {
             const done = (waybillLocal.items || []).filter((it) => Number(it.scanned) >= Number(it.qty)).length;
-            setWaybillStatus(`ХОРОШО · ${art} → бокс ${val} · осталось ${r.left} · готово ${done}/${waybillLocal.items.length}`);
+            const tail = clamped
+              ? ` · оставалось ${remBefore} — засчитано ${remBefore}`
+              : ` · осталось ${r.left} · готово ${done}/${waybillLocal.items.length}`;
+            setWaybillStatus(`ХОРОШО · ${art} → бокс ${val}${tail}`);
           }
           renderWaybill();
           loadShipments();
