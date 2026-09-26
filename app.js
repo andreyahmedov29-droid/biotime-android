@@ -4209,6 +4209,7 @@
     setWaybillStatus(canPrintHere()
       ? "Новый бокс напечатан — отсканируйте его (код BG…)"
       : "Бокс создан — распечатайте стикер с ПК, затем отсканируйте его");
+    playScanFeedback(true, "Новый бокс");
     renderWaybillDelBox();
     // Этикетка нового бокса создаётся на сервере асинхронно (печать); когда она
     // появится — сразу отображаем её в списке боксов, без перезахода в сборку.
@@ -4457,7 +4458,7 @@
             const it = waybillLocal.items.find((x) => String(x.art) === art);
             if (it) it.box = r.item && r.item.box != null ? r.item.box : val;
             setWaybillStatus(`ХОРОШО · ${art} → бокс ${r.item && r.item.box || val} (перенос)`);
-            playScanFeedback(true);
+            playScanFeedback(true, "Хорошо");
           } else {
             const item = waybillLocal.items.find((x) => String(x.art) === art && (Number(x.scanned) || 0) < (Number(x.qty) || 0) && !x.missing);
             if (item) {
@@ -4466,7 +4467,7 @@
             }
             const done = (waybillLocal.items || []).filter((it) => Number(it.scanned) >= Number(it.qty)).length;
             setWaybillStatus(`ХОРОШО · ${item && item.art} → бокс ${val} · осталось ${r.left} · готово ${done}/${waybillLocal.items.length}`);
-            playScanFeedback(r.left > 0);
+            playScanFeedback(r.left > 0, "Хорошо");
           }
           waybillPendingArt = "";
           renderWaybill();
@@ -4500,7 +4501,7 @@
       } else {
         waybillPendingArt = val;
         setWaybillStatus("МЕСТО · деталь " + val + " — отсканируйте бокс");
-        playScanFeedback(true);
+        playScanFeedback(true, "Место");
       }
     }
     if (el.waybillArtInput) el.waybillArtInput.value = "";
