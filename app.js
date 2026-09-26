@@ -4083,10 +4083,10 @@
           ? `<button type="button" class="ctrl ctrl-primary" data-shipment-start="${escapeHtml(r.id)}">Начать отгрузку</button>`
           : `<button type="button" class="ctrl" disabled title="Сначала загрузите расходную накладную">Начать отгрузку</button>`;
       }
-      // Боксы печатаются при сборке («Новый бокс»), поэтому в отгрузке кнопка
-      // «Печать этикеток» не нужна (если накладные/сборка включены) — этикетки
-      // уже напечатаны, а в отгрузке их остаётся только отсканировать.
-      const printBtn = (shipStarted && !shipDone && !waybillOn)
+      // «Печать этикеток» в отгрузке доступна всегда, пока отгрузка идёт и не
+      // завершена: склад печатает стикеры из браузера или десктопа напрямую (так
+      // работало до того, как печать боксов появилась в «Сборке»).
+      const printBtn = (shipStarted && !shipDone)
         ? `<button type="button" class="ctrl ctrl-soft" data-shipment-print="${escapeHtml(r.id)}">Печать этикеток</button>`
         : "";
       // Идущую отгрузку (склад уже работает с маршрутом) свернуть нельзя —
@@ -4562,19 +4562,19 @@
     const cl = (r.clients || [])[idx];
     if (!cl) return;
     const qty = Math.max(1, Math.min(200, Number(el.printPlacesQty.value) || 1));
-    // Номер, с которого начинается допечатка дополнительных мест. При обычной
-    // печати start = 0 (места 1..qty). При «Допечатать места» стартуем со следующего
-    // свободного номера: если у выбранного клиента уже создано N мест, новые будут
-    // N+1..N+qty, а старые (в т.ч. уже отсканированные) не трогаем.
-    // Накопительная печать: каждое нажатие добавляет qty новых мест СВЕРХ уже
-    // созданных (начиная со следующего номера). Если указано 1 — каждый клик даёт
-    // ровно один новый стикер. Места не пересоздаются с первого номера.
-    let start;
-    try {
-      const cur = await api(`/api/labels?routeId=${encodeURIComponent(printRouteId)}&clientIndex=${idx}`);
-      start = cur && Array.isArray(cur.labels) ? cur.labels.length : (Array.isArray(scanLabels) ? scanLabels.length : 0);
-    } catch {
-      start = Array.isArray(scanLabels) ? scanLabels.length : 0;
+    // Номер, с которого начинается печать. Обычная «Печать этикеток» (отгрузка) —
+    // replace: start = 0, места 1..qty, прежние этикетки пары пересоздаются заново.
+    // Печать бокса из «Сборки» («Новый бокс») — накопительная append: стартуем со
+    // следующего свободного номера (N+1..N+qty), уже созданные/отсканированные
+    // места не трогаем.
+    let start = 0;
+    if (waybillPrinting) {
+      try {
+        const cur = await api(`/api/labels?routeId=${encodeURIComponent(printRouteId)}&clientIndex=${idx}`);
+        start = cur && Array.isArray(cur.labels) ? cur.labels.length : (Array.isArray(scanLabels) ? scanLabels.length : 0);
+      } catch {
+        start = Array.isArray(scanLabels) ? scanLabels.length : 0;
+      }
     }
     const total = start + qty;
     // Дата отгрузки на стикере — в формате ДД.ММ.ГГГГ (r.date/день приходят как
@@ -4623,37 +4623,20 @@
     try {
       api("/api/labels", {
         method: "POST",
-        body: JSON.stringify({ routeId: printRouteId, clientIndex: idx, qty, mode: "append" }),
+        body: JSON.stringify({ routeId: printRouteId, clientIndex: idx, qty, mode: waybillPrinting ? "append" : "replace" }),
       }).then((r) => {
         if (r && Array.isArray(r.labels)) {
-          toast(`Допечатано мест: ${qty}. Всего у клиента: ${r.labels.length}`);
+          if (waybillPrinting) {
+            toast(`Новый бокс: всего мест ${r.labels.length}`);
+          } else {
+            toast(`Создано мест: ${r.labels.length} — можно сканировать при погрузке/выгрузке`);
+          }
           refreshPrintLabels();
         }
       }).catch(() => {});
     } catch { /* ignore */ }
-    // Модалку печати НЕ закрываем: после печати она остаётся открытой, список
-    // этикеток уже обновлён (refreshPrintLabels выше), и можно сразу печатать
-    // следующих клиентов без выхода из окна. Раньше здесь был
-    // el.printModal.close() — из-за него после печати пользователь «вылетал»
-    // на главный список отгрузок и был вынужден заново открывать печать.
-    // Для веба стикеры печатаются через скрытый iframe, который не перезагружает
-    // основной документ; страховка ensurePrintModalRestored дополнительно
-    // возвращает модалку, если просмотрщик Коворка всё же сбросит её окно.
-    if (window.AndroidBridge && typeof window.AndroidBridge.scanQR === "function") {
-      // Android/ТСД: WebView не печатает через window.print() — стикер распечатывают
-      // с ПК (браузер/Electron). Здесь бокс уже создан (см. выше), печать не трогаем.
-    } else if (isElectronDesktop()) {
-      // Настольная сборка (Electron): main.js перехватывает window.print() и
-      // печатает молча (без окна) содержимое #printArea. Поэтому печатаем именно
-      // window.print() на главной странице, а не iframe — иначе тихий перехватчик
-      // Electron не срабатывает (а именно это и было причиной «печать не идёт»).
-      setTimeout(() => { try { window.print(); } catch { /* ignore */ } }, 60);
-    } else {
-      // Браузер: возвращаем проверенный скрытый iframe (этот способ «работал раньше»
-      // и не перезагружает основной документ). Внутри printStickersViaIframe есть
-      // запасной window.print(), если печать из iframe в среде заблокирована.
-      printStickersViaIframe(waybillPrinting ? (function () {}) : ensurePrintModalRestored);
-    }
+    // Единый запуск печати (отгрузка/допечатка/бокс — одна точка).
+    dispatchStickerPrint(waybillPrinting ? (function () {}) : ensurePrintModalRestored);
     // Печать бокса из «Сборки» завершена — флаг больше не нужен (callback уже
     // выбран на момент вызова печати, поэтому сброс безопасен).
     waybillPrinting = false;
@@ -4697,8 +4680,11 @@
   // если приложение запущено внутри настольной оболочки.
   function isElectronDesktop() {
     try {
-      return typeof navigator !== "undefined"
-        && /electron\//i.test(String(navigator.userAgent || ""));
+      if (typeof navigator !== "undefined" && /electron\//i.test(String(navigator.userAgent || ""))) return true;
+      // Запасные признаки Electron (если userAgent переопределён/иная обёртка).
+      if (typeof window !== "undefined" && window.process && window.process.versions && window.process.versions.electron) return true;
+      if (typeof process !== "undefined" && process.versions && process.versions.electron) return true;
+      return false;
     } catch { return false; }
   }
   // Может ли эта точка печатать стикер прямо здесь: Electron — да (тихо), браузер —
@@ -4707,6 +4693,42 @@
     if (isElectronDesktop()) return true;
     if (window.AndroidBridge && typeof window.AndroidBridge.scanQR === "function") return false;
     return true;
+  }
+  // Единый запуск печати стикеров для всех мест (отгрузка, допечатка, бокс).
+  //  - ТСД/Android WebView: печать не делаем (WebView не печатает; стикер с ПК).
+  //  - Electron: window.print() перехватывается main.js (по умолчанию открывает
+  //    окно выбора принтера).
+  //  - Браузер: скрытый iframe (проверенный способ) с fallback на window.print().
+  // Раньше эта логика была продублирована в 3 местах с расхождениями (напр. там
+  // вызывался window.print() на Android) — теперь одна точка.
+  function dispatchStickerPrint(restoreModal) {
+    // Электрон-мост: печать стикера через главный процесс (в обход веб-песочницы,
+    // которая блокирует window.print()). Если мост доступен — используем его.
+    if (typeof window.printStickerBridge !== "undefined" && window.printStickerBridge
+        && typeof window.printStickerBridge.print === "function") {
+      const html = (el.printArea && el.printArea.innerHTML) || "";
+      if (html) { try { window.printStickerBridge.print(html); } catch (_) { /* ignore */ } }
+      return;
+    }
+    if (window.AndroidBridge && typeof window.AndroidBridge.scanQR === "function") {
+      return; // Android/ТСД — WebView не печатает.
+    }
+    // Десктоп (Electron): печатаем window.print() на главной странице — main.js
+    // перехватывает его (webContents 'print') и или молча печатает на заданный
+    // принтер, или открывает системное окно выбора принтера. iframe-печать главный
+    // процесс НЕ перехватывает, поэтому для десктопа используем именно window.print().
+    if (isElectronDesktop()) {
+      const fn = typeof restoreModal === "function" ? restoreModal : (function () {});
+      setTimeout(() => { try { window.print(); } catch (_) { /* окна печати нет вообще */ } }, 60);
+      setTimeout(() => { try { fn(); } catch (_) { /* ignore */ } }, 160);
+      return;
+    }
+    // Печать через скрытый iframe (printStickersViaIframe) — именно так печать
+    // РАБОТАЛА до рефакторинга и НЕ давала ошибки «document is sandboxed».
+    // window.print() на главной странице попадал в песочницу платформы, поэтому
+    // окно печати не открывалось. Внутри printStickersViaIframe есть готовая
+    // страховка на window.print(), если печать из iframe в среде заблокирована.
+    printStickersViaIframe(typeof restoreModal === "function" ? restoreModal : (function () {}));
   }
   function printStickersViaIframe(restoreModal) {
     const area = el.printArea;
@@ -4732,8 +4754,13 @@
     // Ждём, пока QR-картинки (data-url) и внешние логотипы отрисуются, потом печатаем.
     const imgs = Array.prototype.slice.call(doc.querySelectorAll("img"));
     let pending = imgs.length || 0;
+    // Страховка: печать ВСЕГДА срабатывает, даже если события load/error у QR-картинки
+    // не придут (бывает на некоторых устройствах — без этого окно печати «молчит»).
+    let fired = false;
     const removed = () => { setTimeout(() => { try { document.body.removeChild(iframe); } catch { /* ignore */ } }, 1000); };
     const go = () => {
+      if (fired) return;
+      fired = true;
       let printed = false;
       try {
         iframe.contentWindow.focus();
@@ -4766,6 +4793,9 @@
       im.addEventListener("error", onImg);
     });
     if (pending <= 0) setTimeout(go, 200);
+    // Принудительно запускаем печать через фиксированное время, если картинки так
+    // и не «прогрузились» (иначе окно печати может не появиться на части устройств).
+    setTimeout(go, 900);
   }
 
   // Страховка: возвращает модалку печати, если печать (в просмотрщике Коворка)
@@ -4930,11 +4960,7 @@
         `<div class="label-code">${escapeHtml(waybillBoxName(code))}</div>`;
       area.appendChild(card);
     });
-    if (isElectronDesktop()) {
-      setTimeout(() => { try { window.print(); } catch { /* ignore */ } }, 60);
-    } else {
-      printStickersViaIframe(ensureAppendModalRestored);
-    }
+    dispatchStickerPrint(ensureAppendModalRestored);
   }
 
   // ---- Сканирование этикеток (погрузка/выгрузка) — Шаг 3 ----
@@ -5223,13 +5249,7 @@
       `<div class="label-code">${escapeHtml(waybillBoxName(code))}</div>`;
     const area = el.printArea;
     if (area) { area.innerHTML = ""; area.appendChild(card); }
-    if (window.AndroidBridge && typeof window.AndroidBridge.scanQR === "function") {
-      setTimeout(() => { try { window.print(); } catch { /* ignore */ } }, 60);
-    } else if (isElectronDesktop()) {
-      setTimeout(() => { try { window.print(); } catch { /* ignore */ } }, 60);
-    } else {
-      printStickersViaIframe(function restoreAfterSinglePrint() {});
-    }
+    dispatchStickerPrint(function restoreAfterSinglePrint() {});
   }
 
   // Плитки клиентов окна «Отгрузка»: вместо выпадающего списка клиентов —

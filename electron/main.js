@@ -191,7 +191,10 @@ async function createWindow() {
       // Локальный сервер доверяем; дополнительных node-привилегий странице не даём.
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      // sandbox НЕ включаем: иначе страница в песочнице и window.print() игнорируется
+      // («document is sandboxed, allow-modals not set»). Безопасность — через
+      // contextIsolation:true + nodeIntegration:false.
+      sandbox: false,
       // Постоянная partition: cookies и сессия шлюза (вход в личную учётку)
       // сохраняются в userData и держатся между перезапусками приложения.
       // Без неё окно использует непостоянную defaultSession, вход теряется на
@@ -241,16 +244,18 @@ async function createWindow() {
   // Благодаря правилу @media print из styles.css в печать попадает только
   // #printArea (макет этикетки), остальной интерфейс скрывается.
   mainWindow.webContents.on("print", (event, wc) => {
+    // Если printerName НЕ задан — НЕ перехватываем печать: штатное нативное окно
+    // печати Electron появляется само, пользователь выбирает принтер.
+    if (!PRINTER_NAME) return;
+    // Задан printerName — печатаем молча прямо на него, без окна.
     event.preventDefault();
     const printOpts = {
-      // ВСЕГДА показываем окно выбора принтера (silent: false). Так при «Новый бокс»
-      // и печати стикеров диалог выбора принтера гарантированно появляется.
-      silent: false,
+      silent: true,
       printBackground: true,
-      margins: { marginType: "none" },  // этикетка без полей
-      pageSize: { width: 58000, height: 58000 }, // 58×58 мм (микроны)
+      margins: { marginType: "none" },
+      pageSize: { width: 58000, height: 58000 },
     };
-    if (PRINTER_NAME) printOpts.printerName = PRINTER_NAME;
+    printOpts.printerName = PRINTER_NAME;
     wc.print(printOpts, (ok, failureReason) => {
       if (!ok) console.error("[print] Печать не удалась:", failureReason || "unknown");
       else console.log("[print] Этикетки отправлены на печать.");
