@@ -4695,15 +4695,16 @@
     return true;
   }
   // Единый запуск печати стикеров для всех мест (отгрузка, допечатка, бокс).
+  //  - Наш десктоп-шелл (Electron): печатаем через нативный мост printStickerBridge
+  //    (IPC → main-процесс → webContents.print). Ему песочница не мешает.
   //  - ТСД/Android WebView: печать не делаем (WebView не печатает; стикер с ПК).
-  //  - Electron: window.print() перехватывается main.js (по умолчанию открывает
-  //    окно выбора принтера).
-  //  - Браузер: скрытый iframe (проверенный способ) с fallback на window.print().
-  // Раньше эта логика была продублирована в 3 местах с расхождениями (напр. там
-  // вызывался window.print() на Android) — теперь одна точка.
+  //  - Обычный браузер И любой чужой Electron-браузер (напр. встроенный браузер
+  //    Коворка, который тоже отдаёт 'electron' в userAgent): печатаем через скрытый
+  //    iframe. НЕ вызываем window.print() на главном документе по одному лишь
+  //    признаку 'electron' в UA — такие браузеры держат документ в песочнице без
+  //    allow-modals, и window.print() молча игнорируется («document is sandboxed»).
   function dispatchStickerPrint(restoreModal) {
-    // Электрон-мост: печать стикера через главный процесс (в обход веб-песочницы,
-    // которая блокирует window.print()). Если мост доступен — используем его.
+    // Наш десктоп-шелл: нативный мост уже отдаёт странице printStickerBridge.
     if (typeof window.printStickerBridge !== "undefined" && window.printStickerBridge
         && typeof window.printStickerBridge.print === "function") {
       const html = (el.printArea && el.printArea.innerHTML) || "";
@@ -4713,21 +4714,7 @@
     if (window.AndroidBridge && typeof window.AndroidBridge.scanQR === "function") {
       return; // Android/ТСД — WebView не печатает.
     }
-    // Десктоп (Electron): печатаем window.print() на главной странице — main.js
-    // перехватывает его (webContents 'print') и или молча печатает на заданный
-    // принтер, или открывает системное окно выбора принтера. iframe-печать главный
-    // процесс НЕ перехватывает, поэтому для десктопа используем именно window.print().
-    if (isElectronDesktop()) {
-      const fn = typeof restoreModal === "function" ? restoreModal : (function () {});
-      setTimeout(() => { try { window.print(); } catch (_) { /* окна печати нет вообще */ } }, 60);
-      setTimeout(() => { try { fn(); } catch (_) { /* ignore */ } }, 160);
-      return;
-    }
-    // Печать через скрытый iframe (printStickersViaIframe) — именно так печать
-    // РАБОТАЛА до рефакторинга и НЕ давала ошибки «document is sandboxed».
-    // window.print() на главной странице попадал в песочницу платформы, поэтому
-    // окно печати не открывалось. Внутри printStickersViaIframe есть готовая
-    // страховка на window.print(), если печать из iframe в среде заблокирована.
+    // Браузер и чужие Electron-браузеры: скрытый iframe (проверенный способ).
     printStickersViaIframe(typeof restoreModal === "function" ? restoreModal : (function () {}));
   }
   function printStickersViaIframe(restoreModal) {
