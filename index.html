@@ -1277,8 +1277,10 @@
         <div class="waybill-scan-row">
           <input class="text-input" id="waybillArtInput" type="text" autocomplete="off" spellcheck="false"
                  placeholder="Штрихкод / артикул" enterkeyhint="go" />
-          <input class="text-input waybill-qty-input" id="waybillQtyInput" type="number" min="1" step="1"
-                 value="1" title="Кол-во на стикере (если >1)" />
+          <label class="waybill-qty-field" title="Сколько единиц одного артикула засчитывается за один скан (если на стикере несколько штук)">
+            <span class="waybill-qty-label">Шт. за скан</span>
+            <input class="text-input waybill-qty-input" id="waybillQtyInput" type="number" min="1" step="1" value="1" />
+          </label>
           <button type="button" class="ctrl ctrl-primary" id="waybillScanBtn">Сканировать</button>
         </div>
         <div class="waybill-box-row">

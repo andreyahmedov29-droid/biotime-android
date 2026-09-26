@@ -4185,6 +4185,9 @@ body.hide-over-sum .earned-cell { display: none !important; }
 .waybill-multi-row { flex-wrap: nowrap; }
 .waybill-multi-label { font-size: 13px; opacity: .9; white-space: nowrap; }
 .waybill-multi-input { max-width: 76px; font-weight: 700; }
+.waybill-qty-field { display: flex; flex-direction: column; gap: 2px; }
+.waybill-qty-label { font-size: 12px; opacity: .85; white-space: nowrap; }
+.waybill-qty-input { max-width: 72px; }
 .waybill-mark box { color: var(--green-soft); }
 .waybill-del-box-row { display: flex; gap: 8px; align-items: center; flex: 0 0 auto; }
 .waybill-del-box-row .select-input { flex: 1 1 auto; }
