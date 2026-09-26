@@ -4038,10 +4038,13 @@
         if (boxOrder.length) {
           boxesHtml = `<div class="shipment-client-boxes">` + boxOrder.map((b) => {
             const dets = byBox[b];
-            // Удаление бокса из отгрузки — та же защита, что в сборке: бокс с
-            // деталями удалить нельзя (сервер вернёт отказ).
-            const delBtn = `<button type="button" class="shipment-del-box" title="Удалить бокс"
-              data-shipment-delbox="${escapeHtml(r.id)}:${ci}:${escapeHtml(b)}">✕</button>`;
+            // Удаление бокса из отгрузки: бокс С деталями удалить нельзя (кнопка
+            // неактивна) — можно удалять только пустые боксы.
+            const hasDetails = dets.length > 0;
+            const delBtn = hasDetails
+              ? `<button type="button" class="shipment-del-box" disabled title="Бокс содержит детали — удалить нельзя">✕</button>`
+              : `<button type="button" class="shipment-del-box" title="Удалить бокс"
+                  data-shipment-delbox="${escapeHtml(r.id)}:${ci}:${escapeHtml(b)}">✕</button>`;
             // Собранные детали внутри бокса в отгрузке не показываем — только код
             // бокса и (для склада) кнопку удаления.
             return `<div class="shipment-client-box"><span class="shipment-client-box-code">${escapeHtml(b)}</span>${delBtn}</div>`;

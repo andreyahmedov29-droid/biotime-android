@@ -668,8 +668,10 @@
       </div>
       <div class="route-confirm-actions">
         <button class="mini-btn route-confirm-cancel" id="printCancel" type="button">Отмена</button>
-        <button class="mini-btn route-confirm-ok" id="printConfirm" type="button">Печать этикеток</button>
-        <button class="mini-btn route-confirm-append" id="printAppendBtn" type="button" title="Допечатать дополнительные места, не трогая уже созданные">Допечатать места</button>
+        <!-- Печать с отгрузки скрыта: этикетки печатаются при «Сборке» на складе.
+             В окне «Отгрузка» остаются сканирование погрузки и «Завершить отгрузку». -->
+        <button class="mini-btn route-confirm-ok" id="printConfirm" type="button" hidden>Печать этикеток</button>
+        <button class="mini-btn route-confirm-append" id="printAppendBtn" type="button" hidden title="Допечатать дополнительные места, не трогая уже созданные">Допечатать места</button>
         <button class="mini-btn route-confirm-ok route-confirm-danger" id="printShipmentComplete" type="button">Завершить отгрузку</button>
       </div>
       <div class="print-scan-block">
@@ -697,7 +699,7 @@
   <!-- Допечатка дополнительных мест (отдельное окно): выбор ЛЮБОГО клиента
        маршрута — в т.ч. уже отгруженного/закрытого — и допечатка этикеток.
        Данные сохраняются на сервере при каждом допечатывании (автосохранение). -->
-  <dialog class="modal" id="appendModal">
+  <dialog class="modal" id="appendModal" hidden>
     <div class="account-card">
       <div class="modal-head">
         <h3>Допечатать места</h3>
