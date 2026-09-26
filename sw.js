@@ -10,7 +10,7 @@
 // свежего скрипта ещё не подхвачен → «нажимаю, ничего не происходит».
 // v20: app.js сделан network-first, чтобы свежие фиксы доходили до всех ПК без
 // ручной чистки кэша (и принудительный cache-busting через ?v= в index.html).
-const CACHE = "biotime-v20";
+const CACHE = "biotime-v21";
 const PRECACHE = [
   "./",
   "./index.html",
