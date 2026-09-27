@@ -9944,9 +9944,20 @@
     const login = el.authLogin ? el.authLogin.value.trim() : "";
     const pass = el.authPassword ? el.authPassword.value : "";
     if (!login || !pass) { if (el.authHint) el.authHint.textContent = "Введите логин и пароль"; return; }
-    const j = await apiAuth("POST", "/api/auth/login", { login, password: pass });
-    if (j && j.ok && j.user) { setAuthUserUI(j.user); if (el.authGate) el.authGate.hidden = true; location.reload(); return; }
-    if (el.authHint) el.authHint.textContent = (j && j.error) || "Не удалось войти";
+    let j = null;
+    try { j = await apiAuth("POST", "/api/auth/login", { login, password: pass }); }
+    catch (e) { console.error("[auth] login error:", e); }
+    console.log("[auth] login result:", j);
+    if (j && j.ok && j.user) {
+      toast("Вы вошли — загружаем…");
+      setAuthUserUI(j.user);
+      if (el.authGate) el.authGate.hidden = true;
+      setTimeout(() => location.reload(), 150);
+      return;
+    }
+    const msg = (j && j.error) || "Не удалось войти (проверьте сеть)";
+    if (el.authHint) el.authHint.textContent = msg;
+    toast(msg);
   }
   async function firstLoginFind() {
     const name = el.authName ? el.authName.value.trim() : "";
