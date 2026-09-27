@@ -10199,6 +10199,9 @@
     document.querySelectorAll("dialog[open]").forEach((d) => {
       try { d.close(); } catch { /* ignore */ }
     });
+    // Своя авторизация: выходим из сессии и просим ввести логин/пароль.
+    window.__ownAuthUser = null;
+    if (apiAuth) apiAuth("POST", "/api/auth/logout").catch(() => {});
     // Сбрасываем локальное состояние вошедшего пользователя.
     state.me = null;
     state.isAdmin = false;
@@ -10214,7 +10217,10 @@
       localStorage.removeItem("biotime.todayDraft");
       localStorage.removeItem("biotime_collapsed");
     } catch { /* ignore */ }
-    showAuthScreen();
+    // Вместо экрана «выход через Битрикс» показываем наш вход с запросом
+    // логина и пароля (перед нажатием «Войти»).
+    if (typeof openAuth === "function") openAuth();
+    if (typeof showAuthView === "function") showAuthView("login");
   }
 
   if (el.accountLogout) {
