@@ -641,6 +641,7 @@
     const s = await api("/api/state");
     state.me = s.me;
     state.isAdmin = !!s.me.isAdmin;
+    updateAdminUsersVisibility && updateAdminUsersVisibility();
     state.isModerator = !!s.isModerator;
     state.isDriver = !!s.me.isDriver;
     state.isLoader = !!s.me.isLoader;
@@ -10012,6 +10013,14 @@
     el.settingsModal.appendChild(box);
     const loadBtn = document.getElementById("adminUsersLoad");
     if (loadBtn) loadBtn.addEventListener("click", loadAdminUsers);
+    updateAdminUsersVisibility();
+  }
+  function updateAdminUsersVisibility() {
+    const box = document.getElementById("adminUsersBox");
+    if (!box) return;
+    // Блок виден ТОЛЬКО администраторам — обычные пользователи не видят
+    // новый раздел «Учётные записи» (их права и видимость не меняются).
+    box.style.display = state.isAdmin ? "" : "none";
   }
   async function loadAdminUsers() {
     const list = document.getElementById("adminUsersList");
