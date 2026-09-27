@@ -2819,6 +2819,7 @@ async function handleApi(req, res, urlPath) {
     return sendJson(res, 200, {
       ok: true,
       ownerId: rootAdminId(db),
+      groups: (db.groups || []).map((g) => ({ name: g.name || "Группа", memberIds: (g.memberIds || []).map(String) })),
       users: (db.staff || []).map((s) => ({ id: String(s.id), name: s.name, login: s.login || "", hasCreds: !!s.login })),
     });
   }

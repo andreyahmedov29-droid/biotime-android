@@ -10088,7 +10088,7 @@
     const ownerId = j.ownerId;
     // Главному админу менять учётку может только он сам.
     const meRoot = window.__ownAuthUser && String(window.__ownAuthUser.id) === String(ownerId);
-    const rows = (j.users || []).map((u) => {
+    function rowHtml(u) {
       const isOwner = String(u.id) === String(ownerId);
       const canEdit = isOwner ? !!meRoot : true;
       const name = escapeHtml(u.name) + (isOwner ? ' <span class="acct-owner-badge">главный админ</span>' : "");
@@ -10098,8 +10098,19 @@
         <td><input class="text-input au-pass" type="password" value="" placeholder="${canEdit ? "новый пароль" : "только сам"}" autocomplete="new-password" ${canEdit ? "" : "disabled"} /></td>
         <td><button type="button" class="mini-btn" data-id="${escapeHtml(u.id)}" ${canEdit ? "" : "disabled"}>${isOwner && !canEdit ? "сам" : "Сохранить"}</button></td>
       </tr>`;
-    }).join("");
-    list.innerHTML = `<table class="acct-table"><thead><tr><th>Сотрудник</th><th>Логин</th><th>Пароль</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
+    // Группируем: по группам сотрудников + «Без группы».
+    const groups = (j.groups || []);
+    const ownedSet = new Set(groups.flatMap((g) => (g.memberIds || []).map(String)));
+    const userById = new Map((j.users || []).map((u) => [String(u.id), u]));
+    const byGroup = groups
+      .map((g) => ({ name: g.name || "Группа", members: (g.memberIds || []).map(String).map((id) => userById.get(id)).filter(Boolean) }))
+      .filter((g) => g.members.length);
+    const solo = (j.users || []).filter((u) => !ownedSet.has(String(u.id)));
+    const head = `<table class="acct-table"><thead><tr><th>Сотрудник</th><th>Логин</th><th>Пароль</th><th></th></tr></thead><tbody>`;
+    const grp = (g) => `<tr class="acct-group"><td colspan="4">${escapeHtml(g.name)}<span class="acct-group-count">${g.members.length}</span></td></tr>` + g.members.map(rowHtml).join("");
+    const soloHtml = solo.length ? `<tr class="acct-group"><td colspan="4">Без группы<span class="acct-group-count">${solo.length}</span></td></tr>` + solo.map(rowHtml).join("") : "";
+    list.innerHTML = head + byGroup.map(grp).join("") + soloHtml + `</tbody></table>`;
     (list.querySelectorAll("button[data-id]") || []).forEach((btn) => {
       btn.addEventListener("click", saveAdminUser);
     });
