@@ -9946,7 +9946,10 @@
   }
   function openAuth(forced) {
     if (!el.authGate) return;
-    showAuthView("first"); // первый вход — сразу поле ФИО
+    // На этом устройстве уже проходили первый вход / входили по логину —
+    // сразу предлагаем логин/пароль, а не ввод ФИО.
+    const firstTimeOnDevice = !(function () { try { return localStorage.getItem("biotime_firstlogin_done"); } catch { return ""; } })();
+    showAuthView(firstTimeOnDevice ? "first" : "login");
     el.authGate.hidden = false;
     if (el.authClose) el.authClose.hidden = !!forced;
     if (el.authName) setTimeout(() => { try { el.authName.focus(); } catch {} }, 50);
@@ -9959,9 +9962,10 @@
     try { j = await apiAuth("POST", "/api/auth/login", { login, password: pass }); }
     catch (e) { console.error("[auth] login error:", e); }
     console.log("[auth] login result:", j);
-      if (j && j.ok && j.user) {
-        toast("Вы вошли");
-        window.__ownAuthUser = j.user;
+    if (j && j.ok && j.user) {
+      toast("Вы вошли");
+      try { localStorage.setItem("biotime_firstlogin_done", "1"); } catch {}
+      window.__ownAuthUser = j.user;
         setAuthUserUI(j.user);
         if (el.authGate) el.authGate.hidden = true;
         // Не перезагружаем и не перепроверяем куку — иначе за шлюзом Вайбкода
@@ -10010,6 +10014,7 @@
     if (!authPickId || !login || pass.length < 8) { if (el.authFirstHint) el.authFirstHint.textContent = "Укажите логин и пароль (мин. 8 символов)."; return; }
     const j = await apiAuth("POST", "/api/auth/set-credentials", { userId: authPickId, login, password: pass });
     if (j && j.ok) {
+      try { localStorage.setItem("biotime_firstlogin_done", "1"); } catch {}
       window.__ownAuthUser = { id: authPickId, name: authPickedName || "Пользователь", role: "MEMBER" };
       if (el.authGate) el.authGate.hidden = true;
       toast("Учётные данные сохранены — вы вошли");
