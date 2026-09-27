@@ -9969,8 +9969,10 @@
       setAuthUserUI(j.user);
       if (el.authGate) el.authGate.hidden = true;
       if (el.authClose) el.authClose.hidden = false;
-      // Применим роль/разделы сразу (без переоткрытия): перечитываем состояние.
-      if (typeof loadState === "function") setTimeout(() => { try { loadState(); } catch {} }, 200);
+      // Применяем роль полностью: автоматическая перезагрузка страницы (без неё
+      // вкладки/разделы применяются только при ручном обновлении). Идём на reload,
+      // т.к. шлюз выключен и кука SameSite=None теперь переживает перезагрузку.
+      setTimeout(() => location.reload(), 350);
         return;
     }
     const msg = (j && j.error) || "Не удалось войти (проверьте сеть)";
@@ -10020,7 +10022,7 @@
       toast("Учётные данные сохранены — вы вошли");
       setAuthUserUI(window.__ownAuthUser);
       if (el.authClose) el.authClose.hidden = false;
-      if (typeof loadState === "function") setTimeout(() => { try { loadState(); } catch {} }, 200);
+      setTimeout(() => location.reload(), 350);
       return;
     }
     if (el.authFirstHint) el.authFirstHint.textContent = (j && j.error) || "Не удалось сохранить";
