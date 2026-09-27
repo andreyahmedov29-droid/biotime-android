@@ -539,6 +539,34 @@ class MainActivity : AppCompatActivity() {
             LocationTrackingService.setDriver(this@MainActivity, isDriver)
         }
 
+        // Нативное хранение токена собственной авторизации (логин/пароль).
+        // Куки WebView могут быть очищены системой — токен дублируем в
+        // SharedPreferences, чтобы сессия пережила перезапуск/чистку кук.
+        // Веб зовёт setAuthToken(...) после входа, getAuthToken() при старте.
+        @android.webkit.JavascriptInterface
+        fun setAuthToken(token: String) {
+            try {
+                getSharedPreferences("btime_auth", Context.MODE_PRIVATE)
+                    .edit().putString("auth_token", token ?: "").apply()
+            } catch (_: Exception) { /* не критично */ }
+        }
+
+        @android.webkit.JavascriptInterface
+        fun getAuthToken(): String {
+            return try {
+                getSharedPreferences("btime_auth", Context.MODE_PRIVATE)
+                    .getString("auth_token", "") ?: ""
+            } catch (_: Exception) { "" }
+        }
+
+        @android.webkit.JavascriptInterface
+        fun clearAuthToken() {
+            try {
+                getSharedPreferences("btime_auth", Context.MODE_PRIVATE)
+                    .edit().remove("auth_token").apply()
+            } catch (_: Exception) { /* не критично */ }
+        }
+
         // Нативный дубль офлайн-очереди действий водителя.
         // Веб хранит очередь в WebView localStorage (
         // biotime.offlineOps), но localStorage может быть очищен системой при
