@@ -95,10 +95,10 @@
   <div class="auth-gate" id="authGate" hidden>
     <div class="auth-card">
       <div class="auth-card-head">
-        <h3 id="authTitle">Первый вход</h3>
+        <h3 id="authTitle">Вход</h3>
         <button class="icon-btn modal-close" id="authClose" aria-label="Закрыть">&times;</button>
       </div>
-      <div id="authLoginView" hidden>
+      <div id="authLoginView">
         <div class="drv-route-label">Логин
           <input class="text-input" id="authLogin" type="text" autocomplete="username" spellcheck="false" />
         </div>
@@ -106,31 +106,9 @@
           <input class="text-input" id="authPassword" type="password" autocomplete="current-password" />
         </div>
         <div class="route-confirm-actions">
-          <button class="mini-btn route-confirm-cancel" id="authFirstLink" type="button">Первый вход</button>
           <button class="mini-btn route-confirm-ok" id="authSubmitBtn" type="button">Войти</button>
         </div>
         <div class="auth-hint" id="authHint"></div>
-      </div>
-      <div id="authFirstView">
-        <p class="append-hint">Первый вход: укажите имя и/или фамилию, найдите себя, затем задайте логин и пароль.</p>
-        <div class="drv-route-label">Имя / Фамилия
-          <input class="text-input" id="authName" type="text" autocomplete="name" spellcheck="false" placeholder="Например: Сергей Заводнов" />
-        </div>
-        <div class="route-confirm-actions">
-          <button class="mini-btn route-confirm-cancel" id="authBackLogin" type="button">У меня уже есть логин</button>
-          <button class="mini-btn route-confirm-ok" id="authFindBtn" type="button">Найти</button>
-        </div>
-        <div class="auth-results" id="authResults"></div>
-        <div id="authSetView" hidden>
-          <div class="drv-route-label">Логин
-            <input class="text-input" id="authNewLogin" type="text" autocomplete="username" spellcheck="false" />
-          </div>
-          <div class="drv-route-label">Пароль (мин. 8 символов)
-            <input class="text-input" id="authNewPass" type="password" autocomplete="new-password" />
-          </div>
-          <button class="mini-btn route-confirm-ok" id="authSetBtn" type="button">Сохранить и войти</button>
-        </div>
-        <div class="auth-hint" id="authFirstHint"></div>
       </div>
     </div>
   </div>

@@ -9947,13 +9947,11 @@
   }
   function openAuth(forced) {
     if (!el.authGate) return;
-    // На этом устройстве уже проходили первый вход / входили по логину —
-    // сразу предлагаем логин/пароль, а не ввод ФИО.
-    const firstTimeOnDevice = !(function () { try { return localStorage.getItem("biotime_firstlogin_done"); } catch { return ""; } })();
-    showAuthView(firstTimeOnDevice ? "first" : "login");
+    // Только логин/пароль (первый вход по ФИО убран).
+    showAuthView("login");
     el.authGate.hidden = false;
     if (el.authClose) el.authClose.hidden = !!forced;
-    if (el.authName) setTimeout(() => { try { el.authName.focus(); } catch {} }, 50);
+    if (el.authLogin) setTimeout(() => { try { el.authLogin.focus(); } catch {} }, 50);
   }
   async function doLogin() {
     const login = el.authLogin ? el.authLogin.value.trim() : "";
