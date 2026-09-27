@@ -10052,7 +10052,10 @@
       <h4>Учётные записи (вход по логину/паролю)</h4>
       <button type="button" class="mini-btn" id="adminUsersLoad">Показать сотрудников</button>
       <div id="adminUsersList" class="admin-users-list"></div>`;
-    el.settingsModal.appendChild(box);
+    // Вставляем сразу под вкладки настроек, чтобы блок был виден без прокрутки.
+    const nav = el.settingsModal && el.settingsModal.querySelector("#adminTabs");
+    if (nav && nav.nextSibling) nav.parentNode.insertBefore(box, nav.nextSibling);
+    else el.settingsModal.appendChild(box);
     const loadBtn = document.getElementById("adminUsersLoad");
     if (loadBtn) loadBtn.addEventListener("click", loadAdminUsers);
     updateAdminUsersVisibility();
