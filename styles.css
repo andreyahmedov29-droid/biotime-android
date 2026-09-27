@@ -4209,10 +4209,25 @@ body.hide-over-sum .earned-cell { display: none !important; }
 .admin-user-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 6px 8px; border: 1px solid var(--stroke, rgba(255,255,255,.12)); border-radius: 8px; }
 .admin-user-row .au-name { flex: 1 1 120px; font-size: 13px; }
 .admin-user-row .au-login, .admin-user-row .au-pass { max-width: 150px; color-scheme: light; }
-.auth-gate { position: fixed; inset: 0; z-index: 99999; background: #0c0a1e; display: flex; align-items: center; justify-content: center; padding: 16px; }
+.auth-gate {
+  position: fixed; inset: 0; z-index: 99999; display: flex; align-items: center; justify-content: center; padding: 16px;
+  background:
+    radial-gradient(1100px 520px at 15% -10%, rgba(255,171,56,.10), transparent 60%),
+    radial-gradient(900px 480px at 105% 0%, rgba(152,164,173,.10), transparent 55%),
+    var(--bg);
+}
 .auth-gate[hidden] { display: none !important; }
-.auth-card { width: 100%; max-width: 380px; background: #12102a; border: 1px solid rgba(255,255,255,.14); border-radius: 16px; padding: 20px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
-.auth-card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.auth-card {
+  width: 100%; max-width: 400px;
+  background: var(--panel-solid);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  padding: 22px;
+  box-shadow: var(--shadow-pop);
+  backdrop-filter: blur(var(--blur));
+}
+.auth-card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.auth-card-head h3 { margin: 0; font-family: var(--font-display); font-size: 18px; color: var(--ink); letter-spacing: .3px; }
 /* Читаемость селектора бокса в сборке: всегда светлый фон и тёмный текст,
    чтобы код бокса и счётчик деталей были чётко видны — в том числе при
    фокусе, когда строка выделяется. */

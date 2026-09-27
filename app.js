@@ -9923,8 +9923,11 @@
         return;
       }
       if (el.authBtn) { el.authBtn.hidden = false; el.authBtn.textContent = "Войти"; }
-      // ВНИМАНИЕ: НЕ блокируем приложение экраном логина (authRequired выкл. на время).
-      // Приложение открывается сразу; «Войти» доступно по кнопке в шапке.
+      // Собственная авторизация включена (authRequired) и сессии нет —
+      // блокируем приложение экраном входа (запрос логина/пароля).
+      if (j && j.required) {
+        openAuth(true);
+      }
     } catch { /* без UI не критично */ }
   }
   function showAuthView(view) {
