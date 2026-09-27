@@ -9923,12 +9923,10 @@
         if (el.authGate) el.authGate.hidden = true;
         return;
       }
+      // Сессии нет — НЕавторизованный сразу видит окно «Логин/Пароль»
+      // (висит экраном входа, а не интерфейс с кнопкой «Войти»).
       if (el.authBtn) { el.authBtn.hidden = false; el.authBtn.textContent = "Войти"; }
-      // Собственная авторизация включена (authRequired) и сессии нет —
-      // блокируем приложение экраном входа (запрос логина/пароля).
-      if (j && j.required) {
-        openAuth(true);
-      }
+      openAuth(true);
     } catch { /* без UI не критично */ }
   }
   function showAuthView(view) {
