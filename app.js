@@ -9949,10 +9949,12 @@
     catch (e) { console.error("[auth] login error:", e); }
     console.log("[auth] login result:", j);
     if (j && j.ok && j.user) {
-      toast("Вы вошли — загружаем…");
+      toast("Вы вошли");
       setAuthUserUI(j.user);
       if (el.authGate) el.authGate.hidden = true;
-      setTimeout(() => location.reload(), 150);
+      // Не перезагружаем страницу: иначе за шлюзом Вайбкода сессия/кука может
+      // не подхватиться при релоаде и снова выпадет экран первого входа.
+      setTimeout(() => initAuth(), 50);
       return;
     }
     const msg = (j && j.error) || "Не удалось войти (проверьте сеть)";
@@ -9994,7 +9996,12 @@
     const pass = el.authNewPass ? el.authNewPass.value : "";
     if (!authPickId || !login || pass.length < 8) { if (el.authFirstHint) el.authFirstHint.textContent = "Укажите логин и пароль (мин. 8 символов)."; return; }
     const j = await apiAuth("POST", "/api/auth/set-credentials", { userId: authPickId, login, password: pass });
-    if (j && j.ok) { if (el.authGate) el.authGate.hidden = true; location.reload(); return; }
+    if (j && j.ok) {
+      if (el.authGate) el.authGate.hidden = true;
+      toast("Учётные данные сохранены — вы вошли");
+      setTimeout(() => initAuth(), 50);
+      return;
+    }
     if (el.authFirstHint) el.authFirstHint.textContent = (j && j.error) || "Не удалось сохранить";
   }
   async function doLogout() {
