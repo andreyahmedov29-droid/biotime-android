@@ -9988,6 +9988,48 @@
   if (el.authPassword) el.authPassword.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); doLogin(); } });
   if (el.authName) el.authName.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); firstLoginFind(); } });
   initAuth();
+
+  // ---- Админ: учётные записи сотрудников (логин/пароль) ----
+  function ensureAdminUsersUI() {
+    if (!el.settingsModal || document.getElementById("adminUsersBox")) return;
+    const box = document.createElement("div");
+    box.id = "adminUsersBox";
+    box.innerHTML = `
+      <h4>Учётные записи (вход по логину/паролю)</h4>
+      <button type="button" class="mini-btn" id="adminUsersLoad">Показать сотрудников</button>
+      <div id="adminUsersList" class="admin-users-list"></div>`;
+    el.settingsModal.appendChild(box);
+    const loadBtn = document.getElementById("adminUsersLoad");
+    if (loadBtn) loadBtn.addEventListener("click", loadAdminUsers);
+  }
+  async function loadAdminUsers() {
+    const list = document.getElementById("adminUsersList");
+    if (!list) return;
+    const j = await apiAuth("GET", "/api/admin/users");
+    if (!j || !j.ok) { list.innerHTML = '<div class="empty-hint">Нет доступа к учётным записям (нужен админ).</div>'; return; }
+    list.innerHTML = (j.users || []).map((u) => `
+      <div class="admin-user-row" data-id="${escapeHtml(u.id)}">
+        <span class="au-name">${escapeHtml(u.name)}</span>
+        <input class="select-input au-login" placeholder="логин" value="${escapeHtml(u.login || "")}" />
+        <input class="select-input au-pass" type="password" placeholder="новый пароль" autocomplete="new-password" />
+        <button type="button" class="mini-btn" data-id="${escapeHtml(u.id)}">Сохранить</button>
+      </div>`).join("");
+    (list.querySelectorAll("button[data-id]") || []).forEach((btn) => {
+      btn.addEventListener("click", saveAdminUser);
+    });
+  }
+  async function saveAdminUser() {
+    const row = this.closest && this.closest(".admin-user-row");
+    const id = this.getAttribute("data-id");
+    const login = row ? row.querySelector(".au-login").value.trim() : "";
+    const pass = row ? row.querySelector(".au-pass").value : "";
+    if (!login) { toast("Укажите логин"); return; }
+    if (pass && pass.length < 8) { toast("Пароль не короче 8 символов"); return; }
+    const j = await apiAuth("POST", "/api/admin/users/credentials", { userId: id, login, password: pass });
+    toast((j && j.error) || "Сохранено");
+    if (j && j.ok) loadAdminUsers();
+  }
+  ensureAdminUsersUI();
   if (el.waybillFinishBtn) {
     el.waybillFinishBtn.addEventListener("click", () => {
       closeWaybill();

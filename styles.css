@@ -4205,6 +4205,10 @@ body.hide-over-sum .earned-cell { display: none !important; }
 .waybill-box-detail .wbd-qty { opacity: .7; }
 .auth-hint { margin-top: 10px; font-size: 13px; opacity: .9; }
 .auth-results { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow: auto; }
+.admin-users-list { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; max-height: 50vh; overflow: auto; }
+.admin-user-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 6px 8px; border: 1px solid var(--stroke, rgba(255,255,255,.12)); border-radius: 8px; }
+.admin-user-row .au-name { flex: 1 1 120px; font-size: 13px; }
+.admin-user-row .au-login, .admin-user-row .au-pass { max-width: 150px; color-scheme: light; }
 /* Читаемость селектора бокса в сборке: всегда светлый фон и тёмный текст,
    чтобы код бокса и счётчик деталей были чётко видны — в том числе при
    фокусе, когда строка выделяется. */
