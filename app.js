@@ -9924,6 +9924,26 @@
       return res.json().catch(() => null);
     } catch { return null; }
   }
+  // Нативное хранение токена (APK): куки WebView могут очищаться системой,
+  // поэтому токен собственной авторизации дублируем в SharedPreferences.
+  function nativeGetToken() {
+    if (!window.AndroidBridge || typeof window.AndroidBridge.getAuthToken !== "function") return "";
+    try { return window.AndroidBridge.getAuthToken() || ""; } catch { return ""; }
+  }
+  function nativeSetToken(t) {
+    if (window.AndroidBridge && typeof window.AndroidBridge.setAuthToken === "function") {
+      try { window.AndroidBridge.setAuthToken(String(t || "")); } catch { /* ignore */ }
+    }
+  }
+  function nativeClearToken() {
+    if (window.AndroidBridge && typeof window.AndroidBridge.clearAuthToken === "function") {
+      try { window.AndroidBridge.clearAuthToken(); } catch { /* ignore */ }
+    }
+  }
+  function authCookieFromToken(t) {
+    if (!t || document.cookie.includes("btime_auth=")) return;
+    try { document.cookie = `btime_auth=${t}; Path=/; Max-Age=2592000;`; } catch { /* ignore */ }
+  }
   function setAuthUserUI(u) {
     if (el.authUserName) el.authUserName.textContent = u.name || "Пользователь";
     if (el.authAvatar) el.authAvatar.textContent = (u.name || "П")[0];
@@ -9934,6 +9954,8 @@
   async function initAuth() {
     try {
       const hideBoot = () => { const b = document.getElementById("bootCover"); if (b) b.hidden = true; };
+      // APK: если кука потерялась, восстанавливаем токен из нативного хранилища.
+      authCookieFromToken(nativeGetToken());
       // Уже авторизовались в этой сессии страницы (даже если кука не дожила за
       // шлюзом Вайбкода) — не перепроверяем и не открываем гейт повторно.
       if (window.__ownAuthUser) {
@@ -9989,6 +10011,7 @@
     if (j && j.ok && j.user) {
       toast("Вы вошли");
       try { localStorage.setItem("biotime_firstlogin_done", "1"); } catch {}
+      nativeSetToken(j.token); authCookieFromToken(j.token);
       window.__ownAuthUser = j.user;
       setAuthUserUI(j.user);
       if (el.authGate) el.authGate.hidden = true;
@@ -10041,6 +10064,7 @@
     const j = await apiAuth("POST", "/api/auth/set-credentials", { userId: authPickId, login, password: pass });
     if (j && j.ok) {
       try { localStorage.setItem("biotime_firstlogin_done", "1"); } catch {}
+      nativeSetToken(j.token); authCookieFromToken(j.token);
       window.__ownAuthUser = { id: authPickId, name: authPickedName || "Пользователь", role: "MEMBER" };
       if (el.authGate) el.authGate.hidden = true;
       toast("Учётные данные сохранены — вы вошли");
@@ -10053,6 +10077,7 @@
   }
   async function doLogout() {
     await apiAuth("POST", "/api/auth/logout");
+    nativeClearToken();
     if (el.authGate) el.authGate.hidden = true;
     window.__isOwnLoggedIn = false;
     if (el.authUserChip) el.authUserChip.hidden = true;
@@ -10276,6 +10301,7 @@
     });
     // Своя авторизация: выходим из сессии и просим ввести логин/пароль.
     window.__ownAuthUser = null;
+    if (typeof nativeClearToken === "function") nativeClearToken();
     if (apiAuth) apiAuth("POST", "/api/auth/logout").catch(() => {});
     // Сбрасываем локальное состояние вошедшего пользователя.
     state.me = null;

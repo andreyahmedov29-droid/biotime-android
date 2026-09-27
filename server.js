@@ -2750,8 +2750,9 @@ async function handleApi(req, res, urlPath) {
     const { salt, hash } = hashPassword(pass);
     st.login = login; st.passSalt = salt; st.passHash = hash;
     await persistDb();
-    setAuthCookie(res, createSession(st.id), req);
-    return sendJson(res, 200, { ok: true });
+    const token = createSession(st.id);
+    setAuthCookie(res, token, req);
+    return sendJson(res, 200, { ok: true, token });
   }
   if (urlPath === "/api/auth/login" && method === "POST") {
     const body = await readBody(req);
@@ -2770,9 +2771,10 @@ async function handleApi(req, res, urlPath) {
       return sendJson(res, 401, { error: "Неверный логин или пароль" });
     }
     delete loginRate[ipKey];
-    setAuthCookie(res, createSession(st.id), req);
+    const token = createSession(st.id);
+    setAuthCookie(res, token, req);
     const role = (st.admin === true || st.portalAdmin === true || (db.admins || []).includes(String(st.id))) ? "ADMIN" : "MEMBER";
-    return sendJson(res, 200, { ok: true, user: { id: String(st.id), name: st.name, role } });
+    return sendJson(res, 200, { ok: true, user: { id: String(st.id), name: st.name, role }, token });
   }
   if (urlPath === "/api/auth/logout" && method === "POST") {
     const token = cookieValue(req.headers.cookie || "", AUTH_COOKIE);
