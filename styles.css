@@ -4248,6 +4248,8 @@ body.hide-over-sum .earned-cell { display: none !important; }
     var(--bg);
 }
 .auth-gate[hidden] { display: none !important; }
+.boot-cover { position: fixed; inset: 0; z-index: 99998; background: var(--bg); }
+.boot-cover[hidden] { display: none !important; }
 .auth-card {
   width: 100%; max-width: 400px;
   background: var(--panel-solid);

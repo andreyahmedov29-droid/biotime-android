@@ -9910,23 +9910,27 @@
   }
   async function initAuth() {
     try {
+      const hideBoot = () => { const b = document.getElementById("bootCover"); if (b) b.hidden = true; };
       // Уже авторизовались в этой сессии страницы (даже если кука не дожила за
       // шлюзом Вайбкода) — не перепроверяем и не открываем гейт повторно.
       if (window.__ownAuthUser) {
         setAuthUserUI(window.__ownAuthUser);
         if (el.authGate) el.authGate.hidden = true;
+        hideBoot();
         return;
       }
       const j = await apiAuth("GET", "/api/auth/me");
       if (j && j.ok && j.user) {
         setAuthUserUI(j.user);
         if (el.authGate) el.authGate.hidden = true;
+        hideBoot();
         return;
       }
       // Сессии нет — НЕавторизованный сразу видит окно «Логин/Пароль»
       // (висит экраном входа, а не интерфейс с кнопкой «Войти»).
       if (el.authBtn) { el.authBtn.hidden = false; el.authBtn.textContent = "Войти"; }
       openAuth(true);
+      hideBoot();
     } catch { /* без UI не критично */ }
   }
   function showAuthView(view) {
