@@ -856,6 +856,14 @@ function staffByFio(q) {
   return hits.slice(0, 10).map((h) => ({ id: h.id, name: h.name, hasCreds: !!(staffById(h.id) && staffById(h.id).login) }));
 }
 function staffById(id) { return (db.staff || []).find((s) => String(s.id) === String(id)) || null; }
+// Главный администратор (владелец): его пароль/учётку может менять только он сам.
+// Источники: explicit db.owner; иначе сотрудник с фамилией Ахмедов; иначе первый.
+function rootAdminId(dbData) {
+  if (dbData && dbData.owner != null) return String(dbData.owner);
+  const ah = (dbData && dbData.staff || []).find((s) => /ахмед/i.test(String(s.name || "")));
+  if (ah) return String(ah.id);
+  return "1";
+}
 function cookieValue(cookieHeader, name) {
   if (!cookieHeader) return "";
   for (const part of String(cookieHeader).split(";")) {
@@ -2778,12 +2786,19 @@ async function handleApi(req, res, urlPath) {
     if (!isAdmin(user, db)) return sendJson(res, 403, { error: "forbidden" });
     return sendJson(res, 200, {
       ok: true,
+      ownerId: rootAdminId(db),
       users: (db.staff || []).map((s) => ({ id: String(s.id), name: s.name, login: s.login || "", hasCreds: !!s.login })),
     });
   }
   if (urlPath === "/api/admin/users/credentials" && method === "POST") {
     if (!isAdmin(user, db)) return sendJson(res, 403, { error: "forbidden" });
     const body = await readBody(req);
+    const rootId = rootAdminId(db);
+    // Главному админу учётку может менять только он сам — другие админы нет.
+    const callerRoot = (user && (String(user.staffId || user.id) === rootId));
+    if (String(body && body.userId) === rootId && !callerRoot) {
+      return sendJson(res, 403, { error: "Пароль главного администратора может менять только он сам" });
+    }
     const st = staffById(body.userId);
     if (!st) return sendJson(res, 404, { error: "Пользователь не найден" });
     const login = String(body.login || "").trim();

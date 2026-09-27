@@ -10066,19 +10066,28 @@
     if (!list) return;
     const j = await apiAuth("GET", "/api/admin/users");
     if (!j || !j.ok) { list.innerHTML = '<div class="empty-hint">Нет доступа к учётным записям (нужен админ).</div>'; return; }
-    list.innerHTML = (j.users || []).map((u) => `
-      <div class="admin-user-row" data-id="${escapeHtml(u.id)}">
-        <span class="au-name">${escapeHtml(u.name)}</span>
-        <input class="select-input au-login" placeholder="логин" value="${escapeHtml(u.login || "")}" />
-        <input class="select-input au-pass" type="password" placeholder="новый пароль" autocomplete="new-password" />
-        <button type="button" class="mini-btn" data-id="${escapeHtml(u.id)}">Сохранить</button>
-      </div>`).join("");
+    const ownerId = j.ownerId;
+    // Главному админу менять учётку может только он сам.
+    const meRoot = window.__ownAuthUser && String(window.__ownAuthUser.id) === String(ownerId);
+    const rows = (j.users || []).map((u) => {
+      const isOwner = String(u.id) === String(ownerId);
+      const canEdit = isOwner ? !!meRoot : true;
+      const name = escapeHtml(u.name) + (isOwner ? ' <span class="acct-owner-badge">главный админ</span>' : "");
+      return `<tr data-id="${escapeHtml(u.id)}"${isOwner ? ' class="acct-owner-row"' : ""}>
+        <td class="acct-name">${name}</td>
+        <td><input class="text-input au-login" value="${escapeHtml(u.login || "")}" placeholder="логин" ${canEdit ? "" : "disabled"} /></td>
+        <td><input class="text-input au-pass" type="password" value="" placeholder="${canEdit ? "новый пароль" : "только сам"}" autocomplete="new-password" ${canEdit ? "" : "disabled"} /></td>
+        <td><button type="button" class="mini-btn" data-id="${escapeHtml(u.id)}" ${canEdit ? "" : "disabled"}>${isOwner && !canEdit ? "сам" : "Сохранить"}</button></td>
+      </tr>`;
+    }).join("");
+    list.innerHTML = `<table class="acct-table"><thead><tr><th>Сотрудник</th><th>Логин</th><th>Пароль</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
     (list.querySelectorAll("button[data-id]") || []).forEach((btn) => {
       btn.addEventListener("click", saveAdminUser);
     });
   }
   async function saveAdminUser() {
-    const row = this.closest && this.closest(".admin-user-row");
+    if (this.disabled) return;
+    const row = this.closest && this.closest("tr");
     const id = this.getAttribute("data-id");
     const login = row ? row.querySelector(".au-login").value.trim() : "";
     const pass = row ? row.querySelector(".au-pass").value : "";
