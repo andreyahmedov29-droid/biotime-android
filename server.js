@@ -788,6 +788,108 @@ function isAdmin(user, dbData) {
     isPortalAdmin(user, dbData);
 }
 
+// ================= Password auth (свой логин/пароль, поверх/вместо Вайбкод) =================
+// Хэш пароля — scrypt (node:crypto), соль уникальна на пользователя, сравнение
+// через timingSafeEqual. Пароль НИКОГДА не хранится и не логируется в открытом виде.
+const SCRYPT = { N: 16384, r: 8, p: 1 };
+function hashPassword(pass) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.scryptSync(String(pass), salt, 64).toString("hex");
+  return { salt, hash };
+}
+function verifyPassword(pass, salt, hash) {
+  if (!salt || !hash) return false;
+  try {
+    const calc = crypto.scryptSync(String(pass), salt, 64);
+    const expect = Buffer.from(hash, "hex");
+    return calc.length === expect.length && crypto.timingSafeEqual(calc, expect);
+  } catch { return false; }
+}
+
+// Сессии: токен = randomBytes(32), живёт 30 дней, хранится в /data (персистентно).
+const AUTH_COOKIE = "btime_auth";
+const SESSION_TTL_MS = 30 * 24 * 3600 * 1000;
+const SESSIONS = new Map(); // token -> { staffId, exp }
+function sessionFile() { return path.join(DATA_DIR, "auth-sessions.json"); }
+function sessionToken() { return crypto.randomBytes(32).toString("hex"); }
+function loadSessionsFromDisk() {
+  try {
+    const j = JSON.parse(fs.readFileSync(sessionFile(), "utf8") || "{}");
+    const now = Date.now();
+    for (const k of Object.keys(j)) { if (j[k] && j[k].exp > now) SESSIONS.set(k, j[k]); }
+  } catch { /* нет файла — нет сессий */ }
+}
+function saveSessionsToDisk() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    const tmp = sessionFile() + ".tmp";
+    const o = {};
+    SESSIONS.forEach((v, k) => { o[k] = v; });
+    fs.writeFileSync(tmp, JSON.stringify(o));
+    fs.renameSync(tmp, sessionFile());
+  } catch { /* не критично */ }
+}
+function createSession(staffId) {
+  const token = sessionToken();
+  SESSIONS.set(token, { staffId: String(staffId), exp: Date.now() + SESSION_TTL_MS });
+  saveSessionsToDisk();
+  return token;
+}
+function staffByLogin(login) {
+  const l = String(login || "").trim().toLowerCase();
+  if (!l) return null;
+  return (db.staff || []).find((s) => String(s.login || "").trim().toLowerCase() === l) || null;
+}
+function staffByFio(q) {
+  const stop = new Set(["и", "в", "о", "на", "по", "с", "у", "к", "ср", "гр"]);
+  const toks = (s) => String(s || "").toLowerCase().replace(/[^a-zа-яё\s]/gi, " ").split(/\s+/).map((w) => w.trim()).filter((w) => w.length >= 2 && !stop.has(w));
+  const qt = toks(q);
+  if (!qt.length) return [];
+  const hits = [];
+  for (const s of (db.staff || [])) {
+    const st = toks(s.name);
+    if (!st.length) continue;
+    const hit = st.filter((t) => qt.includes(t)).length;
+    if (hit >= 1) hits.push({ id: String(s.id), name: s.name, hit });
+  }
+  hits.sort((a, b) => b.hit - a.hit);
+  return hits.slice(0, 10).map((h) => ({ id: h.id, name: h.name, hasCreds: !!(staffById(h.id) && staffById(h.id).login) }));
+}
+function staffById(id) { return (db.staff || []).find((s) => String(s.id) === String(id)) || null; }
+function cookieValue(cookieHeader, name) {
+  if (!cookieHeader) return "";
+  for (const part of String(cookieHeader).split(";")) {
+    const eq = part.indexOf("=");
+    if (eq < 0) continue;
+    if (part.slice(0, eq).trim() === name) return decodeURIComponent(part.slice(eq + 1).trim());
+  }
+  return "";
+}
+function sessionUserFromCookie(cookieHeader) {
+  const token = cookieValue(cookieHeader, AUTH_COOKIE);
+  if (!token) return null;
+  const s = SESSIONS.get(token);
+  if (!s) return null;
+  if (s.exp < Date.now()) { SESSIONS.delete(token); saveSessionsToDisk(); return null; }
+  const st = staffById(s.staffId);
+  if (!st) return null;
+  const role = (st.admin === true || st.portalAdmin === true || (db.admins || []).includes(String(st.id))) ? "ADMIN" : "MEMBER";
+  return { id: st.id, name: st.name || "Пользователь", role, staffId: String(st.id) };
+}
+// Простая защита от перебора: до 8 неудач подряд за минуту на связку IP+логин.
+const loginRate = {};
+let sessionsLoaded = false;
+function setAuthCookie(res, token, req) {
+  const secure = /^https$/i.test(String((req && req.headers && req.headers["x-forwarded-proto"]) || ""))
+    ? "; Secure"
+    : "";
+  res.setHeader("Set-Cookie",
+    `${AUTH_COOKIE}=${token}; HttpOnly; Path=/; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}; SameSite=Lax${secure}`);
+}
+function clearAuthCookie(res) {
+  res.setHeader("Set-Cookie", `${AUTH_COOKIE}=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax`);
+}
+
 // ---- Auth for /api/*, returns { ok, user, body } ----
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -2602,12 +2704,94 @@ async function handleApi(req, res, urlPath) {
   if (autoCloseDayEndTimers(Date.now())) {
     void persistDb().catch(() => {});
   }
-  const user = identity(req.headers);
+  if (!sessionsLoaded) { loadSessionsFromDisk(); sessionsLoaded = true; }
   const method = req.method;
+
+  // ---- Своя авторизация (логин/пароль) ----
+  if (urlPath === "/api/auth/find-by-name" && method === "POST") {
+    const body = await readBody(req);
+    return sendJson(res, 200, { ok: true, users: staffByFio(String(body.name || "")) });
+  }
+  if (urlPath === "/api/auth/set-credentials" && method === "POST") {
+    const body = await readBody(req);
+    const st = staffById(body.userId);
+    if (!st) return sendJson(res, 404, { error: "Пользователь не найден" });
+    if (st.login) return sendJson(res, 409, { error: "Учётные данные уже заданы — без перезаписи (обратитесь к администратору)" });
+    const login = String(body.login || "").trim();
+    const pass = String(body.password || "");
+    if (!/^[A-Za-z0-9_.-]{3,32}$/.test(login)) return sendJson(res, 422, { error: "Логин: 3–32 символа (лат., цифры, _ . -)" });
+    if (pass.length < 8) return sendJson(res, 422, { error: "Пароль не короче 8 символов" });
+    if (staffByLogin(login)) return sendJson(res, 409, { error: "Такой логин уже занят" });
+    const { salt, hash } = hashPassword(pass);
+    st.login = login; st.passSalt = salt; st.passHash = hash;
+    await persistDb();
+    setAuthCookie(res, createSession(st.id), req);
+    return sendJson(res, 200, { ok: true });
+  }
+  if (urlPath === "/api/auth/login" && method === "POST") {
+    const body = await readBody(req);
+    const login = String(body.login || "").trim();
+    const pass = String(body.password || "");
+    const ipKey = String((req.socket && req.socket.remoteAddress) || "?") + "|" + login.toLowerCase();
+    const ra = loginRate[ipKey] || {};
+    if (ra.lockUntil && ra.lockUntil > Date.now()) return sendJson(res, 429, { error: "Слишком много попыток — подождите" });
+    const st = staffByLogin(login);
+    const ok = st && verifyPassword(pass, st.passSalt, st.passHash);
+    if (!ok) {
+      const cur = loginRate[ipKey] || { count: 0, lockUntil: 0 };
+      cur.count = (cur.count || 0) + 1;
+      if (cur.count >= 8) { cur.lockUntil = Date.now() + 60 * 1000; cur.count = 0; }
+      loginRate[ipKey] = cur;
+      return sendJson(res, 401, { error: "Неверный логин или пароль" });
+    }
+    delete loginRate[ipKey];
+    setAuthCookie(res, createSession(st.id), req);
+    const role = (st.admin === true || st.portalAdmin === true || (db.admins || []).includes(String(st.id))) ? "ADMIN" : "MEMBER";
+    return sendJson(res, 200, { ok: true, user: { id: String(st.id), name: st.name, role } });
+  }
+  if (urlPath === "/api/auth/logout" && method === "POST") {
+    const token = cookieValue(req.headers.cookie || "", AUTH_COOKIE);
+    if (token) { SESSIONS.delete(token); saveSessionsToDisk(); }
+    clearAuthCookie(res);
+    return sendJson(res, 200, { ok: true });
+  }
+  if (urlPath === "/api/auth/me" && method === "GET") {
+    const su = sessionUserFromCookie(req.headers.cookie || "");
+    return sendJson(res, 200, su ? { ok: true, user: { id: su.id, name: su.name, role: su.role } } : { ok: false, user: null });
+  }
+  const user = sessionUserFromCookie(req.headers.cookie || "") || identity(req.headers);
 
   // Access closed for this user: deny every API call (they were deleted / blocked).
   if (isBlocked(user, db)) {
     return sendJson(res, 403, { error: "access_denied", blocked: true });
+  }
+
+  // ---- Своя авторизация: админ-управление учётками ----
+  if (urlPath === "/api/admin/users" && method === "GET") {
+    if (!isAdmin(user, db)) return sendJson(res, 403, { error: "forbidden" });
+    return sendJson(res, 200, {
+      ok: true,
+      users: (db.staff || []).map((s) => ({ id: String(s.id), name: s.name, login: s.login || "", hasCreds: !!s.login })),
+    });
+  }
+  if (urlPath === "/api/admin/users/credentials" && method === "POST") {
+    if (!isAdmin(user, db)) return sendJson(res, 403, { error: "forbidden" });
+    const body = await readBody(req);
+    const st = staffById(body.userId);
+    if (!st) return sendJson(res, 404, { error: "Пользователь не найден" });
+    const login = String(body.login || "").trim();
+    const pass = String(body.password || "");
+    if (!/^[A-Za-z0-9_.-]{3,32}$/.test(login)) return sendJson(res, 422, { error: "Логин: 3–32 символа (лат., цифры, _ . -)" });
+    const other = staffByLogin(login);
+    if (other && String(other.id) !== String(st.id)) return sendJson(res, 409, { error: "Такой логин уже занят" });
+    if (pass && pass.length < 8) return sendJson(res, 422, { error: "Пароль не короче 8 символов" });
+    st.login = login;
+    if (pass) {
+      const { salt, hash } = hashPassword(pass);
+      st.passSalt = salt; st.passHash = hash;
+    }
+    await persistDb();
+    return sendJson(res, 200, { ok: true });
   }
 
   // ---- GET /api/me ----
