@@ -2718,6 +2718,10 @@ async function handleApi(req, res, urlPath) {
   }
   if (!sessionsLoaded) { loadSessionsFromDisk(); sessionsLoaded = true; }
   const method = req.method;
+  // Личность, под которой пришёл запрос (сессия собственной авторизации > шлюз >
+  // локальный фолбэк). Нужна для защиты «первого входа», чтобы нельзя было
+  // задать логин/пароль за чужого сотрудника.
+  const identUser = sessionUserFromCookie(req.headers.cookie || "") || identity(req.headers);
 
   // ---- Своя авторизация (логин/пароль) ----
   if (urlPath === "/api/auth/find-by-name" && method === "POST") {
@@ -2729,6 +2733,15 @@ async function handleApi(req, res, urlPath) {
     const st = staffById(body.userId);
     if (!st) return sendJson(res, 404, { error: "Пользователь не найден" });
     if (st.login) return sendJson(res, 409, { error: "Учётные данные уже заданы — без перезаписи (обратитесь к администратору)" });
+    // Безопасность: назначать логин/пароль можно только СВОЕЙ учётке, когда
+    // личность надёжно известна (и имя введённого сотрудника совпадает с ней).
+    // На открытом сервере без шлюза (фолбэк «local») достоверной личности нет —
+    // тогда учётку назначает только администратор.
+    const idTrusted = !/^local$/i.test(String(identUser.id));
+    const hasRealName = String(identUser.name || "").trim() !== "" && String(identUser.name || "") !== "Локальный пользователь";
+    if (!idTrusted || !hasRealName || !namesMatch(identUser.name, st.name)) {
+      return sendJson(res, 403, { error: "Логин/пароль сотрудника назначает администратор (Настройки → Учётные записи)" });
+    }
     const login = String(body.login || "").trim();
     const pass = String(body.password || "");
     if (!/^[A-Za-z0-9_.-]{3,32}$/.test(login)) return sendJson(res, 422, { error: "Логин: 3–32 символа (лат., цифры, _ . -)" });
