@@ -1505,6 +1505,7 @@
     authSetBtn: $("authSetBtn"), authFirstHint: $("authFirstHint"),
     authUserChip: $("userChip"), authUserName: $("userName"), authAvatar: $("userAvatar"),
     authGate: $("authGate"),
+    cpBox: $("cpBox"), cpCurrent: $("cpCurrent"), cpNew: $("cpNew"), cpSubmit: $("cpSubmit"), cpHint: $("cpHint"),
     waybillDelBoxList: $("waybillDelBoxList"), waybillDelBoxBtn: $("waybillDelBoxBtn"),
     updateVersionCode: $("updateVersionCode"), updateVersionName: $("updateVersionName"),
     updateApkUrl: $("updateApkUrl"), updateNotes: $("updateNotes"),
@@ -10046,6 +10047,26 @@
   if (el.authName) el.authName.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); firstLoginFind(); } });
   initAuth();
 
+  // ---- Смена собственного пароля ----
+  async function changePassword() {
+    const cur = el.cpCurrent ? el.cpCurrent.value : "";
+    const nw = el.cpNew ? el.cpNew.value : "";
+    const hint = el.cpHint;
+    if (!cur || !nw) { if (hint) hint.textContent = "Введите текущий и новый пароль"; return; }
+    const j = await apiAuth("POST", "/api/auth/change-password", { currentPassword: cur, newPassword: nw });
+    if (j && j.ok) {
+      if (hint) { hint.textContent = "Пароль изменён"; hint.className = "auth-hint ok"; }
+      toast("Пароль изменён");
+      if (el.cpCurrent) el.cpCurrent.value = "";
+      if (el.cpNew) el.cpNew.value = "";
+      return;
+    }
+    if (hint) { hint.textContent = (j && j.error) || "Не удалось изменить пароль"; hint.className = "auth-hint"; }
+    toast((j && j.error) || "Не удалось изменить пароль");
+  }
+  if (el.cpSubmit) el.cpSubmit.addEventListener("click", changePassword);
+  if (el.cpNew) el.cpNew.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); changePassword(); } });
+
   // ---- Админ: учётные записи сотрудников (логин/пароль) ----
   function ensureAdminUsersUI() {
     // Панель «Учётные записи» теперь — вкладка настроек (index.html),
@@ -10161,6 +10182,11 @@
   // ----- Актная запись: показываем, кем сервер видит вошедшего -----
   function openAccountModal() {
     const d = (state.me && state.me.diag) || {};
+    // «Сменить пароль» доступно, только когда вошли под своей учёткой (собственный логин).
+    if (el.cpBox) { el.cpBox.hidden = !window.__ownAuthUser; }
+    if (el.cpCurrent) el.cpCurrent.value = "";
+    if (el.cpNew) el.cpNew.value = "";
+    if (el.cpHint) el.cpHint.textContent = "";
     el.acctName.textContent = state.me ? (state.me.name || "—") : "—";
     el.acctId.textContent = d.id != null ? String(d.id) : "—";
     el.acctIdKind.textContent = d.idKind ? String(d.idKind) : "—";

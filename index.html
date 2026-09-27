@@ -1227,6 +1227,13 @@
           </svg>
           <span>Выйти</span>
         </button>
+        <div class="account-password-box" id="cpBox" hidden>
+          <h4>Сменить пароль</h4>
+          <div class="drv-route-label">Текущий пароль <input class="text-input" id="cpCurrent" type="password" autocomplete="current-password" /></div>
+          <div class="drv-route-label">Новый пароль (мин. 8) <input class="text-input" id="cpNew" type="password" autocomplete="new-password" /></div>
+          <button type="button" class="mini-btn" id="cpSubmit">Сменить пароль</button>
+          <div class="auth-hint" id="cpHint"></div>
+        </div>
       </div>
     </div>
   </dialog>

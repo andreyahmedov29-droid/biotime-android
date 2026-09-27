@@ -2787,6 +2787,22 @@ async function handleApi(req, res, urlPath) {
       ? { ok: true, user: { id: su.id, name: su.name, role: su.role }, required: authRequired }
       : { ok: false, user: null, required: authRequired });
   }
+  if (urlPath === "/api/auth/change-password" && method === "POST") {
+    const su = sessionUserFromCookie(req.headers.cookie || "");
+    if (!su) return sendJson(res, 401, { error: "Не авторизованы" });
+    const st = staffById(su.staffId);
+    if (!st) return sendJson(res, 404, { error: "Пользователь не найден" });
+    const body = await readBody(req);
+    const cur = String(body.currentPassword || "");
+    const nw = String(body.newPassword || "");
+    if (!verifyPassword(cur, st.passSalt, st.passHash)) return sendJson(res, 403, { error: "Текущий пароль неверен" });
+    if (nw.length < 8) return sendJson(res, 422, { error: "Новый пароль не короче 8 символов" });
+    if (nw === cur) return sendJson(res, 422, { error: "Новый пароль совпадает с текущим" });
+    const { salt, hash } = hashPassword(nw);
+    st.passSalt = salt; st.passHash = hash; // перезаписывает (в т.ч. заданный админом)
+    await persistDb();
+    return sendJson(res, 200, { ok: true });
+  }
   const user = sessionUserFromCookie(req.headers.cookie || "") || identity(req.headers);
 
   // Access closed for this user: deny every API call (they were deleted / blocked).
