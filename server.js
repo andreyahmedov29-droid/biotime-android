@@ -883,11 +883,15 @@ function setAuthCookie(res, token, req) {
   const secure = /^https$/i.test(String((req && req.headers && req.headers["x-forwarded-proto"]) || ""))
     ? "; Secure"
     : "";
+  // Вайбкод показывает приложение внутри своего iframe (vibecodeconnector_open_app_frame).
+  // Для cross-site iframe cookies SameSite=Lax НЕ передаются -> сессия «не держится».
+  // За https используем SameSite=None; Secure, чтобы кука работала и во встроенной версии.
+  const samesite = secure ? "None" : "Lax";
   res.setHeader("Set-Cookie",
-    `${AUTH_COOKIE}=${token}; HttpOnly; Path=/; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}; SameSite=Lax${secure}`);
+    `${AUTH_COOKIE}=${token}; HttpOnly; Path=/; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}; SameSite=${samesite}${secure}`);
 }
 function clearAuthCookie(res) {
-  res.setHeader("Set-Cookie", `${AUTH_COOKIE}=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax`);
+  res.setHeader("Set-Cookie", `${AUTH_COOKIE}=; HttpOnly; Path=/; Max-Age=0; SameSite=None; Secure`);
 }
 
 // ---- Auth for /api/*, returns { ok, user, body } ----
