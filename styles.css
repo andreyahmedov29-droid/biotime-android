@@ -4203,6 +4203,8 @@ body.hide-over-sum .earned-cell { display: none !important; }
 .waybill-box-detail .wbd-art { font-family: var(--font-mono); font-weight: 700; }
 .waybill-box-detail .wbd-name { flex: 1 1 auto; opacity: .9; }
 .waybill-box-detail .wbd-qty { opacity: .7; }
+.auth-hint { margin-top: 10px; font-size: 13px; opacity: .9; }
+.auth-results { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow: auto; }
 /* Читаемость селектора бокса в сборке: всегда светлый фон и тёмный текст,
    чтобы код бокса и счётчик деталей были чётко видны — в том числе при
    фокусе, когда строка выделяется. */

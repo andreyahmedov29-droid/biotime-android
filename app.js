@@ -1493,6 +1493,15 @@
     waybillBoxQty: $("waybillBoxQty"),
     boxDetailsModal: $("boxDetailsModal"), boxDetailsList: $("boxDetailsList"),
     boxDetailsTitle: $("boxDetailsTitle"), boxDetailsClose: $("boxDetailsClose"),
+    authBtn: $("authBtn"), authModal: $("authModal"), authClose: $("authClose"),
+    authLogin: $("authLogin"), authPassword: $("authPassword"), authSubmitBtn: $("authSubmitBtn"),
+    authHint: $("authHint"), authTitle: $("authTitle"),
+    authLoginView: $("authLoginView"), authFirstView: $("authFirstView"),
+    authFirstLink: $("authFirstLink"), authBackLogin: $("authBackLogin"),
+    authName: $("authName"), authFindBtn: $("authFindBtn"), authResults: $("authResults"),
+    authSetView: $("authSetView"), authNewLogin: $("authNewLogin"), authNewPass: $("authNewPass"),
+    authSetBtn: $("authSetBtn"), authFirstHint: $("authFirstHint"),
+    authUserChip: $("userChip"), authUserName: $("userName"), authAvatar: $("userAvatar"),
     waybillDelBoxList: $("waybillDelBoxList"), waybillDelBoxBtn: $("waybillDelBoxBtn"),
     updateVersionCode: $("updateVersionCode"), updateVersionName: $("updateVersionName"),
     updateApkUrl: $("updateApkUrl"), updateNotes: $("updateNotes"),
@@ -9872,6 +9881,113 @@
   if (el.waybillDelBoxBtn) el.waybillDelBoxBtn.addEventListener("click", deleteWaybillBox);
   if (el.boxDetailsClose) el.boxDetailsClose.addEventListener("click", () => { try { el.boxDetailsModal.close(); } catch {} });
   if (el.boxDetailsModal) el.boxDetailsModal.addEventListener("click", (ev) => { if (ev.target === el.boxDetailsModal) { try { el.boxDetailsModal.close(); } catch {} } });
+
+  // ---- Своя авторизация: вход/первый вход (фронт) ----
+  let authPickId = null;
+  async function apiAuth(method, url, body) {
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: body ? { "Content-Type": "application/json" } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      return res.json().catch(() => null);
+    } catch { return null; }
+  }
+  function setAuthUserUI(u) {
+    if (el.authUserName) el.authUserName.textContent = u.name || "Пользователь";
+    if (el.authAvatar) el.authAvatar.textContent = (u.name || "П")[0];
+    if (el.authUserChip) el.authUserChip.hidden = false;
+    if (el.authBtn) { el.authBtn.hidden = false; el.authBtn.textContent = "Выйти"; }
+    window.__isOwnLoggedIn = true;
+  }
+  async function initAuth() {
+    try {
+      const j = await apiAuth("GET", "/api/auth/me");
+      if (j && j.ok && j.user) { setAuthUserUI(j.user); return; }
+      if (el.authBtn) { el.authBtn.hidden = false; el.authBtn.textContent = "Войти"; }
+    } catch { /* без UI не критично */ }
+  }
+  function showAuthView(view) {
+    const login = view === "login";
+    if (el.authLoginView) el.authLoginView.hidden = !login;
+    if (el.authFirstView) el.authFirstView.hidden = login;
+    if (el.authTitle) el.authTitle.textContent = login ? "Вход" : "Первый вход";
+    if (el.authHint) el.authHint.textContent = "";
+    if (el.authFirstHint) el.authFirstHint.textContent = "";
+    authPickId = null;
+    if (el.authResults) el.authResults.innerHTML = "";
+    if (el.authSetView) el.authSetView.hidden = true;
+    if (el.authLogin) el.authLogin.value = "";
+    if (el.authPassword) el.authPassword.value = "";
+    if (el.authName) el.authName.value = "";
+  }
+  function openAuth() { if (!el.authModal) return; showAuthView("login"); try { el.authModal.showModal(); } catch { /* уже открыта */ } }
+  async function doLogin() {
+    const login = el.authLogin ? el.authLogin.value.trim() : "";
+    const pass = el.authPassword ? el.authPassword.value : "";
+    if (!login || !pass) { if (el.authHint) el.authHint.textContent = "Введите логин и пароль"; return; }
+    const j = await apiAuth("POST", "/api/auth/login", { login, password: pass });
+    if (j && j.ok && j.user) { setAuthUserUI(j.user); try { el.authModal.close(); } catch {} location.reload(); return; }
+    if (el.authHint) el.authHint.textContent = (j && j.error) || "Не удалось войти";
+  }
+  async function firstLoginFind() {
+    const name = el.authName ? el.authName.value.trim() : "";
+    if (!name) { if (el.authFirstHint) el.authFirstHint.textContent = "Введите имя или фамилию"; return; }
+    const j = await apiAuth("POST", "/api/auth/find-by-name", { name });
+    const list = (j && j.users) || [];
+    if (!el.authResults) return;
+    if (!list.length) { el.authResults.innerHTML = '<div class="empty-hint">Не найдено — проверьте имя/фамилию.</div>'; return; }
+    el.authResults.innerHTML = list.map((u) => `
+      <button type="button" class="mini-btn route-confirm-ok auth-result" data-id="${escapeHtml(u.id)}"
+        data-name="${escapeHtml(u.name)}" data-has="${u.hasCreds ? "1" : "0"}" style="display:block;margin:4px 0;text-align:left">
+        ${escapeHtml(u.name)}${u.hasCreds ? " · уже есть вход" : ""}
+      </button>`).join("");
+    el.authResults.querySelectorAll(".auth-result").forEach((b) => {
+      b.addEventListener("click", () => pickAuthResult(b.dataset.id, b.dataset.name, b.dataset.has === "1"));
+    });
+  }
+  const authTranslit = { "а":"a","б":"b","в":"v","г":"g","д":"d","е":"e","ё":"e","ж":"zh","з":"z","и":"i","й":"y","к":"k","л":"l","м":"m","н":"n","о":"o","п":"p","р":"r","с":"s","т":"t","у":"u","ф":"f","х":"h","ц":"c","ч":"ch","ш":"sh","щ":"sch","ъ":"","ы":"y","ь":"","э":"e","ю":"yu","я":"ya" };
+  function translitLogin(name) {
+    const s = String(name || "").toLowerCase().replace(/[^a-zа-яё\s]/gi, " ");
+    return s.split("").map((ch) => authTranslit[ch] || (ch === " " ? "." : ch)).join("")
+      .replace(/\.+/g, ".").replace(/^\.|\.$/g, "").slice(0, 32) || "user";
+  }
+  function pickAuthResult(id, name, has) {
+    if (has) { if (el.authFirstHint) el.authFirstHint.textContent = "У этого пользователя уже есть вход — используйте «Вход» по логину/паролю."; return; }
+    authPickId = String(id);
+    if (el.authNewLogin) { el.authNewLogin.value = translitLogin(name); }
+    if (el.authNewPass) el.authNewPass.value = "";
+    if (el.authSetView) el.authSetView.hidden = false;
+    if (el.authFirstHint) el.authFirstHint.textContent = "Выбрано: " + name + ". Придумайте логин и пароль (мин. 8 символов).";
+  }
+  async function doSetCreds() {
+    const login = el.authNewLogin ? el.authNewLogin.value.trim() : "";
+    const pass = el.authNewPass ? el.authNewPass.value : "";
+    if (!authPickId || !login || pass.length < 8) { if (el.authFirstHint) el.authFirstHint.textContent = "Укажите логин и пароль (мин. 8 символов)."; return; }
+    const j = await apiAuth("POST", "/api/auth/set-credentials", { userId: authPickId, login, password: pass });
+    if (j && j.ok) { try { el.authModal.close(); } catch {} location.reload(); return; }
+    if (el.authFirstHint) el.authFirstHint.textContent = (j && j.error) || "Не удалось сохранить";
+  }
+  async function doLogout() {
+    await apiAuth("POST", "/api/auth/logout");
+    try { el.authModal.close(); } catch {}
+    window.__isOwnLoggedIn = false;
+    if (el.authUserChip) el.authUserChip.hidden = true;
+    if (el.authBtn) { el.authBtn.hidden = false; el.authBtn.textContent = "Войти"; }
+    location.reload();
+  }
+  if (el.authBtn) el.authBtn.addEventListener("click", () => { if (window.__isOwnLoggedIn) doLogout(); else openAuth(); });
+  if (el.authClose) el.authClose.addEventListener("click", () => { try { el.authModal.close(); } catch {} });
+  if (el.authModal) el.authModal.addEventListener("click", (ev) => { if (ev.target === el.authModal) { try { el.authModal.close(); } catch {} } });
+  if (el.authFirstLink) el.authFirstLink.addEventListener("click", () => showAuthView("first"));
+  if (el.authBackLogin) el.authBackLogin.addEventListener("click", () => showAuthView("login"));
+  if (el.authSubmitBtn) el.authSubmitBtn.addEventListener("click", doLogin);
+  if (el.authFindBtn) el.authFindBtn.addEventListener("click", firstLoginFind);
+  if (el.authSetBtn) el.authSetBtn.addEventListener("click", doSetCreds);
+  if (el.authPassword) el.authPassword.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); doLogin(); } });
+  if (el.authName) el.authName.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); firstLoginFind(); } });
+  initAuth();
   if (el.waybillFinishBtn) {
     el.waybillFinishBtn.addEventListener("click", () => {
       closeWaybill();
