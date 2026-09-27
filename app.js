@@ -10180,8 +10180,9 @@
   // ----- Актная запись: показываем, кем сервер видит вошедшего -----
   function openAccountModal() {
     const d = (state.me && state.me.diag) || {};
-    // «Сменить пароль» доступно, только когда вошли под своей учёткой (собственный логин).
-    if (el.cpBox) { el.cpBox.hidden = !window.__ownAuthUser; }
+    // «Сменить пароль» всегда доступно в личном кабинете (сервер сам определит
+    // аккаунт по текущей личности и проверит, задана ли учётка).
+    if (el.cpBox) { el.cpBox.hidden = false; }
     if (el.cpCurrent) el.cpCurrent.value = "";
     if (el.cpNew) el.cpNew.value = "";
     if (el.cpHint) el.cpHint.textContent = "";

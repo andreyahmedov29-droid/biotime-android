@@ -2788,13 +2788,16 @@ async function handleApi(req, res, urlPath) {
       : { ok: false, user: null, required: authRequired });
   }
   if (urlPath === "/api/auth/change-password" && method === "POST") {
-    const su = sessionUserFromCookie(req.headers.cookie || "");
-    if (!su) return sendJson(res, 401, { error: "Не авторизованы" });
-    const st = staffById(su.staffId);
+    // Учитываем и собственную сессию, и личность шлюза (портал/фолбэк).
+    const su = sessionUserFromCookie(req.headers.cookie || "") || identity(req.headers);
+    if (!su || !su.id) return sendJson(res, 401, { error: "Не авторизованы" });
+    let st = su.staffId ? staffById(su.staffId) : null;
+    if (!st) st = staffById(su.id) || (db.staff || []).find((s) => namesMatch(su.name, s.name)) || null;
     if (!st) return sendJson(res, 404, { error: "Пользователь не найден" });
     const body = await readBody(req);
     const cur = String(body.currentPassword || "");
     const nw = String(body.newPassword || "");
+    if (!st.passHash || !st.passSalt) return sendJson(res, 409, { error: "Учётка ещё не задана — обратитесь к администратору" });
     if (!verifyPassword(cur, st.passSalt, st.passHash)) return sendJson(res, 403, { error: "Текущий пароль неверен" });
     if (nw.length < 8) return sendJson(res, 422, { error: "Новый пароль не короче 8 символов" });
     if (nw === cur) return sendJson(res, 422, { error: "Новый пароль совпадает с текущим" });
