@@ -5,31 +5,6 @@
    focus-состояния, плавные переходы, аккуратный адаптив.
    ========================================================================== */
 
-/* Режим для слабых устройств (ТСД/Android-WebView, класс low-motion на <html>):
-   отключаем тяжёлые CSS-переходы и анимации. При частых перерисовках интерфейса
-   (опросы каждые 5–10 с, секундные таймеры) это сильно снижает нагрузку на CPU. */
-html.low-motion *,
-html.low-motion *::before,
-html.low-motion *::after {
-  transition: none !important;
-  animation: none !important;
-  /* Тяжёлые фильтры (размытия) перерисовывают всё при прокрутке — на слабом
-     устройстве отключаем их полностью. */
-  filter: none !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-  box-shadow: none !important;
-}
-
-/* На слабых устройствах не размечаем и не отрисовываем элементы списков вне
-   экрана во время прокрутки — это заметно ускоряет прокрутку длинных списков. */
-html.low-motion .waybill-item,
-html.low-motion .shipment-client,
-html.low-motion .rms-stop {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 52px;
-}
-
 :root {
   /* Палитра */
   --bg: #08090d;
@@ -4182,35 +4157,9 @@ body.hide-over-sum .earned-cell { display: none !important; }
 .waybill-box-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; flex: 0 0 auto; }
 .waybill-box-cur { font-size: 13px; font-weight: 800; color: var(--green-soft); padding: 6px 10px; border: 1px solid rgba(76,175,125,.4); border-radius: 8px; }
 .waybill-box-row .ctrl.active { border-color: var(--green-soft); color: var(--green-soft); }
-.waybill-multi-row { flex-wrap: nowrap; }
-.waybill-multi-label { font-size: 13px; opacity: .9; white-space: nowrap; }
-.waybill-multi-input { max-width: 76px; font-weight: 700; }
-.waybill-qty-field { display: flex; flex-direction: column; gap: 2px; }
-.waybill-qty-label { font-size: 12px; opacity: .85; white-space: nowrap; }
-.waybill-qty-input { max-width: 72px; }
 .waybill-mark box { color: var(--green-soft); }
 .waybill-del-box-row { display: flex; gap: 8px; align-items: center; flex: 0 0 auto; }
 .waybill-del-box-row .select-input { flex: 1 1 auto; }
-.waybill-del-box-list { display: flex; flex-direction: column; gap: 4px; flex: 1 1 auto; max-height: 180px; overflow: auto; }
-.waybill-del-box-item { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border: 1px solid var(--stroke, rgba(255,255,255,.12)); border-radius: 8px; cursor: pointer; font-size: 13px; }
-.waybill-del-box-item .waybill-del-box-code { font-family: var(--font-mono); font-weight: 700; }
-.waybill-del-box-item .waybill-del-box-note { opacity: .7; }
-.waybill-del-box-item.is-locked { opacity: .6; cursor: not-allowed; }
-.waybill-del-box-item input:disabled { cursor: not-allowed; }
-.waybill-del-box-item.has-content { cursor: pointer; }
-.waybill-box-details { display: flex; flex-direction: column; gap: 6px; max-height: 60vh; overflow: auto; }
-.waybill-box-detail { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border: 1px solid var(--stroke, rgba(255,255,255,.12)); border-radius: 8px; font-size: 13px; }
-.waybill-box-detail .wbd-art { font-family: var(--font-mono); font-weight: 700; }
-.waybill-box-detail .wbd-name { flex: 1 1 auto; opacity: .9; }
-.waybill-box-detail .wbd-qty { opacity: .7; }
-.auth-hint { margin-top: 10px; font-size: 13px; opacity: .9; }
-.auth-results { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow: auto; }
-.admin-users-list { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; max-height: 50vh; overflow: auto; }
-.admin-user-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 6px 8px; border: 1px solid var(--stroke, rgba(255,255,255,.12)); border-radius: 8px; }
-.admin-user-row .au-name { flex: 1 1 120px; font-size: 13px; }
-.admin-user-row .au-login, .admin-user-row .au-pass { max-width: 150px; color-scheme: light; }
-.auth-gate { position: fixed; inset: 0; z-index: 99999; background: rgba(3,0,34,.92); display: flex; align-items: center; justify-content: center; }
-.auth-gate-note { font-size: 15px; opacity: .85; }
 /* Читаемость селектора бокса в сборке: всегда светлый фон и тёмный текст,
    чтобы код бокса и счётчик деталей были чётко видны — в том числе при
    фокусе, когда строка выделяется. */
@@ -4251,10 +4200,6 @@ body.hide-over-sum .earned-cell { display: none !important; }
   color: rgba(255, 90, 90, 0.8); font-size: 14px; line-height: 1; padding: 2px 6px; border-radius: 6px;
 }
 .shipment-del-box:hover { background: rgba(255, 90, 90, 0.12); color: #ff6b6b; }
-.rms-waybill-boxes { display: flex; flex-direction: column; gap: 5px; margin: 6px 0; }
-.rms-waybill-box { display: flex; gap: 8px; align-items: center; font-size: 12px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 9px; background: rgba(76,175,125,.08); }
-.rms-waybill-box-code { font-weight: 800; color: var(--green-soft); font-family: monospace; white-space: nowrap; }
-.rms-waybill-box-items { color: var(--ink); font-size: 11.5px; min-width: 0; }
 
 /* ---- Накладные в форме создания маршрута (диспетчер) ---- */
 .drv-route-waybills { margin-top: 14px; }

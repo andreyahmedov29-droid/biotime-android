@@ -1,17 +1,6 @@
 (() => {
   "use strict";
 
-  // Слабый WebView/ТСД (APK на Android): включаем режим low-motion — отключаем
-  // тяжёлые CSS-переходы и анимации. При частых перерисовках (опросы каждые
-  // 5–10 с, секундные таймеры) это заметно снижает нагрузку на слабый CPU.
-  try {
-    const ua = (typeof navigator !== "undefined" && navigator.userAgent) || "";
-    if (typeof window !== "undefined" &&
-        (window.AndroidBridge || /Android/i.test(ua))) {
-      document.documentElement.classList.add("low-motion");
-    }
-  } catch (_) { /* не критично */ }
-
   // UI-only preference keeps living in localStorage (per browser). Everything else is server-side.
   const COLLAPSE_KEY = "biotime.collapsed";
   const FINISH_KEY = "biotime.finishKey";
@@ -1132,21 +1121,6 @@
     return null;
   }
 
-  // ------------- Боксы: человекочитаемое отображение -------------
-  // В интерфейсе и на стикере показываем «Бокс N» (N — номер из кода этикетки,
-  // последний сегмент «...-N»). Настоящий «кракозябристый» код при этом хранится в
-  // QR и используется при сканировании. Если номер выделить не получается —
-  // показываем сам код как есть.
-  function waybillBoxNumber(box) {
-    const s = String(box == null ? "" : box).trim();
-    const m = /\-(\d+)$/.exec(s);
-    return m ? m[1] : "";
-  }
-  function waybillBoxName(box) {
-    const n = waybillBoxNumber(box);
-    return n ? "Бокс " + n : (String(box == null ? "" : box) || "");
-  }
-
   // ------------- Formatting -------------
   function fmtMs(ms, withHours = true) {
     const sign = ms < 0 ? "−" : "";
@@ -1490,20 +1464,7 @@
     waybillScanBtn: $("waybillScanBtn"), waybillList: $("waybillList"),
     waybillFinishBtn: $("waybillFinishBtn"),
     waybillBoxCur: $("waybillBoxCur"), waybillNewBoxBtn: $("waybillNewBoxBtn"),
-    waybillBoxQty: $("waybillBoxQty"),
-    boxDetailsModal: $("boxDetailsModal"), boxDetailsList: $("boxDetailsList"),
-    boxDetailsTitle: $("boxDetailsTitle"), boxDetailsClose: $("boxDetailsClose"),
-    authBtn: $("authBtn"), authModal: $("authModal"), authClose: $("authClose"),
-    authLogin: $("authLogin"), authPassword: $("authPassword"), authSubmitBtn: $("authSubmitBtn"),
-    authHint: $("authHint"), authTitle: $("authTitle"),
-    authLoginView: $("authLoginView"), authFirstView: $("authFirstView"),
-    authFirstLink: $("authFirstLink"), authBackLogin: $("authBackLogin"),
-    authName: $("authName"), authFindBtn: $("authFindBtn"), authResults: $("authResults"),
-    authSetView: $("authSetView"), authNewLogin: $("authNewLogin"), authNewPass: $("authNewPass"),
-    authSetBtn: $("authSetBtn"), authFirstHint: $("authFirstHint"),
-    authUserChip: $("userChip"), authUserName: $("userName"), authAvatar: $("userAvatar"),
-    authGate: $("authGate"),
-    waybillDelBoxList: $("waybillDelBoxList"), waybillDelBoxBtn: $("waybillDelBoxBtn"),
+    waybillDelBoxSel: $("waybillDelBoxSel"), waybillDelBoxBtn: $("waybillDelBoxBtn"),
     updateVersionCode: $("updateVersionCode"), updateVersionName: $("updateVersionName"),
     updateApkUrl: $("updateApkUrl"), updateNotes: $("updateNotes"),
     backupExportBtn: $("backupExportBtn"), backupAppBtn: $("backupAppBtn"), backupImportFile: $("backupImportFile"), backupStatus: $("backupStatus"),
@@ -2469,8 +2430,7 @@
 
   // Расчёт зарплаты одного сотрудника за месяц (year, m0) с автокомпенсацией.
   function employeeSalaryCalc(staffId, year, m0) {
-    // Норма рабочего дня — 8 ч (обед 1 ч в оплачиваемую норму НЕ входит).
-    const normDayMs = RATE_BASE_HOURS * 3600000;
+    const normDayMs = state.norm * 3600000;
     const daysInMonth = new Date(year, m0 + 1, 0).getDate();
     const bizDays = businessDaysInMonth(year, m0);
     // Месячная норма для автокомпенсации = рабочие дни × 8 ч рабочего времени.
@@ -2498,8 +2458,9 @@
       // Выходной день: если таймер был запущен и завершён (есть закрытый сегмент)
       // — ставим явку независимо от часов и ВЕСЬ интервал пишем в подработку.
       if (!isBiz && hasTimer) {
+        totalWorkMs += closedReal;
         totalOverMs += closedReal;
-        rows.push({ day: d, date: new Date(year, m0, d), work: 0, over: closedReal });
+        rows.push({ day: d, date: new Date(year, m0, d), work: closedReal, over: closedReal });
         continue;
       }
       // Приоритет: есть таймер → используем его (ручная явка игнорируется).
@@ -2508,13 +2469,11 @@
       const work = hasTimer ? reportDayWorkMs(staffId, key)
         : (st === "Я" || isPaidIdle ? RATE_BASE_HOURS * 3600000 : 0);
       if (work <= 0) continue;
-      // Переработка дня = рабочее время сверх 8 ч нормы.
-      const over = hasTimer ? Math.max(0, work - normDayMs) : 0;
-      // «Факт» (Отработано) = базовая норма до 8 ч, БЕЗ переработки.
-      totalWorkMs += Math.min(work, normDayMs);
+      const over = hasTimer ? Math.max(0, closedReal - normDayMs) : 0;
+      totalWorkMs += work;
       if (over > 0) totalOverMs += over;
       if (isPaidIdle && !hasTimer) { paidIdleDays += 1; paidIdleMs += work; }
-      rows.push({ day: d, date: new Date(year, m0, d), work: Math.min(work, normDayMs), over, st: isPaidIdle ? st : undefined });
+      rows.push({ day: d, date: new Date(year, m0, d), work, over, st: isPaidIdle ? st : undefined });
     }
     const deficitMs = Math.max(0, normMonthMs - totalWorkMs);
     // Автокомпенсация применяется ТОЛЬКО после завершения месяца: пока месяц
@@ -4053,28 +4012,22 @@
         if (boxOrder.length) {
           boxesHtml = `<div class="shipment-client-boxes">` + boxOrder.map((b) => {
             const dets = byBox[b];
-            // Удаление бокса из отгрузки: бокс С деталями удалить нельзя (кнопка
-            // неактивна) — можно удалять только пустые боксы.
-            const hasDetails = dets.length > 0;
-            const delBtn = hasDetails
-              ? `<button type="button" class="shipment-del-box" disabled title="Бокс содержит детали — удалить нельзя">✕</button>`
-              : `<button type="button" class="shipment-del-box" title="Удалить бокс"
-                  data-shipment-delbox="${escapeHtml(r.id)}:${ci}:${escapeHtml(b)}">✕</button>`;
-            // Собранные детали внутри бокса в отгрузке не показываем — только код
-            // бокса и (для склада) кнопку удаления.
-            return `<div class="shipment-client-box"><span class="shipment-client-box-code">${escapeHtml(b)}</span>${delBtn}</div>`;
+            // Удаление бокса из отгрузки — та же защита, что в сборке: бокс с
+            // деталями удалить нельзя (сервер вернёт отказ).
+            const delBtn = `<button type="button" class="shipment-del-box" title="Удалить бокс"
+              data-shipment-delbox="${escapeHtml(r.id)}:${ci}:${escapeHtml(b)}">✕</button>`;
+            return `<div class="shipment-client-box"><span class="shipment-client-box-code">${escapeHtml(b)}</span><span class="shipment-client-box-items">${dets.map((it) => escapeHtml(it.art)).join(", ")}</span>${delBtn}</div>`;
           }).join("") + `</div>`;
         }
         const wbBtn = waybillOn
           ? `<button type="button" class="ctrl ctrl-soft shipment-waybill-btn" data-waybill-open="${escapeHtml(r.id)}:${ci}">Сборка</button>`
           : "";
-        // В отгрузке у клиента показываем только кнопку «Сборка» — список боксов
-        // и крестики удаления скрыты (состав боксов см. в окне сборки).
         return `
           <div class="shipment-client shipment-client-center">
             <span class="shipment-client-name">${escapeHtml(members ? (c.bundleName || c.address || c.client || "Связка") : (c.client || "—"))}</span>
             ${members ? `<span class="shipment-client-sub">${members.map((m) => escapeHtml(m.client)).join(", ")}</span>` : ""}
             ${(Number(c.loadedCount) || 0) > 0 ? `<span class="shipment-client-count">Мест: ${Number(c.loadedCount) || 0}</span>` : ""}
+            ${boxesHtml}
             ${wbBtn}
           </div>
         `;
@@ -4101,10 +4054,10 @@
           ? `<button type="button" class="ctrl ctrl-primary" data-shipment-start="${escapeHtml(r.id)}">Начать отгрузку</button>`
           : `<button type="button" class="ctrl" disabled title="Сначала загрузите расходную накладную">Начать отгрузку</button>`;
       }
-      // «Печать этикеток» в отгрузке доступна всегда, пока отгрузка идёт и не
-      // завершена: склад печатает стикеры из браузера или десктопа напрямую (так
-      // работало до того, как печать боксов появилась в «Сборке»).
-      const printBtn = (shipStarted && !shipDone)
+      // Боксы печатаются при сборке («Новый бокс»), поэтому в отгрузке кнопка
+      // «Печать этикеток» не нужна (если накладные/сборка включены) — этикетки
+      // уже напечатаны, а в отгрузке их остаётся только отсканировать.
+      const printBtn = (shipStarted && !shipDone && !waybillOn)
         ? `<button type="button" class="ctrl ctrl-soft" data-shipment-print="${escapeHtml(r.id)}">Печать этикеток</button>`
         : "";
       // Идущую отгрузку (склад уже работает с маршрутом) свернуть нельзя —
@@ -4184,7 +4137,6 @@
           waybillLocal = { items: fresh.items.map((x) => Object.assign({}, x)) };
           renderWaybill();
         }
-        renderWaybillDelBox(); // боксы тоже актуализируем — новый бокс виден без перезахода
       } catch { /* сеть в моменте недоступна — пропускаем такт */ }
     }, 2500);
   }
@@ -4199,7 +4151,7 @@
   let waybillPendingArt = ""; // деталь, ожидающая свой бокс (скан: деталь → «МЕСТО» → бокс)
   function setWaybillBox(box) {
     waybillBox = String(box || "").trim();
-    if (el.waybillBoxCur) el.waybillBoxCur.textContent = waybillBox ? `Бокс: ${waybillBoxNumber(waybillBox)}` : "Бокс: —";
+    if (el.waybillBoxCur) el.waybillBoxCur.textContent = waybillBox ? `Бокс: ${waybillBox}` : "Бокс: —";
     if (el.waybillArtInput) el.waybillArtInput.value = "";
     setWaybillStatus(waybillBox ? `Бокс выбран: ${waybillBox} — можно сканировать детали` : "Выберите бокс");
     if (el.waybillNewBoxBtn) el.waybillNewBoxBtn.classList.toggle("active", !waybillBox);
@@ -4210,36 +4162,21 @@
     // «Отгрузка»: настраиваем печать и печатаем 1 место (append). Стикер «вылезает»
     // прямо из окна сборки — сборщику остаётся отсканировать его код.
     setWaybillBox("");
-    // Новый бокс начинает новый цикл: сбрасываем ожидающую деталь, чтобы следующий
-    // скан детали шёл как «МЕСТО», а не как бокс.
-    waybillPendingArt = "";
     if (waybillRouteId) {
       printRouteId = waybillRouteId;
       printClientIndex = waybillClientIdx;
-      // Кол-во для «Нового бокса»: по умолчанию 1, можно ввести сколько угодно
-      // стикеров (печать нескольких боксов за раз). Ограничено 1..200.
-      const multiQty = Math.max(1, Math.min(200, Number(el.waybillBoxQty && el.waybillBoxQty.value) || 1));
-      if (el.waybillBoxQty) el.waybillBoxQty.value = String(multiQty);
-      if (el.printPlacesQty) el.printPlacesQty.value = String(multiQty);
+      if (el.printPlacesQty) el.printPlacesQty.value = "1";
       waybillPrinting = true;
       doPrintLabels(false);
     }
-    // На ТСД печать не делаем (стикер — с ПК), поэтому и сообщение честное.
-    const multiQty = Math.max(1, Number(el.waybillBoxQty && el.waybillBoxQty.value) || 1);
-    setWaybillStatus(canPrintHere()
-      ? (`Новых боксов напечатано: ${multiQty} — отсканируйте их (код BG…)`)
-      : (`Создано боксов: ${multiQty} — распечатайте стикеры с ПК, затем отсканируйте их`));
-    playScanFeedback(true, "Новый бокс");
+    setWaybillStatus("Новый бокс напечатан — отсканируйте его (код BG…)");
     renderWaybillDelBox();
-    // Этикетка нового бокса создаётся на сервере асинхронно (печать); когда она
-    // появится — сразу отображаем её в списке боксов, без перезахода в сборку.
-    setTimeout(() => { try { renderWaybillDelBox(); } catch { /* ignore */ } }, 350);
     focusWaybillScan();
   }
-  // Список созданных боксов для удаления (чекбоксы; боксы с деталями недоступны).
+  // Список созданных боксов для удаления (заполняет select).
   async function renderWaybillDelBox() {
-    const boxList = el.waybillDelBoxList;
-    if (!boxList) return;
+    const sel = el.waybillDelBoxSel;
+    if (!sel) return;
     let boxes = [];
     if (waybillRouteId) {
       try {
@@ -4247,76 +4184,31 @@
         boxes = (r && r.boxes) || [];
       } catch { boxes = []; }
     }
-    if (!boxes.length) {
-      boxList.innerHTML = '<span class="empty-hint">Боксов нет</span>';
-      return;
-    }
-    // Сохраняем отмеченные боксы перед перерисовкой (список часто обновляется
-    // после сканов/отгрузки), чтобы галочки не «слетали» при ре-рендере.
-    const checkedBefore = new Set(
-      Array.from(boxList.querySelectorAll(".waybill-del-box-check:checked")).map((c) => c.value)
-    );
-    boxList.innerHTML = boxes.map((b) => {
-      const hasDetails = Number(b.details) > 0;
-      const code = String(b.box || "");
-      const name = escapeHtml(waybillBoxName(code));
-      return `<div class="waybill-del-box-item${hasDetails ? " is-locked has-content" : ""}"${hasDetails ? ` data-box-open="${escapeHtml(code)}"` : ""} title="${hasDetails ? "Нажмите, чтобы посмотреть содержимое (удалить нельзя)" : name}">
-        <input type="checkbox" class="waybill-del-box-check" value="${escapeHtml(code)}" ${hasDetails ? "disabled" : ""}>
-        <span class="waybill-del-box-code">${name}</span>
-        ${hasDetails ? `<span class="waybill-del-box-note">· с деталями</span>` : ""}
-      </div>`;
-    }).join("");
-    // Возвращаем отметки ранее отмеченным боксам (кроме ставших «с деталями»).
-    boxList.querySelectorAll(".waybill-del-box-check").forEach((cb) => {
-      if (checkedBefore.has(cb.value)) cb.checked = true;
-    });
-    // Клик по боксу с деталями — открываем модалку с его содержимым.
-    boxList.querySelectorAll("[data-box-open]").forEach((it) => {
-      it.addEventListener("click", (ev) => {
-        ev.preventDefault();
-        openBoxDetails(it.getAttribute("data-box-open"));
-      });
-    });
-  }
-  // Модалка «содержимое бокса»: показывает детали, привязанные к боксу.
-  function openBoxDetails(box) {
-    const items = (waybillLocal && waybillLocal.items ? waybillLocal.items : [])
-      .filter((it) => String(it.box) === String(box));
-    if (!el.boxDetailsList || !el.boxDetailsModal) return;
-    if (el.boxDetailsTitle) el.boxDetailsTitle.textContent = "Содержимое бокса · " + waybillBoxNumber(box);
-    el.boxDetailsList.innerHTML = items.length
-      ? items.map((it) => `
-          <div class="waybill-box-detail">
-            <span class="wbd-art">${escapeHtml(it.art)}</span>
-            <span class="wbd-name">${escapeHtml(it.name || "")}</span>
-            <span class="wbd-qty">${Number(it.scanned) || 0}/${Number(it.qty) || 0}</span>
-          </div>`).join("")
-      : '<div class="empty-hint">В боксе нет деталей</div>';
-    try { el.boxDetailsModal.showModal(); } catch (_) { /* уже открыта */ }
+    const prev = sel.value;
+    sel.innerHTML = boxes.length
+      ? `<option value="">— выберите бокс —</option>` + boxes.map((b) => `<option value="${escapeHtml(b.box)}">${escapeHtml(b.box)} (дет.: ${b.details})</option>`).join("")
+      : `<option value="">Боксов нет</option>`;
+    if (prev && boxes.some((b) => b.box === prev)) sel.value = prev;
   }
   async function deleteWaybillBox() {
-    const boxList = el.waybillDelBoxList;
-    const checks = boxList ? Array.from(boxList.querySelectorAll(".waybill-del-box-check:checked")) : [];
-    const boxes = checks.map((c) => c.value).filter(Boolean);
-    if (!boxes.length) { setWaybillStatus("Отметьте боксы для удаления"); return; }
-    let ok = 0, blocked = 0, failed = 0;
-    for (const box of boxes) {
-      try {
-        const r = await api(`/api/routes/${encodeURIComponent(waybillRouteId)}/waybill/box/delete`, {
-          method: "POST",
-          body: JSON.stringify({ clientIndex: waybillClientIdx, box }),
-        });
-        if (r && r.ok) ok += 1;
-        else if (r && !r.ok && /детал|переразмест/i.test((r.error || ""))) blocked += 1;
-        else failed += 1;
-      } catch (e) { blocked += 1; }
+    const box = el.waybillDelBoxSel ? el.waybillDelBoxSel.value : "";
+    if (!box) { setWaybillStatus("Выберите бокс для удаления"); return; }
+    try {
+      const r = await api(`/api/routes/${encodeURIComponent(waybillRouteId)}/waybill/box/delete`, {
+        method: "POST",
+        body: JSON.stringify({ clientIndex: waybillClientIdx, box }),
+      });
+      if (r && r.ok) {
+        setWaybillStatus(`Бокс ${box} удалён`);
+        renderWaybillDelBox();
+        renderWaybill();
+        loadShipments();
+      } else {
+        setWaybillStatus((r && r.error) || "Не удалось удалить бокс");
+      }
+    } catch (e) {
+      setWaybillStatus((e && e.message) || "В боксе деталь — переразместите в другой бокс");
     }
-    if (ok) setWaybillStatus(`Удалено боксов: ${ok}`);
-    else if (blocked) setWaybillStatus("Боксы с деталями удалить нельзя");
-    else if (failed) setWaybillStatus("Не удалось удалить выбранные боксы");
-    renderWaybillDelBox();
-    renderWaybill();
-    loadShipments();
     focusWaybillScan();
   }
   function waybillGet() {
@@ -4500,79 +4392,41 @@
     if (waybillPendingArt) {
       // Шаг 2: отсканирован бокс (ожидалась деталь). Привязываем её к этому боксу.
       // Успех = «ХОРОШО», ошибка привязки = «ПЛОХО».
-      // Если отсканированный код — на самом деле деталь из накладной (а не бокс),
-      // не превращаем её в бокс и не добавляем: это ошибка. Сначала — настоящий бокс.
-      const isAnArt = (waybillLocal.items || []).some((it) => String(it.art) === val);
-      if (isAnArt) {
-        setWaybillStatus("ПЛОХО · " + val + " — это деталь, а не бокс. Отсканируйте бокс");
-        playScanFeedback(false);
-        if (el.waybillArtInput) el.waybillArtInput.value = "";
-        focusWaybillScan();
-        return;
-      }
-      // Защита: код бокса должен быть реальной этикеткой места (BG<routeId>-…),
-      // а не случайным кодом/артикулом — иначе деталь не должна привязываться.
-      if (!String(val).startsWith("BG" + waybillRouteId + "-")) {
-        setWaybillStatus("ПЛОХО · " + val + " — это не код бокса. Отсканируйте настоящий бокс");
-        playScanFeedback(false);
-        if (el.waybillArtInput) el.waybillArtInput.value = "";
-        focusWaybillScan();
-        return;
-      }
       const art = waybillPendingArt;
       const scanQty = Math.max(1, Number(el.waybillQtyInput && el.waybillQtyInput.value) || 1);
       setWaybillBox(val);
-      // Мгновенный отклик: зеленим строку и озвучиваем «Хорошо» СРАЗУ при скане,
-      // не дожидаясь ответа сервера (портальный /waybill/scan может идти секунды).
-      waybillPendingArt = "";
-      const it0 = waybillLocal.items.find((x) => String(x.art) === art && (Number(x.scanned) || 0) < (Number(x.qty) || 0) && !x.missing);
-      const remBefore = it0 ? Math.max(0, (Number(it0.qty) || 0) - (Number(it0.scanned) || 0)) : 0;
-      if (it0) {
-        it0.scanned = Math.min(Number(it0.scanned || 0) + scanQty, Number(it0.qty) || 1);
-        it0.box = val;
-      }
-      // Предупреждение при переборе: оператор ввёл больше, чем осталось — счёт
-      // обрежется по остатку (счёт не меняем, просто сообщаем о сокращении).
-      const clamped = remBefore > 0 && scanQty > remBefore;
-      renderWaybill();
-      playScanFeedback(true, "Хорошо");
-      setWaybillStatus(clamped
-        ? `ХОРОШО · ${art} → бокс ${val} · оставалось ${remBefore} — засчитано ${remBefore}`
-        : `ХОРОШО · ${art} → бокс ${val}`);
-      // Серверное подтверждение в фоне; при отказе откатываем оптимистичный скан.
       try {
         const r = await api("/api/routes/" + encodeURIComponent(waybillRouteId) + "/waybill/scan", {
           method: "POST",
           body: JSON.stringify({ clientIndex: waybillClientIdx, art, box: val, qty: scanQty }),
         });
         if (r && r.ok) {
-          const item = waybillLocal.items.find((x) => String(x.art) === art);
-          if (item && r.item) {
-            item.scanned = (r.item.scanned != null) ? r.item.scanned : item.scanned;
-            item.box = (r.item && r.item.box != null) ? r.item.box : item.box;
-          }
           if (r.rebound) {
+            const it = waybillLocal.items.find((x) => String(x.art) === art);
+            if (it) it.box = r.item && r.item.box != null ? r.item.box : val;
             setWaybillStatus(`ХОРОШО · ${art} → бокс ${r.item && r.item.box || val} (перенос)`);
+            playScanFeedback(true);
           } else {
+            const item = waybillLocal.items.find((x) => String(x.art) === art && (Number(x.scanned) || 0) < (Number(x.qty) || 0) && !x.missing);
+            if (item) {
+              item.scanned = (r.item && r.item.scanned != null) ? r.item.scanned : (Number(item.scanned) + scanQty);
+              item.box = r.item && r.item.box != null ? r.item.box : val;
+            }
             const done = (waybillLocal.items || []).filter((it) => Number(it.scanned) >= Number(it.qty)).length;
-            const tail = clamped
-              ? ` · оставалось ${remBefore} — засчитано ${remBefore}`
-              : ` · осталось ${r.left} · готово ${done}/${waybillLocal.items.length}`;
-            setWaybillStatus(`ХОРОШО · ${art} → бокс ${val}${tail}`);
+            setWaybillStatus(`ХОРОШО · ${item && item.art} → бокс ${val} · осталось ${r.left} · готово ${done}/${waybillLocal.items.length}`);
+            playScanFeedback(r.left > 0);
           }
+          waybillPendingArt = "";
           renderWaybill();
           loadShipments();
         } else {
-          if (it0) it0.scanned = Math.max(0, Number(it0.scanned || 0) - scanQty);
           setWaybillStatus("ПЛОХО · " + ((r && r.error) || "Деталь не привязалась к боксу"));
-          playScanFeedback(false, "Плохо");
+          playScanFeedback(false);
           renderWaybill();
         }
       } catch (e) {
-        if (it0) it0.scanned = Math.max(0, Number(it0.scanned || 0) - scanQty);
         setWaybillStatus("ПЛОХО · " + ((e && e.message) || "Ошибка привязки к боксу"));
-        playScanFeedback(false, "Плохо");
-        renderWaybill();
+        playScanFeedback(false);
       }
     } else if (String(val).startsWith("BG" + waybillRouteId + "-")) {
       // Явный код этикетки места без ожидающей детали — просто выбираем бокс.
@@ -4582,19 +4436,14 @@
     } else {
       // Шаг 1: отсканирована деталь. Если она есть в накладной — «МЕСТО» (ждём бокс),
       // если нет — «ПЛОХО».
-      const artRows = (waybillLocal.items || []).filter((it) => String(it.art) === val);
-      if (!artRows.length) {
+      const hasArt = (waybillLocal.items || []).some((it) => String(it.art) === val);
+      if (!hasArt) {
         setWaybillStatus("ПЛОХО · деталь " + val + " не найдена в накладной");
-        playScanFeedback(false);
-      } else if (artRows.every((it) => (Number(it.scanned) || 0) >= (Number(it.qty) || 1))) {
-        // Артикул уже отсканирован полностью (кол-во исчерпано) — повторный скан
-        // не привязываем к боксу, сообщаем об этом.
-        setWaybillStatus("Уже отсканировано · " + val);
         playScanFeedback(false);
       } else {
         waybillPendingArt = val;
         setWaybillStatus("МЕСТО · деталь " + val + " — отсканируйте бокс");
-        playScanFeedback(true, "Место");
+        playScanFeedback(true);
       }
     }
     if (el.waybillArtInput) el.waybillArtInput.value = "";
@@ -4659,19 +4508,19 @@
     const cl = (r.clients || [])[idx];
     if (!cl) return;
     const qty = Math.max(1, Math.min(200, Number(el.printPlacesQty.value) || 1));
-    // Номер, с которого начинается печать. Обычная «Печать этикеток» (отгрузка) —
-    // replace: start = 0, места 1..qty, прежние этикетки пары пересоздаются заново.
-    // Печать бокса из «Сборки» («Новый бокс») — накопительная append: стартуем со
-    // следующего свободного номера (N+1..N+qty), уже созданные/отсканированные
-    // места не трогаем.
-    let start = 0;
-    if (waybillPrinting) {
-      try {
-        const cur = await api(`/api/labels?routeId=${encodeURIComponent(printRouteId)}&clientIndex=${idx}`);
-        start = cur && Array.isArray(cur.labels) ? cur.labels.length : (Array.isArray(scanLabels) ? scanLabels.length : 0);
-      } catch {
-        start = Array.isArray(scanLabels) ? scanLabels.length : 0;
-      }
+    // Номер, с которого начинается допечатка дополнительных мест. При обычной
+    // печати start = 0 (места 1..qty). При «Допечатать места» стартуем со следующего
+    // свободного номера: если у выбранного клиента уже создано N мест, новые будут
+    // N+1..N+qty, а старые (в т.ч. уже отсканированные) не трогаем.
+    // Накопительная печать: каждое нажатие добавляет qty новых мест СВЕРХ уже
+    // созданных (начиная со следующего номера). Если указано 1 — каждый клик даёт
+    // ровно один новый стикер. Места не пересоздаются с первого номера.
+    let start;
+    try {
+      const cur = await api(`/api/labels?routeId=${encodeURIComponent(printRouteId)}&clientIndex=${idx}`);
+      start = cur && Array.isArray(cur.labels) ? cur.labels.length : (Array.isArray(scanLabels) ? scanLabels.length : 0);
+    } catch {
+      start = Array.isArray(scanLabels) ? scanLabels.length : 0;
     }
     const total = start + qty;
     // Дата отгрузки на стикере — в формате ДД.ММ.ГГГГ (r.date/день приходят как
@@ -4699,7 +4548,7 @@
       card.innerHTML =
         logoHtml +
         `<div class="label-order">Отгрузка ${escapeHtml(dateStr)}</div>` +
-        `` +
+        `<div class="label-name" style="margin-top:1mm">${append ? (start + i) + " из " + total : i + " из " + qty}</div>` +
         (() => {
           // QR на этикетке — крупный и читаемый (~70px ≈ 18.5 мм): стикер
           // квадратный 58×58 мм, высоты с запасом хватает. Раньше драйвер
@@ -4709,9 +4558,7 @@
           const px = (q && q.size) ? 70 : 0;
           return `<div class="label-qr">${px && q.src ? `<img alt="QR" width="${px}" height="${px}" src="${q.src}" />` : ""}</div>`;
         })() +
-        // На стикере вместо «кракозябистого» кода показываем «Бокс N»; сам код
-        // остаётся в QR (создаётся выше через buildQrImage(code)).
-        `<div class="label-code">${escapeHtml(waybillBoxName(code))}</div>`;
+        `<div class="label-code">${escapeHtml(code)}</div>`;
       area.appendChild(card);
     }
     // Синхронизируем напечатанные места с серверным хранилищем этикеток (Шаг 2):
@@ -4720,20 +4567,30 @@
     try {
       api("/api/labels", {
         method: "POST",
-        body: JSON.stringify({ routeId: printRouteId, clientIndex: idx, qty, mode: waybillPrinting ? "append" : "replace" }),
+        body: JSON.stringify({ routeId: printRouteId, clientIndex: idx, qty, mode: "append" }),
       }).then((r) => {
         if (r && Array.isArray(r.labels)) {
-          if (waybillPrinting) {
-            toast(`Новый бокс: всего мест ${r.labels.length}`);
-          } else {
-            toast(`Создано мест: ${r.labels.length} — можно сканировать при погрузке/выгрузке`);
-          }
+          toast(`Допечатано мест: ${qty}. Всего у клиента: ${r.labels.length}`);
           refreshPrintLabels();
         }
       }).catch(() => {});
     } catch { /* ignore */ }
-    // Единый запуск печати (отгрузка/допечатка/бокс — одна точка).
-    dispatchStickerPrint(waybillPrinting ? (function () {}) : ensurePrintModalRestored);
+    // Модалку печати НЕ закрываем: после печати она остаётся открытой, список
+    // этикеток уже обновлён (refreshPrintLabels выше), и можно сразу печатать
+    // следующих клиентов без выхода из окна. Раньше здесь был
+    // el.printModal.close() — из-за него после печати пользователь «вылетал»
+    // на главный список отгрузок и был вынужден заново открывать печать.
+    // Для веба стикеры печатаются через скрытый iframe, который не перезагружает
+    // основной документ; страховка ensurePrintModalRestored дополнительно
+    // возвращает модалку, если просмотрщик Коворка всё же сбросит её окно.
+    if (window.AndroidBridge && typeof window.AndroidBridge.scanQR === "function") {
+      setTimeout(() => { try { window.print(); } catch { /* ignore */ } }, 60);
+    } else {
+      // Печать бокса из окна СБОРКИ: не открываем модалку печати отгрузки и не
+      // перекидываемся на вкладку «Отгрузка» — стикер печатается и окно сборки
+      // остаётся на месте.
+      printStickersViaIframe(waybillPrinting ? (function () {}) : ensurePrintModalRestored);
+    }
     // Печать бокса из «Сборки» завершена — флаг больше не нужен (callback уже
     // выбран на момент вызова печати, поэтому сброс безопасен).
     waybillPrinting = false;
@@ -4772,48 +4629,6 @@
   // сдвинутым далеко за пределы видимой области (off-screen): он не виден
   // глазу, но браузер печатает именно его содержимое (58×58 мм), а не главный
   // документ. Фолбэка на window.print() нет — он и вызывал «вылет».
-  // Настольная сборка (Electron): window.print() на главной странице перехватывается
-  // в electron/main.js и печатает молча (#printArea, без окна). Возвращает true,
-  // если приложение запущено внутри настольной оболочки.
-  function isElectronDesktop() {
-    try {
-      if (typeof navigator !== "undefined" && /electron\//i.test(String(navigator.userAgent || ""))) return true;
-      // Запасные признаки Electron (если userAgent переопределён/иная обёртка).
-      if (typeof window !== "undefined" && window.process && window.process.versions && window.process.versions.electron) return true;
-      if (typeof process !== "undefined" && process.versions && process.versions.electron) return true;
-      return false;
-    } catch { return false; }
-  }
-  // Может ли эта точка печатать стикер прямо здесь: Electron — да (тихо), браузер —
-  // да (через диалог peчати), Android/ТСД — нет (WebView не печатает; стикер с ПК).
-  function canPrintHere() {
-    if (isElectronDesktop()) return true;
-    if (window.AndroidBridge && typeof window.AndroidBridge.scanQR === "function") return false;
-    return true;
-  }
-  // Единый запуск печати стикеров для всех мест (отгрузка, допечатка, бокс).
-  //  - Наш десктоп-шелл (Electron): печатаем через нативный мост printStickerBridge
-  //    (IPC → main-процесс → webContents.print). Ему песочница не мешает.
-  //  - ТСД/Android WebView: печать не делаем (WebView не печатает; стикер с ПК).
-  //  - Обычный браузер И любой чужой Electron-браузер (напр. встроенный браузер
-  //    Коворка, который тоже отдаёт 'electron' в userAgent): печатаем через скрытый
-  //    iframe. НЕ вызываем window.print() на главном документе по одному лишь
-  //    признаку 'electron' в UA — такие браузеры держат документ в песочнице без
-  //    allow-modals, и window.print() молча игнорируется («document is sandboxed»).
-  function dispatchStickerPrint(restoreModal) {
-    // Наш десктоп-шелл: нативный мост уже отдаёт странице printStickerBridge.
-    if (typeof window.printStickerBridge !== "undefined" && window.printStickerBridge
-        && typeof window.printStickerBridge.print === "function") {
-      const html = (el.printArea && el.printArea.innerHTML) || "";
-      if (html) { try { window.printStickerBridge.print(html); } catch (_) { /* ignore */ } }
-      return;
-    }
-    if (window.AndroidBridge && typeof window.AndroidBridge.scanQR === "function") {
-      return; // Android/ТСД — WebView не печатает.
-    }
-    // Браузер и чужие Electron-браузеры: скрытый iframe (проверенный способ).
-    printStickersViaIframe(typeof restoreModal === "function" ? restoreModal : (function () {}));
-  }
   function printStickersViaIframe(restoreModal) {
     const area = el.printArea;
     if (!area) return;
@@ -4838,30 +4653,17 @@
     // Ждём, пока QR-картинки (data-url) и внешние логотипы отрисуются, потом печатаем.
     const imgs = Array.prototype.slice.call(doc.querySelectorAll("img"));
     let pending = imgs.length || 0;
-    // Страховка: печать ВСЕГДА срабатывает, даже если события load/error у QR-картинки
-    // не придут (бывает на некоторых устройствах — без этого окно печати «молчит»).
-    let fired = false;
     const removed = () => { setTimeout(() => { try { document.body.removeChild(iframe); } catch { /* ignore */ } }, 1000); };
     const go = () => {
-      if (fired) return;
-      fired = true;
-      let printed = false;
       try {
         iframe.contentWindow.focus();
         iframe.contentWindow.print();
-        printed = true;
       } catch {
-        printed = false;
+        // Печать из iframe заблокирована средой — НЕ печатаем главный документ
+        // (это сбросит состояние и «выкинет» из Отгрузки), просто подскажем.
+        toast("Печать этикеток недоступна в этом просмотрщике. Откройте приложение в обычном браузере.");
       }
       removed();
-      if (!printed) {
-        // Печать из iframe заблокирована средой (часто на складских/встроенных
-        // браузерах). Открываем системный диалог печати на главном документе —
-        // благодаря @media print напечатается только #printArea (стикер).
-        try {
-          window.print();
-        } catch (_) { /* окна печати нет вообще */ }
-      }
       // Страховка для Коворка: встроенный просмотрщик после print() может сбросить
       // модальное окно. Если передан колбэк восстановления — вызываем его с
       // небольшой задержкой, чтобы печать успела отпустить диалог.
@@ -4877,9 +4679,6 @@
       im.addEventListener("error", onImg);
     });
     if (pending <= 0) setTimeout(go, 200);
-    // Принудительно запускаем печать через фиксированное время, если картинки так
-    // и не «прогрузились» (иначе окно печати может не появиться на части устройств).
-    setTimeout(go, 900);
   }
 
   // Страховка: возвращает модалку печати, если печать (в просмотрщике Коворка)
@@ -5039,12 +4838,12 @@
       card.innerHTML =
         logoHtml +
         `<div class="label-order">Отгрузка ${escapeHtml(dateStr)}</div>` +
-        `` +
+        `<div class="label-name" style="margin-top:1mm">${place} из ${total}</div>` +
         `<div class="label-qr">${px && q.src ? `<img alt="QR" width="${px}" height="${px}" src="${q.src}" />` : ""}</div>` +
-        `<div class="label-code">${escapeHtml(waybillBoxName(code))}</div>`;
+        `<div class="label-code">${escapeHtml(code)}</div>`;
       area.appendChild(card);
     });
-    dispatchStickerPrint(ensureAppendModalRestored);
+    printStickersViaIframe(ensureAppendModalRestored);
   }
 
   // ---- Сканирование этикеток (погрузка/выгрузка) — Шаг 3 ----
@@ -5328,12 +5127,16 @@
     card.innerHTML =
       logoHtml +
       `<div class="label-order">Отгрузка ${escapeHtml(dateStr)}</div>` +
-      `` +
+      `<div class="label-name" style="margin-top:1mm">${Number(l.place) || ""} из ${scanLabels.length}</div>` +
       `<div class="label-qr">${px && q.src ? `<img alt="QR" width="${px}" height="${px}" src="${q.src}" />` : ""}</div>` +
-      `<div class="label-code">${escapeHtml(waybillBoxName(code))}</div>`;
+      `<div class="label-code">${escapeHtml(code)}</div>`;
     const area = el.printArea;
     if (area) { area.innerHTML = ""; area.appendChild(card); }
-    dispatchStickerPrint(function restoreAfterSinglePrint() {});
+    if (window.AndroidBridge && typeof window.AndroidBridge.scanQR === "function") {
+      setTimeout(() => { try { window.print(); } catch { /* ignore */ } }, 60);
+    } else {
+      printStickersViaIframe(function restoreAfterSinglePrint() {});
+    }
   }
 
   // Плитки клиентов окна «Отгрузка»: вместо выпадающего списка клиентов —
@@ -6149,26 +5952,7 @@
         const createdNoteHtml = unCreated > 0
           ? `<div class="rms-unload-note">⚠ ${unCreated} место не погружено складом — выгрузка счёрчена без него</div>`
           : "";
-        // Содержимое боксов этой точки для водителя: сгруппировано по коду бокса —
-        // водитель видит, какие детали лежат в каждом боксе (из накладной сборки).
-        const wbBoxesHtml = (() => {
-          const wbi = r.waybills && r.waybills[i];
-          const items = wbi && Array.isArray(wbi.items) ? wbi.items : [];
-          const byBox = {};
-          const order = [];
-          items.forEach((it) => {
-            if (!it.box || (Number(it.scanned) || 0) <= 0) return;
-            if (!byBox[it.box]) { byBox[it.box] = []; order.push(it.box); }
-            byBox[it.box].push(it);
-          });
-          if (!order.length) return "";
-          // Водителю показываем только коды боксов, без собранных деталей внутри.
-          return `<div class="rms-waybill-boxes">` + order.map((b) =>
-            `<div class="rms-waybill-box"><span class="rms-waybill-box-code">${escapeHtml(waybillBoxName(b))}</span></div>`
-          ).join("") + `</div>`;
-        })();
         let unloadBlock = `<div class="rms-unload">
-          ${wbBoxesHtml}
           ${unloadCountHtml}
           ${createdNoteHtml}
           <div class="rms-stop-actions">
@@ -9044,7 +8828,7 @@
         });
         const j = await res.json().catch(() => ({}));
         if (!res.ok) {
-          toast((j && j.error) || `Не удалось восстановить базу (HTTP ${res.status})`);
+          toast((j && j.error) || "Не удалось восстановить базу");
           return;
         }
         if (el.backupStatus) {
@@ -9384,20 +9168,6 @@
     bumpScanCount();
     doScanLabel("load", code);
   };
-  // Единая точка приёма кода с нативного сканера ТСД (AndroidBridge.onBarcode /
-  // onScan и глобальные window-колбэки). Если открыто окно СБОРКИ — уводим код в
-  // поле сборки и запускаем скан (деталь→«МЕСТО», бокс→«ХОРОШО»). Если открыта
-  // «Отгрузка» — это погрузка/выгрузка мест (handleExternalScanCode выше).
-  const routeExternalScanCode = (raw) => {
-    const code = String(raw == null ? "" : raw).trim();
-    if (!code) return;
-    if (el.waybillModal && el.waybillModal.open) {
-      if (el.waybillArtInput) el.waybillArtInput.value = code;
-      try { scanWaybill(); } catch (_) { /* не критично */ }
-      return;
-    }
-    handleExternalScanCode(code);
-  };
   // (A) Клавиатурный перехват (capture-фаза). Срабатывает всегда при открытом
   // окне «Отгрузка», независимо от фокуса (только избегаем дубля с полем).
   if (scanSource === "external" || !(window.AndroidBridge && typeof window.AndroidBridge.scanQR === "function")) {
@@ -9453,7 +9223,7 @@
         if (typeof window[name] !== "function") {
           window[name] = (data) => {
             const code = (data && (data.code !== undefined ? data.code : data.text !== undefined ? data.text : data)) || "";
-            routeExternalScanCode(String(code).trim());
+            handleExternalScanCode(String(code).trim());
           };
         }
       } catch (_) {}
@@ -9463,14 +9233,14 @@
       if (window.AndroidBridge && typeof window.AndroidBridge.onScan === "function") {
         const orig = window.AndroidBridge.onScan;
         window.AndroidBridge.onScan = function() {
-          routeExternalScanCode(String(arguments.length ? arguments[0] : "").trim());
+          handleExternalScanCode(String(arguments.length ? arguments[0] : "").trim());
           try { return orig.apply(this, arguments); } catch (_) { return undefined; }
         };
       }
       if (window.AndroidBridge && typeof window.AndroidBridge.onBarcode === "function") {
         const orig = window.AndroidBridge.onBarcode;
         window.AndroidBridge.onBarcode = function() {
-          routeExternalScanCode(String(arguments.length ? arguments[0] : "").trim());
+          handleExternalScanCode(String(arguments.length ? arguments[0] : "").trim());
           try { return orig.apply(this, arguments); } catch (_) { return undefined; }
         };
       }
@@ -9880,167 +9650,6 @@
   if (el.waybillScanBtn) el.waybillScanBtn.addEventListener("click", scanWaybill);
   if (el.waybillNewBoxBtn) el.waybillNewBoxBtn.addEventListener("click", waybillNewBox);
   if (el.waybillDelBoxBtn) el.waybillDelBoxBtn.addEventListener("click", deleteWaybillBox);
-  if (el.boxDetailsClose) el.boxDetailsClose.addEventListener("click", () => { try { el.boxDetailsModal.close(); } catch {} });
-  if (el.boxDetailsModal) el.boxDetailsModal.addEventListener("click", (ev) => { if (ev.target === el.boxDetailsModal) { try { el.boxDetailsModal.close(); } catch {} } });
-
-  // ---- Своя авторизация: вход/первый вход (фронт) ----
-  let authPickId = null;
-  async function apiAuth(method, url, body) {
-    try {
-      const res = await fetch(url, {
-        method,
-        headers: body ? { "Content-Type": "application/json" } : undefined,
-        body: body ? JSON.stringify(body) : undefined,
-      });
-      return res.json().catch(() => null);
-    } catch { return null; }
-  }
-  function setAuthUserUI(u) {
-    if (el.authUserName) el.authUserName.textContent = u.name || "Пользователь";
-    if (el.authAvatar) el.authAvatar.textContent = (u.name || "П")[0];
-    if (el.authUserChip) el.authUserChip.hidden = false;
-    if (el.authBtn) { el.authBtn.hidden = false; el.authBtn.textContent = "Выйти"; }
-    window.__isOwnLoggedIn = true;
-  }
-  async function initAuth() {
-    try {
-      const j = await apiAuth("GET", "/api/auth/me");
-      if (j && j.ok && j.user) {
-        setAuthUserUI(j.user);
-        if (el.authGate) el.authGate.hidden = true;
-        return;
-      }
-      if (el.authBtn) { el.authBtn.hidden = false; el.authBtn.textContent = "Войти"; }
-      // Собственная авторизация включена (authRequired) и сессии нет —
-      // блокируем приложение и открываем вход.
-      if (j && j.required) {
-        if (el.authGate) el.authGate.hidden = false;
-        openAuth();
-      }
-    } catch { /* без UI не критично */ }
-  }
-  function showAuthView(view) {
-    const login = view === "login";
-    if (el.authLoginView) el.authLoginView.hidden = !login;
-    if (el.authFirstView) el.authFirstView.hidden = login;
-    if (el.authTitle) el.authTitle.textContent = login ? "Вход" : "Первый вход";
-    if (el.authHint) el.authHint.textContent = "";
-    if (el.authFirstHint) el.authFirstHint.textContent = "";
-    authPickId = null;
-    if (el.authResults) el.authResults.innerHTML = "";
-    if (el.authSetView) el.authSetView.hidden = true;
-    if (el.authLogin) el.authLogin.value = "";
-    if (el.authPassword) el.authPassword.value = "";
-    if (el.authName) el.authName.value = "";
-  }
-  function openAuth() { if (!el.authModal) return; showAuthView("login"); try { el.authModal.showModal(); } catch { /* уже открыта */ } }
-  async function doLogin() {
-    const login = el.authLogin ? el.authLogin.value.trim() : "";
-    const pass = el.authPassword ? el.authPassword.value : "";
-    if (!login || !pass) { if (el.authHint) el.authHint.textContent = "Введите логин и пароль"; return; }
-    const j = await apiAuth("POST", "/api/auth/login", { login, password: pass });
-    if (j && j.ok && j.user) { setAuthUserUI(j.user); try { el.authModal.close(); } catch {} location.reload(); return; }
-    if (el.authHint) el.authHint.textContent = (j && j.error) || "Не удалось войти";
-  }
-  async function firstLoginFind() {
-    const name = el.authName ? el.authName.value.trim() : "";
-    if (!name) { if (el.authFirstHint) el.authFirstHint.textContent = "Введите имя или фамилию"; return; }
-    const j = await apiAuth("POST", "/api/auth/find-by-name", { name });
-    const list = (j && j.users) || [];
-    if (!el.authResults) return;
-    if (!list.length) { el.authResults.innerHTML = '<div class="empty-hint">Не найдено — проверьте имя/фамилию.</div>'; return; }
-    el.authResults.innerHTML = list.map((u) => `
-      <button type="button" class="mini-btn route-confirm-ok auth-result" data-id="${escapeHtml(u.id)}"
-        data-name="${escapeHtml(u.name)}" data-has="${u.hasCreds ? "1" : "0"}" style="display:block;margin:4px 0;text-align:left">
-        ${escapeHtml(u.name)}${u.hasCreds ? " · уже есть вход" : ""}
-      </button>`).join("");
-    el.authResults.querySelectorAll(".auth-result").forEach((b) => {
-      b.addEventListener("click", () => pickAuthResult(b.dataset.id, b.dataset.name, b.dataset.has === "1"));
-    });
-  }
-  const authTranslit = { "а":"a","б":"b","в":"v","г":"g","д":"d","е":"e","ё":"e","ж":"zh","з":"z","и":"i","й":"y","к":"k","л":"l","м":"m","н":"n","о":"o","п":"p","р":"r","с":"s","т":"t","у":"u","ф":"f","х":"h","ц":"c","ч":"ch","ш":"sh","щ":"sch","ъ":"","ы":"y","ь":"","э":"e","ю":"yu","я":"ya" };
-  function translitLogin(name) {
-    const s = String(name || "").toLowerCase().replace(/[^a-zа-яё\s]/gi, " ");
-    return s.split("").map((ch) => authTranslit[ch] || (ch === " " ? "." : ch)).join("")
-      .replace(/\.+/g, ".").replace(/^\.|\.$/g, "").slice(0, 32) || "user";
-  }
-  function pickAuthResult(id, name, has) {
-    if (has) { if (el.authFirstHint) el.authFirstHint.textContent = "У этого пользователя уже есть вход — используйте «Вход» по логину/паролю."; return; }
-    authPickId = String(id);
-    if (el.authNewLogin) { el.authNewLogin.value = translitLogin(name); }
-    if (el.authNewPass) el.authNewPass.value = "";
-    if (el.authSetView) el.authSetView.hidden = false;
-    if (el.authFirstHint) el.authFirstHint.textContent = "Выбрано: " + name + ". Придумайте логин и пароль (мин. 8 символов).";
-  }
-  async function doSetCreds() {
-    const login = el.authNewLogin ? el.authNewLogin.value.trim() : "";
-    const pass = el.authNewPass ? el.authNewPass.value : "";
-    if (!authPickId || !login || pass.length < 8) { if (el.authFirstHint) el.authFirstHint.textContent = "Укажите логин и пароль (мин. 8 символов)."; return; }
-    const j = await apiAuth("POST", "/api/auth/set-credentials", { userId: authPickId, login, password: pass });
-    if (j && j.ok) { try { el.authModal.close(); } catch {} location.reload(); return; }
-    if (el.authFirstHint) el.authFirstHint.textContent = (j && j.error) || "Не удалось сохранить";
-  }
-  async function doLogout() {
-    await apiAuth("POST", "/api/auth/logout");
-    try { el.authModal.close(); } catch {}
-    window.__isOwnLoggedIn = false;
-    if (el.authUserChip) el.authUserChip.hidden = true;
-    if (el.authBtn) { el.authBtn.hidden = false; el.authBtn.textContent = "Войти"; }
-    location.reload();
-  }
-  if (el.authBtn) el.authBtn.addEventListener("click", () => { if (window.__isOwnLoggedIn) doLogout(); else openAuth(); });
-  if (el.authClose) el.authClose.addEventListener("click", () => { try { el.authModal.close(); } catch {} });
-  if (el.authModal) el.authModal.addEventListener("click", (ev) => { if (ev.target === el.authModal) { try { el.authModal.close(); } catch {} } });
-  if (el.authFirstLink) el.authFirstLink.addEventListener("click", () => showAuthView("first"));
-  if (el.authBackLogin) el.authBackLogin.addEventListener("click", () => showAuthView("login"));
-  if (el.authSubmitBtn) el.authSubmitBtn.addEventListener("click", doLogin);
-  if (el.authFindBtn) el.authFindBtn.addEventListener("click", firstLoginFind);
-  if (el.authSetBtn) el.authSetBtn.addEventListener("click", doSetCreds);
-  if (el.authPassword) el.authPassword.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); doLogin(); } });
-  if (el.authName) el.authName.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); firstLoginFind(); } });
-  initAuth();
-
-  // ---- Админ: учётные записи сотрудников (логин/пароль) ----
-  function ensureAdminUsersUI() {
-    if (!el.settingsModal || document.getElementById("adminUsersBox")) return;
-    const box = document.createElement("div");
-    box.id = "adminUsersBox";
-    box.innerHTML = `
-      <h4>Учётные записи (вход по логину/паролю)</h4>
-      <button type="button" class="mini-btn" id="adminUsersLoad">Показать сотрудников</button>
-      <div id="adminUsersList" class="admin-users-list"></div>`;
-    el.settingsModal.appendChild(box);
-    const loadBtn = document.getElementById("adminUsersLoad");
-    if (loadBtn) loadBtn.addEventListener("click", loadAdminUsers);
-  }
-  async function loadAdminUsers() {
-    const list = document.getElementById("adminUsersList");
-    if (!list) return;
-    const j = await apiAuth("GET", "/api/admin/users");
-    if (!j || !j.ok) { list.innerHTML = '<div class="empty-hint">Нет доступа к учётным записям (нужен админ).</div>'; return; }
-    list.innerHTML = (j.users || []).map((u) => `
-      <div class="admin-user-row" data-id="${escapeHtml(u.id)}">
-        <span class="au-name">${escapeHtml(u.name)}</span>
-        <input class="select-input au-login" placeholder="логин" value="${escapeHtml(u.login || "")}" />
-        <input class="select-input au-pass" type="password" placeholder="новый пароль" autocomplete="new-password" />
-        <button type="button" class="mini-btn" data-id="${escapeHtml(u.id)}">Сохранить</button>
-      </div>`).join("");
-    (list.querySelectorAll("button[data-id]") || []).forEach((btn) => {
-      btn.addEventListener("click", saveAdminUser);
-    });
-  }
-  async function saveAdminUser() {
-    const row = this.closest && this.closest(".admin-user-row");
-    const id = this.getAttribute("data-id");
-    const login = row ? row.querySelector(".au-login").value.trim() : "";
-    const pass = row ? row.querySelector(".au-pass").value : "";
-    if (!login) { toast("Укажите логин"); return; }
-    if (pass && pass.length < 8) { toast("Пароль не короче 8 символов"); return; }
-    const j = await apiAuth("POST", "/api/admin/users/credentials", { userId: id, login, password: pass });
-    toast((j && j.error) || "Сохранено");
-    if (j && j.ok) loadAdminUsers();
-  }
-  ensureAdminUsersUI();
   if (el.waybillFinishBtn) {
     el.waybillFinishBtn.addEventListener("click", () => {
       closeWaybill();
@@ -10060,44 +9669,6 @@
       if (e.key === "Enter") { e.preventDefault(); scanWaybill(); }
     });
   }
-  // Скан на ТСД БЕЗ фокуса в поле: ловим ввод аппаратного сканера (клавиатурная
-  // инжекция) на уровне окна, пока открыта Сборка. Если фокус в поле — поле само
-  // обрабатывает Enter (не дублируем).
-  let wbScanBuf = "";
-  let wbScanTs = 0;
-  let wbScanTimer = null;
-  const wbSendScan = () => {
-    const code = String(wbScanBuf).trim();
-    wbScanBuf = ""; wbScanTs = 0;
-    if (wbScanTimer) { clearTimeout(wbScanTimer); wbScanTimer = null; }
-    if (code) {
-      if (el.waybillArtInput) el.waybillArtInput.value = code;
-      try { scanWaybill(); } catch (_) { /* не критично */ }
-    }
-  };
-  window.addEventListener("keydown", (ev) => {
-    if (!el.waybillModal || !el.waybillModal.open) return;
-    // В поле (ручной ввод) — не дублируем, оно само вызывает скан по Enter.
-    const ae = document.activeElement;
-    if (ae && el.waybillArtInput && ae === el.waybillArtInput) return;
-    if (ev.ctrlKey || ev.altKey || ev.metaKey) return;
-    const t = Date.now();
-    if (wbScanTs && (t - wbScanTs) > 200) wbScanBuf = "";
-    const k = ev.key;
-    if (k === "Enter") {
-      if (wbScanBuf) { ev.preventDefault(); ev.stopPropagation(); wbSendScan(); }
-      else wbScanBuf = "";
-      return;
-    }
-    if (k && k.length === 1) {
-      wbScanBuf += k;
-      wbScanTs = t;
-      if (wbScanTimer) clearTimeout(wbScanTimer);
-      wbScanTimer = setTimeout(wbSendScan, 300);
-    } else {
-      wbScanBuf = "";
-    }
-  }, true);
   if (el.waybillModal) {
     el.waybillModal.addEventListener("cancel", (e) => { e.preventDefault(); closeWaybill(); });
   }

@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BIOTIME — рендер navbar (пример)</title>
+<style>
+  :root{
+    --bg:#0b0d12; --panel:#141821; --ink:#eef1f6; --ink-faint:#98a1b3;
+    --accent:#ffab38; --radius:999px; --pad:10px 18px;
+  }
+  *{box-sizing:border-box; margin:0; padding:0}
+  body{font:14px/1.4 system-ui, "Segoe UI", Roboto, sans-serif;
+    color:var(--ink); min-height:100vh;
+    /* Контрастный фон, чтобы сквозь прозрачную панель было видно просвечивание */
+    background:
+      radial-gradient(600px 300px at 10% -10%, rgba(255,171,56,.55), transparent 60%),
+      radial-gradient(700px 320px at 90% 0%, rgba(120,140,255,.5), transparent 55%),
+      linear-gradient(160deg, #10131c 0%, #0b0d12 55%, #1a1220 100%);
+  }
+  /* Фон-подложка навигационной панели (navbar backdrop) — ПРОЗРАЧНЫЙ,
+     эффект «матового стекла» (glassmorphism): лёгкий blur + полупрозрачность. */
+  .topbar{
+    display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+    position:sticky; top:0; z-index:10;
+    padding:10px 16px;
+    /* Прозрачный фон: ниже читается сквозь подложку */
+    background:rgba(15,18,28,.45);
+    backdrop-filter:blur(14px) saturate(140%);
+    -webkit-backdrop-filter:blur(14px) saturate(140%);
+    border-bottom:1px solid rgba(255,255,255,.08);
+    box-shadow:0 1px 14px rgba(0,0,0,.35);
+  }
+  .brand{font-weight:700; margin-right:10px; letter-spacing:.3px; color:var(--ink)}
+  .nav{display:flex; gap:4px; flex-wrap:wrap}
+  .nav a{
+    color:var(--ink-faint); text-decoration:none; padding:var(--pad);
+    border-radius:var(--radius); cursor:pointer; transition:.18s ease;
+  }
+  .nav a:hover{color:var(--ink); background:rgba(255,255,255,.06)}
+  .nav a.active{
+    color:#fff; background:rgba(255,171,56,.12);
+    box-shadow:inset 0 0 0 1px var(--accent), 0 0 14px rgba(255,171,56,.35);
+  }
+  .spacer{flex:1}
+  .chip{
+    display:flex; align-items:center; gap:8px; padding:6px 14px 6px 8px;
+    background:rgba(255,255,255,.07); border-radius:var(--radius);
+  }
+  .avatar{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;
+    background:linear-gradient(135deg,#ffb347,#ff7a18); color:#191006;font-weight:700}
+  .date{color:var(--ink-faint)}
+  .demo-hint{padding:22px 16px; color:var(--ink-faint); max-width:760px}
+  .demo-hint h2{color:var(--ink); margin-bottom:8px; font-size:16px}
+  .demo-hint p{margin-bottom:8px}
+</style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">БИОТАЙМ</div>
+    <nav class="nav">
+      <a>Таймер</a><a>Зарплата</a><a>Доставка</a><a>В эфире</a>
+      <a>Маршрутизация</a><a>Мои маршруты</a><a>Отгрузка</a><a>Журнал</a>
+      <a class="active">Отчёт</a>
+    </nav>
+    <div class="spacer"></div>
+    <div class="chip"><span class="avatar">AA</span> Андрей Ахмедов</div>
+    <div class="chip date">Вт, 8 Сентября</div>
+  </header>
+
+  <div class="demo-hint">
+    <h2>Пример органичной интеграции кнопок</h2>
+    <p>Тёмная подложка панели (navbar backdrop) чуть светлее фона страницы — панель «дышит», а не выглядит отдельной плашкой.</p>
+    <p>Активная вкладка — pill-капсула с оранжевой обводкой и мягким свечением; профиль и дата — те же капсулы со скруглениями и полупрозрачным тёмным фоном.</p>
+  </div>
+</body>
+</html>

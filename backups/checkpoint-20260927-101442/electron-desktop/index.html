@@ -79,7 +79,6 @@
         <span class="user-avatar" id="userAvatar">?</span>
         <span class="user-name" id="userName"></span>
       </div>
-      <button class="mini-btn" id="authBtn" type="button" hidden>Войти</button>
       <div class="today-chip" id="todayChip">—</div>
       <button class="icon-btn" id="settingsBtn" title="Настройки" aria-label="Настройки">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8">
@@ -90,9 +89,6 @@
     </div>
     </div>
   </header>
-
-  <!-- Гейт входа при включённой собственной авторизации (authRequired) -->
-  <div class="auth-gate" id="authGate" hidden><div class="auth-gate-note">Требуется вход</div></div>
 
   <!-- Полоса «нет связи с сервером»: появляется при сетевых сбоях (в т.ч. когда
        VPN блокирует доступ к серверу) и исчезает, когда связь восстановилась. -->
@@ -672,10 +668,8 @@
       </div>
       <div class="route-confirm-actions">
         <button class="mini-btn route-confirm-cancel" id="printCancel" type="button">Отмена</button>
-        <!-- Печать с отгрузки скрыта: этикетки печатаются при «Сборке» на складе.
-             В окне «Отгрузка» остаются сканирование погрузки и «Завершить отгрузку». -->
-        <button class="mini-btn route-confirm-ok" id="printConfirm" type="button" hidden>Печать этикеток</button>
-        <button class="mini-btn route-confirm-append" id="printAppendBtn" type="button" hidden title="Допечатать дополнительные места, не трогая уже созданные">Допечатать места</button>
+        <button class="mini-btn route-confirm-ok" id="printConfirm" type="button">Печать этикеток</button>
+        <button class="mini-btn route-confirm-append" id="printAppendBtn" type="button" title="Допечатать дополнительные места, не трогая уже созданные">Допечатать места</button>
         <button class="mini-btn route-confirm-ok route-confirm-danger" id="printShipmentComplete" type="button">Завершить отгрузку</button>
       </div>
       <div class="print-scan-block">
@@ -703,7 +697,7 @@
   <!-- Допечатка дополнительных мест (отдельное окно): выбор ЛЮБОГО клиента
        маршрута — в т.ч. уже отгруженного/закрытого — и допечатка этикеток.
        Данные сохраняются на сервере при каждом допечатывании (автосохранение). -->
-  <dialog class="modal" id="appendModal" hidden>
+  <dialog class="modal" id="appendModal">
     <div class="account-card">
       <div class="modal-head">
         <h3>Допечатать места</h3>
@@ -719,61 +713,6 @@
       <div class="route-confirm-actions">
         <button class="mini-btn route-confirm-cancel" id="appendCancel" type="button">Закрыть</button>
         <button class="mini-btn route-confirm-append" id="appendConfirm" type="button">Допечатать</button>
-      </div>
-    </div>
-  </dialog>
-
-  <!-- Содержимое бокса (клик по боксу с деталями в «Сборке») -->
-  <dialog class="modal" id="boxDetailsModal">
-    <div class="account-card">
-      <div class="modal-head">
-        <h3 id="boxDetailsTitle">Содержимое бокса</h3>
-        <button class="icon-btn modal-close" id="boxDetailsClose" aria-label="Закрыть">&times;</button>
-      </div>
-      <div class="waybill-box-details" id="boxDetailsList"></div>
-    </div>
-  </dialog>
-
-  <!-- Своя авторизация: вход по логину/паролю и первый вход по ФИО -->
-  <dialog class="modal" id="authModal">
-    <div class="account-card">
-      <div class="modal-head">
-        <h3 id="authTitle">Вход</h3>
-        <button class="icon-btn modal-close" id="authClose" aria-label="Закрыть">&times;</button>
-      </div>
-      <div id="authLoginView">
-        <div class="drv-route-label">Логин
-          <input class="text-input" id="authLogin" type="text" autocomplete="username" spellcheck="false" />
-        </div>
-        <div class="drv-route-label">Пароль
-          <input class="text-input" id="authPassword" type="password" autocomplete="current-password" />
-        </div>
-        <div class="route-confirm-actions">
-          <button class="mini-btn route-confirm-cancel" id="authFirstLink" type="button">Первый вход</button>
-          <button class="mini-btn route-confirm-ok" id="authSubmitBtn" type="button">Войти</button>
-        </div>
-        <div class="auth-hint" id="authHint"></div>
-      </div>
-      <div id="authFirstView" hidden>
-        <p class="append-hint">Первый вход: укажите имя и/или фамилию, найдите себя, затем задайте логин и пароль — они будут использоваться для входа.</p>
-        <div class="drv-route-label">Имя / Фамилия
-          <input class="text-input" id="authName" type="text" autocomplete="name" spellcheck="false" />
-        </div>
-        <div class="route-confirm-actions">
-          <button class="mini-btn route-confirm-cancel" id="authBackLogin" type="button">← Вход</button>
-          <button class="mini-btn route-confirm-ok" id="authFindBtn" type="button">Найти</button>
-        </div>
-        <div class="auth-results" id="authResults"></div>
-        <div id="authSetView" hidden>
-          <div class="drv-route-label">Логин
-            <input class="text-input" id="authNewLogin" type="text" autocomplete="username" spellcheck="false" />
-          </div>
-          <div class="drv-route-label">Пароль (мин. 8 символов)
-            <input class="text-input" id="authNewPass" type="password" autocomplete="new-password" />
-          </div>
-          <button class="mini-btn route-confirm-ok" id="authSetBtn" type="button">Сохранить и войти</button>
-        </div>
-        <div class="auth-hint" id="authFirstHint"></div>
       </div>
     </div>
   </dialog>
@@ -1325,23 +1264,17 @@
         <div class="waybill-scan-row">
           <input class="text-input" id="waybillArtInput" type="text" autocomplete="off" spellcheck="false"
                  placeholder="Штрихкод / артикул" enterkeyhint="go" />
-          <label class="waybill-qty-field" title="Сколько единиц одного артикула засчитывается за один скан (если на стикере несколько штук)">
-            <span class="waybill-qty-label">Шт. за скан</span>
-            <input class="text-input waybill-qty-input" id="waybillQtyInput" type="number" min="1" step="1" value="1" />
-          </label>
+          <input class="text-input waybill-qty-input" id="waybillQtyInput" type="number" min="1" step="1"
+                 value="1" title="Кол-во на стикере (если >1)" />
           <button type="button" class="ctrl ctrl-primary" id="waybillScanBtn">Сканировать</button>
         </div>
         <div class="waybill-box-row">
           <span class="waybill-box-cur" id="waybillBoxCur">Бокс: —</span>
           <button type="button" class="ctrl ctrl-soft" id="waybillNewBoxBtn">Новый бокс</button>
         </div>
-        <div class="waybill-box-row waybill-multi-row">
-          <label class="waybill-multi-label" for="waybillBoxQty">Печать нескольких боксов:</label>
-          <input class="select-input waybill-multi-input" id="waybillBoxQty" type="number" min="1" max="200" value="1" title="Сколько боксов напечатать за раз" />
-        </div>
         <div class="waybill-del-box-row">
-          <div class="waybill-del-box-list" id="waybillDelBoxList"></div>
-          <button type="button" class="ctrl ctrl-danger" id="waybillDelBoxBtn">Удалить выбранные</button>
+          <select id="waybillDelBoxSel" class="select-input"></select>
+          <button type="button" class="ctrl ctrl-danger" id="waybillDelBoxBtn">Удалить бокс</button>
         </div>
         <div class="waybill-list" id="waybillList"></div>
         <div class="waybill-finish-row">
@@ -1382,6 +1315,6 @@
     }
   </script>
   <script src="qr.js"></script>
-  <script src="app.js?v=20260926b1"></script>
+  <script src="app.js?v=RELEASE"></script>
 </body>
 </html>
