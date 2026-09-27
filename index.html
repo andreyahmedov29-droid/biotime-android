@@ -91,8 +91,49 @@
     </div>
   </header>
 
-  <!-- Гейт входа при включённой собственной авторизации (authRequired) -->
-  <div class="auth-gate" id="authGate" hidden><div class="auth-gate-note">Требуется вход</div></div>
+  <!-- Экран входа (непрозрачный, фон приложения не виден). Первый вход — по ФИО. -->
+  <div class="auth-gate" id="authGate" hidden>
+    <div class="auth-card">
+      <div class="auth-card-head">
+        <h3 id="authTitle">Первый вход</h3>
+        <button class="icon-btn modal-close" id="authClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <div id="authLoginView" hidden>
+        <div class="drv-route-label">Логин
+          <input class="text-input" id="authLogin" type="text" autocomplete="username" spellcheck="false" />
+        </div>
+        <div class="drv-route-label">Пароль
+          <input class="text-input" id="authPassword" type="password" autocomplete="current-password" />
+        </div>
+        <div class="route-confirm-actions">
+          <button class="mini-btn route-confirm-cancel" id="authFirstLink" type="button">Первый вход</button>
+          <button class="mini-btn route-confirm-ok" id="authSubmitBtn" type="button">Войти</button>
+        </div>
+        <div class="auth-hint" id="authHint"></div>
+      </div>
+      <div id="authFirstView">
+        <p class="append-hint">Первый вход: укажите имя и/или фамилию, найдите себя, затем задайте логин и пароль.</p>
+        <div class="drv-route-label">Имя / Фамилия
+          <input class="text-input" id="authName" type="text" autocomplete="name" spellcheck="false" placeholder="Например: Сергей Заводнов" />
+        </div>
+        <div class="route-confirm-actions">
+          <button class="mini-btn route-confirm-cancel" id="authBackLogin" type="button">У меня уже есть логин</button>
+          <button class="mini-btn route-confirm-ok" id="authFindBtn" type="button">Найти</button>
+        </div>
+        <div class="auth-results" id="authResults"></div>
+        <div id="authSetView" hidden>
+          <div class="drv-route-label">Логин
+            <input class="text-input" id="authNewLogin" type="text" autocomplete="username" spellcheck="false" />
+          </div>
+          <div class="drv-route-label">Пароль (мин. 8 символов)
+            <input class="text-input" id="authNewPass" type="password" autocomplete="new-password" />
+          </div>
+          <button class="mini-btn route-confirm-ok" id="authSetBtn" type="button">Сохранить и войти</button>
+        </div>
+        <div class="auth-hint" id="authFirstHint"></div>
+      </div>
+    </div>
+  </div>
 
   <!-- Полоса «нет связи с сервером»: появляется при сетевых сбоях (в т.ч. когда
        VPN блокирует доступ к серверу) и исчезает, когда связь восстановилась. -->
@@ -731,50 +772,6 @@
         <button class="icon-btn modal-close" id="boxDetailsClose" aria-label="Закрыть">&times;</button>
       </div>
       <div class="waybill-box-details" id="boxDetailsList"></div>
-    </div>
-  </dialog>
-
-  <!-- Своя авторизация: вход по логину/паролю и первый вход по ФИО -->
-  <dialog class="modal" id="authModal">
-    <div class="account-card">
-      <div class="modal-head">
-        <h3 id="authTitle">Вход</h3>
-        <button class="icon-btn modal-close" id="authClose" aria-label="Закрыть">&times;</button>
-      </div>
-      <div id="authLoginView">
-        <div class="drv-route-label">Логин
-          <input class="text-input" id="authLogin" type="text" autocomplete="username" spellcheck="false" />
-        </div>
-        <div class="drv-route-label">Пароль
-          <input class="text-input" id="authPassword" type="password" autocomplete="current-password" />
-        </div>
-        <div class="route-confirm-actions">
-          <button class="mini-btn route-confirm-cancel" id="authFirstLink" type="button">Первый вход</button>
-          <button class="mini-btn route-confirm-ok" id="authSubmitBtn" type="button">Войти</button>
-        </div>
-        <div class="auth-hint" id="authHint"></div>
-      </div>
-      <div id="authFirstView" hidden>
-        <p class="append-hint">Первый вход: укажите имя и/или фамилию, найдите себя, затем задайте логин и пароль — они будут использоваться для входа.</p>
-        <div class="drv-route-label">Имя / Фамилия
-          <input class="text-input" id="authName" type="text" autocomplete="name" spellcheck="false" />
-        </div>
-        <div class="route-confirm-actions">
-          <button class="mini-btn route-confirm-cancel" id="authBackLogin" type="button">← Вход</button>
-          <button class="mini-btn route-confirm-ok" id="authFindBtn" type="button">Найти</button>
-        </div>
-        <div class="auth-results" id="authResults"></div>
-        <div id="authSetView" hidden>
-          <div class="drv-route-label">Логин
-            <input class="text-input" id="authNewLogin" type="text" autocomplete="username" spellcheck="false" />
-          </div>
-          <div class="drv-route-label">Пароль (мин. 8 символов)
-            <input class="text-input" id="authNewPass" type="password" autocomplete="new-password" />
-          </div>
-          <button class="mini-btn route-confirm-ok" id="authSetBtn" type="button">Сохранить и войти</button>
-        </div>
-        <div class="auth-hint" id="authFirstHint"></div>
-      </div>
     </div>
   </dialog>
 

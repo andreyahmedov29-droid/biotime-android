@@ -1494,7 +1494,7 @@
     waybillBoxQty: $("waybillBoxQty"),
     boxDetailsModal: $("boxDetailsModal"), boxDetailsList: $("boxDetailsList"),
     boxDetailsTitle: $("boxDetailsTitle"), boxDetailsClose: $("boxDetailsClose"),
-    authBtn: $("authBtn"), authModal: $("authModal"), authClose: $("authClose"),
+    authBtn: $("authBtn"), authModal: null, authClose: $("authClose"),
     authLogin: $("authLogin"), authPassword: $("authPassword"), authSubmitBtn: $("authSubmitBtn"),
     authHint: $("authHint"), authTitle: $("authTitle"),
     authLoginView: $("authLoginView"), authFirstView: $("authFirstView"),
@@ -9915,8 +9915,7 @@
       // Собственная авторизация включена (authRequired) и сессии нет —
       // блокируем приложение и открываем вход.
       if (j && j.required) {
-        if (el.authGate) el.authGate.hidden = false;
-        openAuth();
+        openAuth(true);
       }
     } catch { /* без UI не критично */ }
   }
@@ -9934,13 +9933,19 @@
     if (el.authPassword) el.authPassword.value = "";
     if (el.authName) el.authName.value = "";
   }
-  function openAuth() { if (!el.authModal) return; showAuthView("login"); try { el.authModal.showModal(); } catch { /* уже открыта */ } }
+  function openAuth(forced) {
+    if (!el.authGate) return;
+    showAuthView("first"); // первый вход — сразу поле ФИО
+    el.authGate.hidden = false;
+    if (el.authClose) el.authClose.hidden = !!forced;
+    if (el.authName) setTimeout(() => { try { el.authName.focus(); } catch {} }, 50);
+  }
   async function doLogin() {
     const login = el.authLogin ? el.authLogin.value.trim() : "";
     const pass = el.authPassword ? el.authPassword.value : "";
     if (!login || !pass) { if (el.authHint) el.authHint.textContent = "Введите логин и пароль"; return; }
     const j = await apiAuth("POST", "/api/auth/login", { login, password: pass });
-    if (j && j.ok && j.user) { setAuthUserUI(j.user); try { el.authModal.close(); } catch {} location.reload(); return; }
+    if (j && j.ok && j.user) { setAuthUserUI(j.user); if (el.authGate) el.authGate.hidden = true; location.reload(); return; }
     if (el.authHint) el.authHint.textContent = (j && j.error) || "Не удалось войти";
   }
   async function firstLoginFind() {
@@ -9978,20 +9983,19 @@
     const pass = el.authNewPass ? el.authNewPass.value : "";
     if (!authPickId || !login || pass.length < 8) { if (el.authFirstHint) el.authFirstHint.textContent = "Укажите логин и пароль (мин. 8 символов)."; return; }
     const j = await apiAuth("POST", "/api/auth/set-credentials", { userId: authPickId, login, password: pass });
-    if (j && j.ok) { try { el.authModal.close(); } catch {} location.reload(); return; }
+    if (j && j.ok) { if (el.authGate) el.authGate.hidden = true; location.reload(); return; }
     if (el.authFirstHint) el.authFirstHint.textContent = (j && j.error) || "Не удалось сохранить";
   }
   async function doLogout() {
     await apiAuth("POST", "/api/auth/logout");
-    try { el.authModal.close(); } catch {}
+    if (el.authGate) el.authGate.hidden = true;
     window.__isOwnLoggedIn = false;
     if (el.authUserChip) el.authUserChip.hidden = true;
     if (el.authBtn) { el.authBtn.hidden = false; el.authBtn.textContent = "Войти"; }
     location.reload();
   }
-  if (el.authBtn) el.authBtn.addEventListener("click", () => { if (window.__isOwnLoggedIn) doLogout(); else openAuth(); });
-  if (el.authClose) el.authClose.addEventListener("click", () => { try { el.authModal.close(); } catch {} });
-  if (el.authModal) el.authModal.addEventListener("click", (ev) => { if (ev.target === el.authModal) { try { el.authModal.close(); } catch {} } });
+  if (el.authBtn) el.authBtn.addEventListener("click", () => { if (window.__isOwnLoggedIn) doLogout(); else openAuth(false); });
+  if (el.authClose) el.authClose.addEventListener("click", () => { if (el.authGate) el.authGate.hidden = true; });
   if (el.authFirstLink) el.authFirstLink.addEventListener("click", () => showAuthView("first"));
   if (el.authBackLogin) el.authBackLogin.addEventListener("click", () => showAuthView("login"));
   if (el.authSubmitBtn) el.authSubmitBtn.addEventListener("click", doLogin);
