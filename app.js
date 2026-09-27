@@ -7997,48 +7997,71 @@
     dayKeys.reverse();
 
     const frag = document.createDocumentFragment();
+    // Группируем дни по месяцам: {"YYYY-MM": [dayKeys...]} (порядок — как в dayKeys,
+    // т.е. месяцы от новых к старым).
+    const monthsRu = ["январь","февраль","март","апрель","май","июнь","июль","август","сентябрь","октябрь","ноябрь","декабрь"];
+    const byMonth = new Map();
     dayKeys.forEach((key) => {
-      const isToday = key === today;
-      const colKey = "day:" + key;
-      const openedKey = colKey + "+"; // явно раскрытая папка (кроме «сегодня» по умолчанию)
-      // Явный выбор важнее дефолта: «+» = раскрыта, «без суффикса» = свёрнута.
-      let open;
-      if (state.collapsed.has(openedKey)) open = true;
-      else if (state.collapsed.has(colKey)) open = false;
-      else open = isToday; // дефолт: сегодня раскрыта, прошлые дни свёрнуты
-      const folder = document.createElement("div");
-      folder.className = "day-folder" + (open ? " open" : "") + (isToday ? " is-today" : "");
-      const head = document.createElement("div");
-      head.className = "today-day-head";
-      head.innerHTML = `
+      const m = key.slice(0, 7);
+      if (!byMonth.has(m)) byMonth.set(m, []);
+      byMonth.get(m).push(key);
+    });
+    const curYM = todayKey.slice(0, 7);
+    byMonth.forEach((keys, m) => {
+      const mf = document.createElement("div");
+      const openMonth = m === curYM; // текущий месяц раскрыт, прошлые свёрнуты
+      mf.className = "month-folder" + (openMonth ? " open" : "");
+      const mHead = document.createElement("div");
+      mHead.className = "month-folder-head";
+      const mo = Number(m.slice(5, 7)) - 1;
+      const label = (monthsRu[mo] || "") + " " + Number(m.slice(0, 4));
+      mHead.innerHTML = `
         <span class="folder-caret"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></span>
-        <span class="today-day-label">${fmtDateReadable(key)}${isToday ? ` <span class="badge">сегодня</span>` : ""}</span>
-      `;
-      const body = document.createElement("div");
-      body.className = "today-day-body";
-      const list = document.createElement("div");
-      list.className = "today-day-inner";
-      body.appendChild(list);
-      folder.appendChild(head);
-      folder.appendChild(body);
-      // Collapse / expand this day folder. Explicit user choice is remembered in
-      // localStorage so the "today open / past collapsed" default is overridable.
-      head.addEventListener("click", () => {
-        state.collapsed.delete(colKey);
-        state.collapsed.delete(openedKey);
-        const nowOpen = !folder.classList.contains("open");
-        state.collapsed.add(nowOpen ? openedKey : colKey);
-        saveCollapsed(state.collapsed);
-        folder.classList.toggle("open", nowOpen);
-        // Ленивое построение: строки дня создаются в момент первого раскрытия,
-        // а не только на этапе рендера. Так свёрнутый прошедший день открывается
-        // сразу (с актуальными данными), без ручного «Обновить».
-        if (nowOpen && list.childElementCount === 0) {
-          buildTodayRows(list, key, canEdit);
-        }
+        <span class="month-label">${label}</span>
+        <span class="month-count">${keys.length} дн.</span>`;
+      const mBody = document.createElement("div");
+      mBody.className = "month-folder-body";
+      keys.forEach((key) => {
+        const isToday = key === today;
+        const colKey = "day:" + key;
+        const openedKey = colKey + "+"; // явно раскрытая папка (кроме «сегодня» по умолчанию)
+        let open;
+        if (state.collapsed.has(openedKey)) open = true;
+        else if (state.collapsed.has(colKey)) open = false;
+        else open = isToday; // дефолт: сегодня раскрыта, прошлые дни свёрнуты
+        const folder = document.createElement("div");
+        folder.className = "day-folder" + (open ? " open" : "") + (isToday ? " is-today" : "");
+        const head = document.createElement("div");
+        head.className = "today-day-head";
+        head.innerHTML = `
+          <span class="folder-caret"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></span>
+          <span class="today-day-label">${fmtDateReadable(key)}${isToday ? ` <span class="badge">сегодня</span>` : ""}</span>
+        `;
+        const body = document.createElement("div");
+        body.className = "today-day-body";
+        const list = document.createElement("div");
+        list.className = "today-day-inner";
+        body.appendChild(list);
+        folder.appendChild(head);
+        folder.appendChild(body);
+        head.addEventListener("click", () => {
+          state.collapsed.delete(colKey);
+          state.collapsed.delete(openedKey);
+          const nowOpen = !folder.classList.contains("open");
+          state.collapsed.add(nowOpen ? openedKey : colKey);
+          saveCollapsed(state.collapsed);
+          folder.classList.toggle("open", nowOpen);
+          if (nowOpen && list.childElementCount === 0) {
+            buildTodayRows(list, key, canEdit);
+          }
+        });
+        if (open) buildTodayRows(list, key, canEdit);
+        mBody.appendChild(folder);
       });
-      if (open) buildTodayRows(list, key, canEdit);
-      frag.appendChild(folder);
+      mHead.addEventListener("click", () => { mf.classList.toggle("open"); });
+      mf.appendChild(mHead);
+      mf.appendChild(mBody);
+      frag.appendChild(mf);
     });
     el.todayList.innerHTML = "";
     el.todayList.appendChild(frag);
