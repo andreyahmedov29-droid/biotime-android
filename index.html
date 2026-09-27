@@ -797,6 +797,7 @@
         <button class="atab" data-sub="log">Журнал</button>
         <button class="atab" data-sub="settings">Параметры</button>
         <button class="atab" data-sub="admins">Администраторы</button>
+        <button class="atab" data-sub="accounts">Учётные записи</button>
       </nav>
 
       <!-- Все сотрудники -->
@@ -1174,6 +1175,16 @@
           </div>
         </div>
         <div class="admin-list" id="adminsList"></div>
+      </div>
+      <div class="asub" data-sub="accounts" hidden>
+        <div class="sub-head">
+          <div class="sub-title-wrap">
+            <h4 class="sub-title">Учётные записи</h4>
+            <p class="sub-note">Логин и пароль для входа в приложение (вместо/поверх входа Битрикс). Введите логин и (при необходимости) новый пароль и нажмите «Сохранить».</p>
+          </div>
+        </div>
+        <button type="button" class="mini-btn" id="adminUsersLoad">Показать сотрудников</button>
+        <div id="adminUsersList" class="admin-users-list"></div>
       </div>
     </div>
   </dialog>

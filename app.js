@@ -9966,11 +9966,11 @@
       toast("Вы вошли");
       try { localStorage.setItem("biotime_firstlogin_done", "1"); } catch {}
       window.__ownAuthUser = j.user;
-        setAuthUserUI(j.user);
-        if (el.authGate) el.authGate.hidden = true;
-        // Не перезагружаем и не перепроверяем куку — иначе за шлюзом Вайбкода
-        // сессия не подхватится и снова выпадет экран входа.
-        if (el.authClose) el.authClose.hidden = false;
+      setAuthUserUI(j.user);
+      if (el.authGate) el.authGate.hidden = true;
+      if (el.authClose) el.authClose.hidden = false;
+      // Применим роль/разделы сразу (без переоткрытия): перечитываем состояние.
+      if (typeof loadState === "function") setTimeout(() => { try { loadState(); } catch {} }, 200);
         return;
     }
     const msg = (j && j.error) || "Не удалось войти (проверьте сеть)";
@@ -10020,6 +10020,7 @@
       toast("Учётные данные сохранены — вы вошли");
       setAuthUserUI(window.__ownAuthUser);
       if (el.authClose) el.authClose.hidden = false;
+      if (typeof loadState === "function") setTimeout(() => { try { loadState(); } catch {} }, 200);
       return;
     }
     if (el.authFirstHint) el.authFirstHint.textContent = (j && j.error) || "Не удалось сохранить";
@@ -10045,27 +10046,18 @@
 
   // ---- Админ: учётные записи сотрудников (логин/пароль) ----
   function ensureAdminUsersUI() {
-    if (!el.settingsModal || document.getElementById("adminUsersBox")) return;
-    const box = document.createElement("div");
-    box.id = "adminUsersBox";
-    box.innerHTML = `
-      <h4>Учётные записи (вход по логину/паролю)</h4>
-      <button type="button" class="mini-btn" id="adminUsersLoad">Показать сотрудников</button>
-      <div id="adminUsersList" class="admin-users-list"></div>`;
-    // Вставляем сразу под вкладки настроек, чтобы блок был виден без прокрутки.
-    const nav = el.settingsModal && el.settingsModal.querySelector("#adminTabs");
-    if (nav && nav.nextSibling) nav.parentNode.insertBefore(box, nav.nextSibling);
-    else el.settingsModal.appendChild(box);
+    // Панель «Учётные записи» теперь — вкладка настроек (index.html),
+    // здесь просто подключаем кнопку загрузки списка.
     const loadBtn = document.getElementById("adminUsersLoad");
-    if (loadBtn) loadBtn.addEventListener("click", loadAdminUsers);
-    updateAdminUsersVisibility();
+    if (loadBtn && !loadBtn.__wired) {
+      loadBtn.__wired = true;
+      loadBtn.addEventListener("click", loadAdminUsers);
+    }
   }
   function updateAdminUsersVisibility() {
-    const box = document.getElementById("adminUsersBox");
-    if (!box) return;
-    // Блок виден ТОЛЬКО администраторам — обычные пользователи не видят
-    // новый раздел «Учётные записи» (их права и видимость не меняются).
-    box.style.display = state.isAdmin ? "" : "none";
+    // Вкладкой «Учётные записи» управляет стандартный switchAdminSub (админ-панель
+    // доступна только админам). Права пользователей не меняются.
+    return;
   }
   async function loadAdminUsers() {
     const list = document.getElementById("adminUsersList");
