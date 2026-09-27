@@ -103,14 +103,16 @@
         <button class="icon-btn modal-close" id="authClose" aria-label="Закрыть">&times;</button>
       </div>
       <div id="authLoginView">
-        <div class="drv-route-label">Логин
-          <input class="text-input" id="authLogin" type="text" autocomplete="username" spellcheck="false" />
+        <div class="auth-field">
+          <label for="authLogin">Логин</label>
+          <input class="text-input auth-input" id="authLogin" type="text" autocomplete="username" spellcheck="false" />
         </div>
-        <div class="drv-route-label">Пароль
-          <input class="text-input" id="authPassword" type="password" autocomplete="current-password" />
+        <div class="auth-field">
+          <label for="authPassword">Пароль</label>
+          <input class="text-input auth-input" id="authPassword" type="password" autocomplete="current-password" />
         </div>
-        <div class="route-confirm-actions">
-          <button class="mini-btn route-confirm-ok" id="authSubmitBtn" type="button">Войти</button>
+        <div class="auth-actions">
+          <button class="btn auth-submit" id="authSubmitBtn" type="button">Войти</button>
         </div>
         <div class="auth-hint" id="authHint"></div>
       </div>
