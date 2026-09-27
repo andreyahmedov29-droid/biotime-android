@@ -2459,7 +2459,8 @@
 
   // Расчёт зарплаты одного сотрудника за месяц (year, m0) с автокомпенсацией.
   function employeeSalaryCalc(staffId, year, m0) {
-    const normDayMs = state.norm * 3600000;
+    // Норма рабочего дня — 8 ч (обед 1 ч в оплачиваемую норму НЕ входит).
+    const normDayMs = RATE_BASE_HOURS * 3600000;
     const daysInMonth = new Date(year, m0 + 1, 0).getDate();
     const bizDays = businessDaysInMonth(year, m0);
     // Месячная норма для автокомпенсации = рабочие дни × 8 ч рабочего времени.
@@ -2487,9 +2488,8 @@
       // Выходной день: если таймер был запущен и завершён (есть закрытый сегмент)
       // — ставим явку независимо от часов и ВЕСЬ интервал пишем в подработку.
       if (!isBiz && hasTimer) {
-        totalWorkMs += closedReal;
         totalOverMs += closedReal;
-        rows.push({ day: d, date: new Date(year, m0, d), work: closedReal, over: closedReal });
+        rows.push({ day: d, date: new Date(year, m0, d), work: 0, over: closedReal });
         continue;
       }
       // Приоритет: есть таймер → используем его (ручная явка игнорируется).
@@ -2498,11 +2498,13 @@
       const work = hasTimer ? reportDayWorkMs(staffId, key)
         : (st === "Я" || isPaidIdle ? RATE_BASE_HOURS * 3600000 : 0);
       if (work <= 0) continue;
-      const over = hasTimer ? Math.max(0, closedReal - normDayMs) : 0;
-      totalWorkMs += work;
+      // Переработка дня = рабочее время сверх 8 ч нормы.
+      const over = hasTimer ? Math.max(0, work - normDayMs) : 0;
+      // «Факт» (Отработано) = базовая норма до 8 ч, БЕЗ переработки.
+      totalWorkMs += Math.min(work, normDayMs);
       if (over > 0) totalOverMs += over;
       if (isPaidIdle && !hasTimer) { paidIdleDays += 1; paidIdleMs += work; }
-      rows.push({ day: d, date: new Date(year, m0, d), work, over, st: isPaidIdle ? st : undefined });
+      rows.push({ day: d, date: new Date(year, m0, d), work: Math.min(work, normDayMs), over, st: isPaidIdle ? st : undefined });
     }
     const deficitMs = Math.max(0, normMonthMs - totalWorkMs);
     // Автокомпенсация применяется ТОЛЬКО после завершения месяца: пока месяц
