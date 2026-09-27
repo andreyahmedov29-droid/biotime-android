@@ -9886,6 +9886,7 @@
 
   // ---- Своя авторизация: вход/первый вход (фронт) ----
   let authPickId = null;
+  let authPickedName = "";
   async function apiAuth(method, url, body) {
     try {
       const res = await fetch(url, {
@@ -9905,6 +9906,13 @@
   }
   async function initAuth() {
     try {
+      // Уже авторизовались в этой сессии страницы (даже если кука не дожила за
+      // шлюзом Вайбкода) — не перепроверяем и не открываем гейт повторно.
+      if (window.__ownAuthUser) {
+        setAuthUserUI(window.__ownAuthUser);
+        if (el.authGate) el.authGate.hidden = true;
+        return;
+      }
       const j = await apiAuth("GET", "/api/auth/me");
       if (j && j.ok && j.user) {
         setAuthUserUI(j.user);
@@ -9948,14 +9956,15 @@
     try { j = await apiAuth("POST", "/api/auth/login", { login, password: pass }); }
     catch (e) { console.error("[auth] login error:", e); }
     console.log("[auth] login result:", j);
-    if (j && j.ok && j.user) {
-      toast("Вы вошли");
-      setAuthUserUI(j.user);
-      if (el.authGate) el.authGate.hidden = true;
-      // Не перезагружаем страницу: иначе за шлюзом Вайбкода сессия/кука может
-      // не подхватиться при релоаде и снова выпадет экран первого входа.
-      setTimeout(() => initAuth(), 50);
-      return;
+      if (j && j.ok && j.user) {
+        toast("Вы вошли");
+        window.__ownAuthUser = j.user;
+        setAuthUserUI(j.user);
+        if (el.authGate) el.authGate.hidden = true;
+        // Не перезагружаем и не перепроверяем куку — иначе за шлюзом Вайбкода
+        // сессия не подхватится и снова выпадет экран входа.
+        if (el.authClose) el.authClose.hidden = false;
+        return;
     }
     const msg = (j && j.error) || "Не удалось войти (проверьте сеть)";
     if (el.authHint) el.authHint.textContent = msg;
@@ -9986,6 +9995,7 @@
   function pickAuthResult(id, name, has) {
     if (has) { if (el.authFirstHint) el.authFirstHint.textContent = "У этого пользователя уже есть вход — используйте «Вход» по логину/паролю."; return; }
     authPickId = String(id);
+    authPickedName = String(name || "");
     if (el.authNewLogin) { el.authNewLogin.value = translitLogin(name); }
     if (el.authNewPass) el.authNewPass.value = "";
     if (el.authSetView) el.authSetView.hidden = false;
@@ -9997,9 +10007,11 @@
     if (!authPickId || !login || pass.length < 8) { if (el.authFirstHint) el.authFirstHint.textContent = "Укажите логин и пароль (мин. 8 символов)."; return; }
     const j = await apiAuth("POST", "/api/auth/set-credentials", { userId: authPickId, login, password: pass });
     if (j && j.ok) {
+      window.__ownAuthUser = { id: authPickId, name: authPickedName || "Пользователь", role: "MEMBER" };
       if (el.authGate) el.authGate.hidden = true;
       toast("Учётные данные сохранены — вы вошли");
-      setTimeout(() => initAuth(), 50);
+      setAuthUserUI(window.__ownAuthUser);
+      if (el.authClose) el.authClose.hidden = false;
       return;
     }
     if (el.authFirstHint) el.authFirstHint.textContent = (j && j.error) || "Не удалось сохранить";
