@@ -1456,6 +1456,7 @@
     allowFinishUnloadIncomplete: $("allowFinishUnloadIncomplete"),
     allowDriverReorderPoints: $("allowDriverReorderPoints"),
     allowWaybill: $("allowWaybill"),
+    requireAuth: $("requireAuth"),
     routeDeleteCode: $("routeDeleteCode"),
     scanLogLimit: $("scanLogLimit"),
     routeDeleteModal: $("routeDeleteModal"), routeDeleteInput: $("routeDeleteInput"),
@@ -8637,6 +8638,7 @@
     if (el.allowFinishUnloadIncomplete) el.allowFinishUnloadIncomplete.checked = !!state.params.allowFinishUnloadIncomplete;
     if (el.allowDriverReorderPoints) el.allowDriverReorderPoints.checked = !!state.params.allowDriverReorderPoints;
     if (el.allowWaybill) el.allowWaybill.checked = !!state.params.allowWaybill;
+    if (el.requireAuth) el.requireAuth.checked = !!state.params.authRequired;
     if (el.routeDeleteCode) el.routeDeleteCode.value = state.params.routeDeleteCode || "";
     if (el.scanLogLimit) el.scanLogLimit.value = state.params.scanLogLimit != null ? state.params.scanLogLimit : 30000;
     renderGroupChecks(el.showOverHoursGroups, state.params.showOverHoursGroups || []);
@@ -8880,6 +8882,7 @@
       allowFinishUnloadIncomplete: !!el.allowFinishUnloadIncomplete.checked,
       allowDriverReorderPoints: !!el.allowDriverReorderPoints.checked,
       allowWaybill: !!el.allowWaybill.checked,
+      authRequired: !!(el.requireAuth && el.requireAuth.checked),
       routeDeleteCode: el.routeDeleteCode ? el.routeDeleteCode.value.trim() : "",
       scanLogLimit: el.scanLogLimit ? (Number(el.scanLogLimit.value) || 30000) : 30000,
       showOverHoursGroups: collectGroupChecks(el.showOverHoursGroups),
