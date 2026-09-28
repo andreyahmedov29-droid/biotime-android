@@ -12,6 +12,7 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.view.WindowManager
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
@@ -111,6 +112,19 @@ class MainActivity : AppCompatActivity() {
 
         webView = WebView(this)
         setContentView(webView)
+
+        // ---- Защита от сворачивания на ТСД ----
+        // 1) Не гасим экран во время работы.
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // 2) При погасшем/заблокированном экране показываем приложение поверх
+        //    (не даём уйти в фон, когда рядом происходят события).
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        }
+        // 3) Закреплённый режим (lock task / kiosk): кнопка «Домой» не сворачивает
+        //    приложение в фон на ТСД. Не требует прав администратора — пиннинг.
+        try { startLockTask() } catch (_: Exception) { /* OEM без поддержки пиннинга */ }
 
         configureWebView()
         // If the Activity was recreated (e.g. the system killed the background
