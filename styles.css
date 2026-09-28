@@ -2168,6 +2168,18 @@ body.state-finished .total-cell.accent .total-value { color: var(--red-soft); }
   line-height: 1.4;
   word-break: break-word;
 }
+.drv-client-inn {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border: 1px solid rgba(255, 171, 56, 0.4);
+  border-radius: 999px;
+  color: var(--amber);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .2px;
+  white-space: nowrap;
+}
 .drv-client-side {
   display: flex;
   flex-direction: row;
@@ -4180,7 +4192,8 @@ body.hide-over-sum .earned-cell { display: none !important; }
 #waybillModal::backdrop { background: rgba(0, 0, 0, 0.66); }
 #waybillModal .postpone-card {
   width: 100%; max-width: 100%;
-  height: 100dvh; max-height: 100dvh;
+  height: 100vh; height: 100dvh;
+  max-height: 100vh; max-height: 100dvh;
   display: flex; flex-direction: column;
   overflow: hidden;
   border-radius: 0;
@@ -4197,6 +4210,14 @@ body.hide-over-sum .earned-cell { display: none !important; }
   font-size: 13px; color: var(--green-soft); min-height: 18px; font-weight: 600;
   flex: 0 0 auto;
 }
+.waybill-flash {
+  font-size: 17px; font-weight: 800; text-align: center; flex: 0 0 auto;
+  padding: 12px 14px; border-radius: 12px;
+  background: rgba(255, 171, 56, 0.14); border: 1px solid rgba(255, 171, 56, 0.5);
+  color: var(--amber);
+  transition: opacity var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
+}
+.waybill-flash.fw-out { opacity: 0; transform: translateY(-4px); }
 .waybill-scan-row { display: flex; gap: 8px; align-items: center; flex: 0 0 auto; }
 .waybill-scan-row .text-input {
   flex: 1 1 auto; font-size: 17px; font-weight: 600; letter-spacing: .5px;
@@ -4211,12 +4232,30 @@ body.hide-over-sum .earned-cell { display: none !important; }
 .waybill-finish-row .ctrl { width: 100%; font-size: 15px; font-weight: 700; padding: 13px 16px; }
 .waybill-finish-row .ctrl:disabled { opacity: .5; cursor: not-allowed; }
 .waybill-box-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; flex: 0 0 auto; }
-.waybill-box-cur { font-size: 13px; font-weight: 800; color: var(--green-soft); padding: 6px 10px; border: 1px solid rgba(76,175,125,.4); border-radius: 8px; }
+.waybill-box-cur {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; font-weight: 600; padding: 7px 12px; border-radius: 10px;
+  border: 1px dashed rgba(255,255,255,.28); background: rgba(255,255,255,.05);
+  color: var(--ink); min-width: 0;
+}
+.waybill-box-cur .waybill-box-label {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .5px; opacity: .65;
+}
+.waybill-box-cur .waybill-box-value {
+  font-size: 15px; font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.waybill-box-cur .waybill-box-hint { font-size: 12px; font-weight: 500; opacity: .85; white-space: nowrap; }
+.waybill-box-cur[data-state="empty"] { border-color: rgba(255,171,56,.55); background: rgba(255,171,56,.08); }
+.waybill-box-cur[data-state="empty"] .waybill-box-value,
+.waybill-box-cur[data-state="empty"] .waybill-box-hint { color: var(--amber); }
+.waybill-box-cur[data-state="active"] { border-style: solid; border-color: rgba(76,175,125,.55); background: rgba(76,175,125,.09); }
+.waybill-box-cur[data-state="active"] .waybill-box-value,
+.waybill-box-cur[data-state="active"] .waybill-box-hint { color: var(--green-soft); }
 .waybill-box-row .ctrl.active { border-color: var(--green-soft); color: var(--green-soft); }
 .waybill-multi-row { flex-wrap: nowrap; }
 .waybill-multi-label { font-size: 13px; opacity: .9; white-space: nowrap; }
 .waybill-multi-input { max-width: 76px; font-weight: 700; }
-.waybill-qty-field { display: flex; flex-direction: column; gap: 2px; }
+.waybill-qty-field { display: flex; align-items: center; gap: 6px; padding: 0 6px; }
 .waybill-qty-label { font-size: 12px; opacity: .85; white-space: nowrap; }
 .waybill-qty-input { max-width: 72px; }
 .waybill-mark box { color: var(--green-soft); }
@@ -4234,6 +4273,92 @@ body.hide-over-sum .earned-cell { display: none !important; }
 .waybill-box-detail .wbd-art { font-family: var(--font-mono); font-weight: 700; }
 .waybill-box-detail .wbd-name { flex: 1 1 auto; opacity: .9; }
 .waybill-box-detail .wbd-qty { opacity: .7; }
+/* --- ТСД / маленькие экраны: компактное окно «Сборка» --- */
+.waybill-list-toggle { width: 100%; font-size: 14px; font-weight: 700; padding: 14px 16px; }
+.waybill-list-modal { flex: 1 1 auto; min-height: 0; overflow-y: auto; max-height: none; }
+#waybillListModal {
+  max-width: 100vw; width: 100%;
+  height: 100vh; height: 100dvh;
+  max-height: 100vh; max-height: 100dvh;
+  margin: 0; padding: 0; border: 0; background: transparent;
+}
+#waybillListModal::backdrop { background: rgba(0, 0, 0, 0.66); }
+#waybillListModal .postpone-card {
+  width: 100%; max-width: 100%;
+  height: 100vh; height: 100dvh;
+  max-height: 100vh; max-height: 100dvh;
+  display: flex; flex-direction: column; border-radius: 0;
+}
+#waybillListModal .modal-head { flex: 0 0 auto; }
+.waybill-list-tools {
+  display: flex; flex-direction: column; gap: 8px; flex: 0 0 auto; padding: 2px 0 10px;
+}
+.waybill-list-tools .ctrl { width: 100%; white-space: nowrap; }
+.waybill-list-tools .ctrl:disabled { opacity: .45; cursor: not-allowed; }
+.waybill-list-qty {
+  display: flex; flex-direction: column; gap: 2px; width: 100%;
+}
+.waybill-list-qty span { font-size: 11px; opacity: .8; white-space: nowrap; }
+.waybill-list-qty-input { width: 100%; font-weight: 700; }
+
+/* Быстрая модалка ввода количества при скане детали с кол-вом >1 */
+#waybillQtyAskModal { max-width: 340px; width: 100%; }
+#waybillQtyAskModal .waybill-qty-ask { padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+.waybill-qty-ask-input { font-size: 26px; font-weight: 800; text-align: center; padding: 12px; }
+.waybill-qty-ask-actions { display: flex; gap: 8px; }
+.waybill-qty-ask-actions .ctrl { flex: 1 1 auto; }
+
+/* Читабельные строки списка в модалке (ТСД): артикул крупно, наименование ниже */
+.waybill-list-modal .waybill-item {
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  gap: 2px 10px;
+  padding: 10px 12px;
+}
+.waybill-list-modal .waybill-check { grid-column: 1; grid-row: 1 / span 2; align-self: center; font-size: 22px; }
+.waybill-list-modal .waybill-item-art { grid-column: 2; grid-row: 1; font-size: 16px; }
+.waybill-list-modal .waybill-item-name { grid-column: 2; grid-row: 2; font-size: 13px; opacity: .88; }
+.waybill-list-modal .waybill-item-qty { grid-column: 3; grid-row: 1; justify-self: end; font-size: 15px; }
+.waybill-list-modal .waybill-mark { grid-column: 3; grid-row: 2; justify-self: end; font-size: 11px; }
+@media (max-width: 480px), (max-height: 700px) {
+  #waybillListModal::backdrop,
+  .modal::backdrop { backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .modal[open] { animation: none; }
+  #waybillModal .postpone-card { padding: 10px 10px 12px; }
+  #waybillModal .modal-head { padding: 4px 0 6px; }
+  #waybillModal .modal-head h3 { font-size: 15px; }
+  .waybill-body { gap: 8px; }
+  .waybill-status { font-size: 12px; min-height: 14px; line-height: 1.35; }
+  .waybill-scan-row { gap: 6px; flex-wrap: wrap; }
+  .waybill-scan-row .text-input { flex: 1 1 auto; font-size: 15px; padding: 9px 12px; }
+  .waybill-qty-field { padding: 0; }
+  .waybill-qty-field .waybill-qty-input { max-width: 56px; }
+  .waybill-scan-row .ctrl { font-size: 13px; padding: 9px 14px; }
+  .waybill-tools-hint { display: none; }
+  .waybill-tools-row { gap: 6px; }
+  .waybill-tools-row .ctrl { flex: 1 1 auto; font-size: 13px; padding: 9px 10px; white-space: nowrap; }
+  .waybill-multi-row { flex-wrap: wrap; }
+  .waybill-body { overflow-y: auto; }
+  .waybill-del-box-row { align-items: stretch; flex-wrap: wrap; }
+  .waybill-del-box-list { max-height: 130px; width: 100%; }
+  .waybill-del-box-btn { width: 100%; }
+  .waybill-del-box-item { font-size: 13px; padding: 9px 10px; }
+  .waybill-list { gap: 4px; }
+  .waybill-item { grid-template-columns: 22px 88px minmax(0, 1fr) 40px auto; gap: 6px; padding: 6px 8px; }
+  .waybill-item-art { font-size: 11.5px; }
+  .waybill-item-name { font-size: 11.5px; }
+  .waybill-item-qty { font-size: 12px; }
+  .waybill-mark { font-size: 10px; padding: 3px 8px; }
+  .waybill-finish-row .ctrl { font-size: 14px; padding: 12px 14px; }
+}
+
+/* Очень низкие экраны (короткие ТСД): окно сборки целиком прокручивается */
+@media (max-height: 620px) {
+  #waybillModal .postpone-card { height: auto; max-height: 100dvh; overflow-y: auto; }
+  .waybill-list { flex: 0 1 auto; max-height: 34dvh; }
+}
+/* Модалка «Список деталей» на коротких экранах не должна резаться правилом выше:
+   её список тянется на всю оставшуюся высоту окна и прокручивается. */
+#waybillListModal .waybill-list-modal { flex: 1 1 auto; min-height: 0; max-height: none; }
 .auth-hint { margin-top: 10px; font-size: 13px; opacity: .9; }
 .auth-results { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow: auto; }
 .admin-users-list {
@@ -4347,13 +4472,23 @@ body.hide-over-sum .earned-cell { display: none !important; }
 .route-waybill-upload { flex: 0 0 auto; }
 .waybill-item {
   display: grid;
-  grid-template-columns: 120px minmax(0, 1fr) 58px auto;
+  grid-template-columns: 26px 120px minmax(0, 1fr) 58px auto;
   gap: 10px; align-items: center;
   padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px;
   cursor: pointer;
   transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
 }
 .waybill-item:hover { border-color: var(--line-strong, rgba(255,255,255,.22)); }
+.waybill-item.selected {
+  border-color: var(--amber);
+  background: rgba(255, 171, 56, 0.14);
+  box-shadow: 0 0 0 1px var(--amber);
+}
+.waybill-check {
+  font-size: 16px; line-height: 1; text-align: center; user-select: none;
+  color: var(--ink-faint);
+}
+.waybill-item.selected .waybill-check { color: var(--amber); }
 .waybill-item.done {
   opacity: 1;
   background: rgba(76, 175, 125, 0.26);
@@ -4381,6 +4516,18 @@ body.hide-over-sum .earned-cell { display: none !important; }
 .waybill-item.done .waybill-item-art,
 .waybill-item.done .waybill-item-name,
 .waybill-item.done .waybill-item-qty { color: #eaffea; text-shadow: 0 0 6px rgba(76,175,125,.55); }
+.waybill-tools-row {
+  display: flex; gap: 10px; align-items: center; flex: 0 0 auto;
+  padding: 2px 0;
+}
+.waybill-tools-row .waybill-miss-btn { flex: 0 0 auto; }
+.tcd .waybill-tools-row .waybill-manual-btn { display: none; } /* на ТСД «Собрать вручную» теперь в модалке */
+.tcd .waybill-tools-row .waybill-miss-btn { display: none; } /* на ТСД «Не найдено» теперь в модалке */
+.tcd #waybillScanBtn { display: none; } /* на ТСД скан идёт аппаратным сканером — кнопка не нужна */
+.tcd .waybill-qty-field { display: none; } /* на ТСД кол-во вводится в модалке при скане */
+.tcd #waybillNewBoxBtn { display: none; } /* на ТСД бокс создаётся сканом этикетки, кнопка не нужна */
+.waybill-tools-row .waybill-miss-btn:disabled { opacity: .45; cursor: not-allowed; }
+.waybill-tools-hint { font-size: 12px; opacity: .7; }
 
 /* Резервная копия данных (экспорт/импорт полной базы) */
 .backup-row {

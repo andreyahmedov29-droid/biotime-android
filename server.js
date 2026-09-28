@@ -489,6 +489,7 @@ function loadDb() {
       logo: c.logo || null,
       logoText: c.logoText || "",
       bundleName: c.bundleName || "",
+      inn: String(c.inn || "").trim(),
     }));
     return dbOut;
   } catch {
@@ -563,6 +564,19 @@ function segmentsFor(staffId, rec) {
   return Array.isArray(rec.segments) ? rec.segments : [];
 }
 
+// ---- SSE-шина (мгновенная синхронизация между устройствами) ----
+// /api/events — Server-Sent Events: сервер держит соединения и пушит уведомление
+// после каждого persistDb. Клиенты (ТСД/ПК/телефон) по событию сразу перечитывают
+// актуальное состояние, не дожидаясь опроса.
+const sseClients = new Set();
+function sseWrite(res, str) {
+  try { res.write(str); } catch { sseClients.delete(res); }
+}
+function notifyDbChanged() {
+  const msg = `data: ${JSON.stringify({ type: "changed" })}\n\n`;
+  for (const res of sseClients) sseWrite(res, msg);
+}
+
 function persistDb() {
   // Atomic write: tmp + rename. Serialised through the queue so parallel writes don't corrupt.
   writeQueue = writeQueue.then(() => {
@@ -575,6 +589,11 @@ function persistDb() {
       console.error("persist error:", e);
     }
   });
+  // Мгновенная синхронизация между устройствами (ТСД/ПК/телефон): после каждого
+  // реального сохранения уведомляем всех активных SSE-клиентов «данные изменились».
+  // Клиент по событию сразу перечитывает актуальное состояние (скан, завершение
+  // маршрута и т.п.) — не дожидаясь следующего такта опроса.
+  notifyDbChanged();
   return writeQueue;
 }
 
@@ -1054,6 +1073,7 @@ function normalizeRouteClient(c) {
     logo: c && c.logo ? String(c.logo).slice(0, 200000) : null,
     logoText: String((c && c.logoText) || "").toUpperCase().slice(0, 5),
     bundleName: String((c && c.bundleName) || "").slice(0, 200),
+    inn: String((c && c.inn) || "").trim(),
   };
   if (members && members.length > 0) base.members = members;
   return base;
@@ -2612,6 +2632,97 @@ function parseXlsxItems(buf) {
   return { items, buyer };
 }
 
+// ---- Интеграция с 1С (HTTP-сервис): автоподтягивание расходных накладных ----
+// Приводит артикул к каноническому виду для сравнения: убирает разделители
+// («мусор») — пробелы, подчёркивания, точки, дефисы и пр. («2345_456», «2345 456»,
+// «2345.456» → «2345456»). На стикерах/скане артикул может приходить с этими
+// символами, а в накладной — без них. Применяется одинаково к стикеру и артикулам.
+function artNorm(s) {
+  return String(s == null ? "" : s).replace(/[\s_.\-,:/;\\]/g, "");
+}
+
+// Доступ настраивается переменными окружения сервера:
+//   ONEC_API_URL  — адрес HTTP-сервиса 1С (например https://1c.company.ru/hs/biotime)
+//   ONEC_API_KEY  — ключ/токен доступа (не уходит в браузер)
+// Пока интеграция не настроена (нет ONEC_API_URL) — функции ведут себя как «ничего
+// не нашлось» и маршрут создаётся по-старому (ручная загрузка накладных).
+// Формат ответа 1С (предполагаемый контракт):
+//   GET {url}/realizations?inn=<ИНН>
+//   -> [ { id, number, taken: false, items: [{ article, name, qty }] } ]  (или { realizations: [...] })
+function innForClient(routeClient, dbData) {
+  if (routeClient && String((routeClient && routeClient.inn) || "").trim()) {
+    return String(routeClient.inn).trim();
+  }
+  const byName = (dbData && dbData.driverClients || []).find(
+    (c) => String(c.client) === String(routeClient && routeClient.client)
+  );
+  return byName ? String(byName.inn || "").trim() : "";
+}
+
+async function fetchOnecRealization(inn) {
+  const innV = String(inn || "").trim();
+  const url = String(process.env.ONEC_API_URL || "").trim().replace(/\/+$/, "");
+  if (!url || !innV) return null;
+  const key = String(process.env.ONEC_API_KEY || "").trim();
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20000);
+    let res;
+    try {
+      res = await fetch(`${url}/realizations?inn=${encodeURIComponent(innV)}`, {
+        headers: Object.assign(
+          { Accept: "application/json" },
+          key ? { "X-Api-Key": key } : {}
+        ),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res || !res.ok) return null;
+    const data = await res.json().catch(() => null);
+    const docs = Array.isArray(data) ? data : (data && Array.isArray(data.realizations) ? data.realizations : null);
+    if (!docs) return null;
+    const doc = docs.find((d) => !(d && d.taken === true));
+    if (!doc) return null;
+    const items = (Array.isArray(doc.items) ? doc.items : [])
+      .map((it) => ({
+        art: String((it && (it.article != null ? it.article : it.art)) || "").trim(),
+        name: String((it && (it.name || it.наименование)) || "").trim(),
+        qty: Number(it && it.qty) > 0 ? Number(it.qty) : 1,
+        scanned: 0,
+        missing: false,
+      }))
+      .filter((it) => it.art);
+    if (!items.length) return null;
+    return {
+      id: String((doc && doc.id) || ""),
+      number: String((doc && (doc.number || doc.номер)) || ""),
+      items,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Заполняет накладные маршрута для клиентов, у которых есть ИНН и нет ещё накладной.
+async function autoPullWaybillsFrom1c(clients, waybillsArr, dbData) {
+  if (!Array.isArray(clients)) return;
+  if (!String(process.env.ONEC_API_URL || "").trim()) return; // 1С не настроена — пропускаем
+  const have = new Set();
+  for (const w of waybillsArr) if (w && w.items && w.items.length) have.add(w.clientIndex);
+  for (let i = 0; i < clients.length; i++) {
+    if (have.has(i)) continue;
+    const inn = innForClient(clients[i], dbData);
+    if (!inn) continue;
+    const doc = await fetchOnecRealization(inn);
+    if (doc && doc.items && doc.items.length) {
+      waybillsArr.push({ clientIndex: i, items: doc.items, buyer: String(doc.number || "") });
+      have.add(i);
+    }
+  }
+}
+
 function liveRows(actor, dbData) {
   const staff = visibleStaff(actor, dbData);
   const now = Date.now();
@@ -2782,9 +2893,26 @@ async function handleApi(req, res, urlPath) {
     clearAuthCookie(res);
     return sendJson(res, 200, { ok: true });
   }
+  // SSE: поток уведомлений «данные изменились». Соединение держим открытым,
+  // при каждом persistDb сервер шлёт событие, на которое клиент перечитывает данные.
+  if (urlPath === "/api/events" && method === "GET") {
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      "Connection": "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    res.write(": connected\n\n");
+    sseClients.add(res);
+    const hb = setInterval(() => sseWrite(res, ": hb\n\n"), 25000);
+    const cleanup = () => { clearInterval(hb); sseClients.delete(res); };
+    req.on("close", cleanup);
+    res.on("close", cleanup);
+    return; // держим соединение открытым
+  }
   if (urlPath === "/api/auth/me" && method === "GET") {
     const su = sessionUserFromCookie(req.headers.cookie || "");
-    const authRequired = !!(db.params && db.params.authRequired === true);
+    const authRequired = true; // собственный вход (логин/пароль) всегда обязателен
     return sendJson(res, 200, su
       ? { ok: true, user: { id: su.id, name: su.name, role: su.role }, required: authRequired }
       : { ok: false, user: null, required: authRequired });
@@ -3627,6 +3755,7 @@ async function handleApi(req, res, urlPath) {
       const prevAddress = found.address;
       found.client = client;
       found.address = address;
+      found.inn = String(body.inn != null ? body.inn : found.inn || "").trim();
       // Адрес изменился — старые координаты недействительны, переглокализуем.
       found.lat = null;
       found.lon = null;
@@ -3652,6 +3781,7 @@ async function handleApi(req, res, urlPath) {
       id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
       client,
       address,
+      inn: String(body.inn || "").trim(),
       bundleId: null,
       addedBy: user.id,
       at: Date.now(),
@@ -3954,7 +4084,7 @@ async function handleApi(req, res, urlPath) {
   //   route.waybills[clientIndex] = { items: [{art,name,qty,scanned,missing}] }
   // Загрузка: POST /api/routes/:id/waybill { clientIndex, fileB64 }.
   // Сканирование: POST /api/routes/:id/waybill/scan { clientIndex, art }.
-  let wm = urlPath.match(/^\/api\/routes\/([^/]+)\/waybill(\/(scan|missing))?$/) || null;
+  let wm = urlPath.match(/^\/api\/routes\/([^/]+)\/waybill(\/(scan|missing|bind))?$/) || null;
   // Разбор xlsx для формы создания маршрута (диспетчер): возвращает позиции без
   // сохранения — их отдаст сам POST создания маршрута.
   if (urlPath === "/api/waybill/parse" && method === "POST") {
@@ -4022,22 +4152,23 @@ async function handleApi(req, res, urlPath) {
     if (action === "scan") {
       const art = String(body.art || "").trim();
       if (!art) return sendJson(res, 422, { ok: false, error: "Пустой артикул" });
-      // Деталь привязывается к боксу (коду этикетки места). Бокс обязателен:
-      // если его не отсканировали/не создали — сборщику нельзя принять деталь.
+      // Привязка к месту (боксу) НЕОБЯЗАТЕЛЬНА: деталь можно принять и без бокса.
+      // Если бокс передан — деталь привязывается к нему, иначе остаётся без места.
       const box = String(body.box || "").trim();
-      if (!box) return sendJson(res, 400, { ok: false, error: "Создайте бокс / отсканируйте его перед приёмкой детали" });
       // Поштучный приём по ЗАПИСЯМ: один и тот же артикул может встречаться в
       // накладной несколько раз (разными строками). Находим первую ещё не
       // собранную строку с этим артикулом — сканирование не «съедает» разом все
       // строки одинакового артикула, а каждую собирает по отдельности.
+      // Сканирование «не найденной» строки разрешено: ищем любую строку с остатком.
+      // Пометка «не найдено» при скане автоматически снимается ниже (нашли деталь).
       const item = wb.items.find((it) =>
-        String(it.art) === art && (Number(it.scanned) || 0) < (Number(it.qty) || 0) && !it.missing
+        artNorm(it.art) === artNorm(art) && (Number(it.scanned) || 0) < (Number(it.qty) || 0)
       );
       if (!item) {
-        // Перепривязка: деталь уже собран (строки с артикулом полны). При
-        // повторном скане той же детали меняем её бокс (переносим в другой бокс).
-        const existing = wb.items.find((it) => String(it.art) === art);
-        if (existing) {
+        // Перепривязка: деталь уже собрана (строки с артикулом полны). При
+        // повторном скане той же детали с боксом меняем её бокс (переносим в другой).
+        const existing = wb.items.find((it) => artNorm(it.art) === artNorm(art));
+        if (existing && box) {
           existing.box = box;
           route.at = Date.now();
           await persistDb();
@@ -4057,7 +4188,7 @@ async function handleApi(req, res, urlPath) {
       let qty = Math.max(1, Number(body.qty) || 1);
       if (qty > left) qty = left; // не больше остатка строки
       item.scanned += qty;
-      item.box = box; // привязка детали к боксу (повторный скан детали с др. боксом = перепривязка)
+      if (box) item.box = box; // привязка к боксу только если он передан
       if (item.missing) item.missing = false; // нашли — снимаем пометку «не найдено»
       logWaybillScan(route, clientIndex, item, false, body, user);
       route.at = Date.now();
@@ -4069,6 +4200,21 @@ async function handleApi(req, res, urlPath) {
         left: Math.max(0, item.qty - item.scanned),
       });
     }
+    // Опциональная привязка уже засчитанной детали к боксу (без повторного засчёта).
+    if (action === "bind") {
+      const art = String(body.art || "").trim();
+      const box = String(body.box || "").trim();
+      if (!art || !box) return sendJson(res, 422, { ok: false, error: "Нужны артикул и бокс" });
+      const item = wb.items.find((it) => artNorm(it.art) === artNorm(art));
+      if (!item) return sendJson(res, 404, { ok: false, error: "Артикул не найден в накладной" });
+      item.box = box;
+      route.at = Date.now();
+      await persistDb();
+      return sendJson(res, 200, {
+        ok: true,
+        item: { art: item.art, name: item.name, qty: item.qty, scanned: item.scanned, missing: !!item.missing, box: item.box },
+      });
+    }
     if (action === "missing") {
       const art = String(body.art || "").trim();
       if (!art) return sendJson(res, 422, { ok: false, error: "Пустой артикул" });
@@ -4076,12 +4222,15 @@ async function handleApi(req, res, urlPath) {
       // а не к артикулу: одинаковый артикул может повторяться разными строками,
       // и каждая помечается отдельно (иначе пометка «прыгала» на первую строку).
       const idx = Number(body.index);
-      const item = (Number.isInteger(idx) && idx >= 0 && idx < wb.items.length && String(wb.items[idx].art) === art)
+      const item = (Number.isInteger(idx) && idx >= 0 && idx < wb.items.length && artNorm(wb.items[idx].art) === artNorm(art))
         ? wb.items[idx]
-        : wb.items.find((it) => String(it.art) === art);
+        : wb.items.find((it) => artNorm(it.art) === artNorm(art));
       if (!item) return sendJson(res, 404, { ok: false, error: "Артикул не найден в накладной" });
       const on = body.on === true;
       item.missing = on;
+      // Пометка «не найдено» и собранный счёт взаимоисключающие: при пометке
+      // сбрасываем ранее засчитанные единицы (иначе строка «и собрана, и не найдена»).
+      if (on) { item.scanned = 0; item.box = ""; }
       route.at = Date.now();
       await persistDb();
       return sendJson(res, 200, {
@@ -4089,11 +4238,9 @@ async function handleApi(req, res, urlPath) {
         item: { art: item.art, name: item.name, qty: item.qty, scanned: item.scanned, missing: !!item.missing },
       });
     }
-    // Загрузка накладной: разбираем xlsx из base64. Повторно на ту же точку —
-    // нельзя: накладная уже привязана в рамках этой отгрузки.
-    if (wb.items && wb.items.length > 0) {
-      return sendJson(res, 409, { ok: false, error: "Накладная для этой точки уже загружена и привязана к отгрузке" });
-    }
+    // Загрузка накладной: разбираем xlsx из base64. Несколько накладных на одну
+    // точку ДОПОЛНЯЮТ единый список сборки (строки добавляются, одинаковые
+    // артикулы остаются отдельными строками), а не заменяют друг друга.
     const b64 = String(body.fileB64 || "");
     if (!b64) return sendJson(res, 422, { ok: false, error: "Файл не передан" });
     let buf;
@@ -4102,12 +4249,14 @@ async function handleApi(req, res, urlPath) {
     const parsed = parseXlsxItems(buf);
     if (parsed.error) return sendJson(res, 400, { ok: false, error: parsed.error });
     if (!parsed.items.length) return sendJson(res, 400, { ok: false, error: "В накладной нет позиций" });
-    wb.items = parsed.items.map((x) => Object.assign({}, x, { missing: false }));
-    wb.buyer = parsed.buyer || "";
+    const newItems = parsed.items.map((x) => Object.assign({}, x, { missing: false }));
+    if (!Array.isArray(wb.items)) wb.items = [];
+    wb.items = wb.items.concat(newItems);
+    wb.buyer = parsed.buyer || wb.buyer || "";
     wb.loadedAt = Date.now();
     route.at = Date.now();
     await persistDb();
-    return sendJson(res, 200, { ok: true, items: wb.items });
+    return sendJson(res, 200, { ok: true, items: wb.items, appended: newItems.length, total: wb.items.length });
   }
 
   // Сканирование места: POST /api/labels/scan { code, action: "load"|"unload" }
@@ -4595,16 +4744,13 @@ async function handleApi(req, res, urlPath) {
         }
       }
     }
-    if (wbOn) {
-      const missingIdx = clients.findIndex((_, i) =>
-        !waybillsArr.some((w) => w.clientIndex === i && w.items.length > 0)
-      );
-      if (missingIdx >= 0) {
-        return sendJson(res, 409, {
-          error: `Загрузите расходную накладную на клиента «${(clients[missingIdx].client || clients[missingIdx].bundleName || clients[missingIdx].address || (missingIdx + 1)).slice(0, 60)}» перед созданием маршрута`,
-        });
-      }
-    }
+    // Автоподтягивание из 1С: для клиентов с ИНН и без накладной тянем «Реализацию»
+    // (taken=false). Если 1С не настроена или не вернула документ — маршрут создаётся
+    // по-старому (нужна ручная загрузка), фолбэк сохраняется.
+    await autoPullWaybillsFrom1c(clients, waybillsArr, db);
+    // Маршрут можно создать и без загруженной «Реализации» на клиента: если
+    // накладная не подтянулась из 1С и не загружена вручную, накладные добавляют
+    // позже в разделе «Отгрузка» (кнопка сборки). Жёсткая блокировка снята.
     db.driverRoutes = db.driverRoutes || [];
     // На одну дату и водителя маршруты различаются ИМЕНЕМ слота (которое задаёт
     // диспетчер): одно и то же имя заменяет существующий маршрут, разные имена —

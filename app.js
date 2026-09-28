@@ -1409,7 +1409,7 @@
     scanlogSearch: $("scanlogSearch"), scanlogDateLoad: $("scanlogDateLoad"), scanlogDateUnload: $("scanlogDateUnload"),
     scanlogLoadDateField: $("scanlogLoadDateField"), scanlogUnloadDateField: $("scanlogUnloadDateField"),
     pageDelivery: $("page-delivery"), deliveryList: $("deliveryList"), deliveryDateFilter: $("deliveryDateFilter"), deliveryCount: $("deliveryCount"),
-    driverClientName: $("driverClientName"), driverClientAddress: $("driverClientAddress"),
+    driverClientName: $("driverClientName"), driverClientAddress: $("driverClientAddress"), driverClientInn: $("driverClientInn"),
     driverClientsForm: $("driverClientsForm"), driverClientsBlock: $("driverClientsBlock"), driverClientsToggle: $("driverClientsToggle"), driverRouteForm: $("driverRouteForm"),
     addDriverClientBtn: $("addDriverClientBtn"), driverClientsList: $("driverClientsList"), driverClientsCount: $("driverClientsCount"),
     bundleToggle: $("bundleToggle"), bundlePanel: $("bundlePanel"), bundlePickList: $("bundlePickList"),
@@ -1456,7 +1456,6 @@
     allowFinishUnloadIncomplete: $("allowFinishUnloadIncomplete"),
     allowDriverReorderPoints: $("allowDriverReorderPoints"),
     allowWaybill: $("allowWaybill"),
-    requireAuth: $("requireAuth"),
     routeDeleteCode: $("routeDeleteCode"),
     scanLogLimit: $("scanLogLimit"),
     routeDeleteModal: $("routeDeleteModal"), routeDeleteInput: $("routeDeleteInput"),
@@ -1487,10 +1486,17 @@
     goToMultiplierTab: $("goToMultiplierTab"),
     waybillModal: $("waybillModal"), waybillTitle: $("waybillTitle"),
     waybillClose: $("waybillClose"), waybillFile: $("waybillFile"),
-    waybillStatus: $("waybillStatus"), waybillArtInput: $("waybillArtInput"),
+    waybillStatus: $("waybillStatus"), waybillFlash: $("waybillFlash"), waybillArtInput: $("waybillArtInput"),
     waybillQtyInput: $("waybillQtyInput"),
     waybillScanBtn: $("waybillScanBtn"), waybillList: $("waybillList"),
     waybillFinishBtn: $("waybillFinishBtn"),
+    waybillMissBtn: $("waybillMissBtn"), waybillManualBtn: $("waybillManualBtn"),
+    waybillListModal: $("waybillListModal"), waybillListModalBody: $("waybillListModalBody"),
+    waybillListModalClose: $("waybillListModalClose"), waybillListModalTitle: $("waybillListModalTitle"),
+    waybillModalAssembleBtn: $("waybillModalAssembleBtn"), waybillModalMissBtn: $("waybillModalMissBtn"),
+    waybillModalQty: $("waybillModalQty"),
+    waybillQtyAskModal: $("waybillQtyAskModal"), waybillQtyAsk: $("waybillQtyAsk"),
+    waybillQtyAskOk: $("waybillQtyAskOk"), waybillQtyAskCancel: $("waybillQtyAskCancel"),
     waybillBoxCur: $("waybillBoxCur"), waybillNewBoxBtn: $("waybillNewBoxBtn"),
     waybillBoxQty: $("waybillBoxQty"),
     boxDetailsModal: $("boxDetailsModal"), boxDetailsList: $("boxDetailsList"),
@@ -2740,7 +2746,11 @@
     if (name === "report") switchReportSubtab(state.reportSubtab || "timesheet");
     if (name === "drivers") renderDrivers();
     if (name === "myroutes") { renderMyRoutes(); startMyRoutesPolling(); } else { stopMyRoutesPolling(); }
-    if (name === "shipment") { loadShipments(); startShipmentPolling(); } else { stopShipmentPolling(); }
+    if (name === "shipment") {
+      loadShipments(); // обновит кэш и (раз раздел теперь виден) отрисует
+      if (typeof renderShipments === "function") renderShipments(); // гарантированно свежий список из кэша
+      startShipmentPolling();
+    } else { stopShipmentPolling(); }
     if (name === "scanlog") loadScanLog();
     if (name === "delivery") renderDeliveries();
   }
@@ -3969,11 +3979,27 @@
   // (polling раз в 5 с) не видит изменений, раздел не перестраивается — раскрытые
   // карточки отгрузки не «схлопываются» сами через пару секунд.
   let lastShipmentsSig = "";
+  // Койлдаун запросов отгрузки: при пачке событий (скан + SSE + таймер) реально
+  // ходим на сервер не чаще ~1,5 с, а лишние вызовы схлопываются в один. Это снижает
+  // сетевую нагрузку и тормоза на слабом ТСД.
+  let lastShipmentsFetch = 0;
+  let shipmentsFetchQueued = false;
   // Подвкладка раздела «Отгрузка»: "active" — маршруты в работе, "done" — завершённые.
   let shipmentSubtab = "active";
 
   async function loadShipments() {
     if (!el.shipmentListActive) return;
+    const now = Date.now();
+    const wait = 1500 - (now - lastShipmentsFetch);
+    if (wait > 0) {
+      // Уже был недавний запрос — откладываем накопленный запрос на крайний срок.
+      if (!shipmentsFetchQueued) {
+        shipmentsFetchQueued = true;
+        setTimeout(() => { shipmentsFetchQueued = false; loadShipments(); }, wait);
+      }
+      return;
+    }
+    lastShipmentsFetch = Date.now();
     let routes = [];
     try {
       const r = await api("/api/shipments");
@@ -4004,7 +4030,9 @@
     if (sig === lastShipmentsSig) return; // не изменилось — не перерисовываем
     shipmentsCache = routes;
     lastShipmentsSig = sig;
-    renderShipments();
+    // Перерисовываем только когда раздел «Отгрузка» реально виден — иначе на ТСД
+    // карточки перестраиваются в фоне без нужды (раздел может быть свёрнут/другая вкладка).
+    if (!el.pageShipment.hidden) renderShipments();
   }
 
   // Показывает контейнер активной подвкладки, скрывает другую. Сворачивание
@@ -4175,23 +4203,33 @@
   function stopWaybillPoll() {
     if (waybillPoll) { clearInterval(waybillPoll); waybillPoll = null; }
   }
-  function startWaybillPoll() {
-    stopWaybillPoll();
-    waybillPoll = setInterval(async () => {
-      try {
-        if (!el.waybillModal || !el.waybillModal.open) { stopWaybillPoll(); return; }
-        const r = await api("/api/shipments");
-        const route = (r && r.routes || []).find((x) => String(x.id) === String(waybillRouteId));
-        const fresh = route && route.waybills && route.waybills[waybillClientIdx];
-        if (fresh && Array.isArray(fresh.items)) {
+  // Перечитывает текущую накладную с сервера и перерисовывает (если окно открыто).
+  // Вызывается по опросу и (мгновенно) по SSE-уведомлению о смене данных.
+  async function refreshWaybillFromServer() {
+    try {
+      if (!el.waybillModal || !el.waybillModal.open) return;
+      const r = await api("/api/shipments");
+      const route = (r && r.routes || []).find((x) => String(x.id) === String(waybillRouteId));
+      const fresh = route && route.waybills && route.waybills[waybillClientIdx];
+      if (fresh && Array.isArray(fresh.items)) {
+        const sig = JSON.stringify(fresh.items.map((x) => [String(x.art), Number(x.qty), Number(x.scanned) || 0, !!x.missing, String(x.box || "")]));
+        if (sig !== waybillLastSig) {
+          waybillLastSig = sig;
           waybillLocal = { items: fresh.items.map((x) => Object.assign({}, x)) };
           renderWaybill();
         }
-        renderWaybillDelBox(); // боксы тоже актуализируем — новый бокс виден без перезахода
-      } catch { /* сеть в моменте недоступна — пропускаем такт */ }
-    }, 2500);
+      }
+      renderWaybillDelBox(); // боксы тоже актуализируем — новый бокс виден без перезахода
+    } catch { /* сеть в моменте недоступна — пропускаем такт */ }
+  }
+  function startWaybillPoll() {
+    stopWaybillPoll();
+    waybillPoll = setInterval(refreshWaybillFromServer, 2500); // страховка; скорость даёт SSE
   }
   function focusWaybillScan() {
+    // На ТСД поле не фокусим — иначе вылезает экранная клавиатура; скан идёт
+    // аппаратным сканером и сам заносит код в поле.
+    if (waybillTcd) return;
     if (el.waybillArtInput) {
       try { el.waybillArtInput.focus(); } catch { /* ignore */ }
     }
@@ -4200,11 +4238,23 @@
   let waybillBox = "";       // текущий бокс (код этикетки места)
   let waybillPrinting = false; // печатаем бокс из окна СБОРКИ (не открывать модалку отгрузки)
   let waybillPendingArt = ""; // деталь, ожидающая свой бокс (скан: деталь → «МЕСТО» → бокс)
+  let waybillSelected = new Set(); // строки, отмеченные чекбоксом (для «Не найдено»/«Собрать вручную»)
+  let waybillTcd = false; // true на ТСД: список деталей — в модальном окне через кнопку
+  let waybillLastSig = "";  // сигнатура данных сборки — чтобы не перерисовывать, если не менялось
+  let waybillListModalHtml = ""; // закэшированный HTML списка в модалке ТСД
+  let waybillFlashTimer = null; // таймер автоскрытия баннера результата
   function setWaybillBox(box) {
     waybillBox = String(box || "").trim();
-    if (el.waybillBoxCur) el.waybillBoxCur.textContent = waybillBox ? `Бокс: ${waybillBoxNumber(waybillBox)}` : "Бокс: —";
+    const cur = el.waybillBoxCur;
+    if (cur) {
+      cur.dataset.state = waybillBox ? "active" : "empty";
+      const val = cur.querySelector(".waybill-box-value");
+      const hint = cur.querySelector(".waybill-box-hint");
+      if (val) val.textContent = waybillBox ? waybillBoxNumber(waybillBox) : "—";
+      if (hint) hint.textContent = waybillBox ? "можно сканировать" : "не обязательно";
+    }
     if (el.waybillArtInput) el.waybillArtInput.value = "";
-    setWaybillStatus(waybillBox ? `Бокс выбран: ${waybillBox} — можно сканировать детали` : "Выберите бокс");
+    setWaybillStatus(waybillBox ? `Бокс выбран: ${waybillBox} — можно сканировать детали` : "Бокс не выбран — детали можно сканировать без бокса");
     if (el.waybillNewBoxBtn) el.waybillNewBoxBtn.classList.toggle("active", !waybillBox);
     focusWaybillScan();
   }
@@ -4359,7 +4409,8 @@
     waybillClientIdx = Number(clientIdx) || 0;
     waybillBox = "";
     waybillPendingArt = "";
-    if (el.waybillBoxCur) el.waybillBoxCur.textContent = "Бокс: —";
+    setWaybillBox(""); // индикатор бокса: «не выбран» — детали сканируются без бокса
+    waybillPendingArt = "";
     const cached = waybillGet();
     waybillLocal = cached && cached.items ? { items: cached.items.map((x) => Object.assign({}, x)) } : null;
     if (el.waybillArtInput) el.waybillArtInput.value = "";
@@ -4371,12 +4422,14 @@
     }
     const wb = waybillLocal;
     setWaybillStatus(wb ? `Загружено позиций: ${wb.items.length}` : "Накладная не загружена на этого клиента");
-    // Накладная уже привязана к точке в рамках отгрузки — повторно загрузить
-    // нельзя (прогресс хранится на сервере и не слетает при перезаходе).
+    // Можно добавить ещё одну расходную накладную: она ДОПОЛНИТ единый список
+    // сборки этой точки (строки просто добавятся), не заменяя уже загруженные.
+    // Кнопка загрузки всегда активна.
     if (el.waybillFile) {
-      el.waybillFile.disabled = !!wb;
+      el.waybillFile.disabled = false;
+      el.waybillFile.value = "";
       const fileRow = el.waybillFile.closest(".file-row");
-      if (fileRow) fileRow.style.display = wb ? "none" : "";
+      if (fileRow) fileRow.style.display = "";
     }
     startWaybillPoll();
     renderWaybill();
@@ -4391,6 +4444,23 @@
   }
   function setWaybillStatus(t) {
     if (el.waybillStatus) el.waybillStatus.textContent = t;
+    // Результаты сканирования показываем ещё и крупным баннером, который держится
+    // ~2,5 с, чтобы оператор успел прочитать, даже если статусная строка дальше
+    // перепишется (следующий скан / фоновая синхронизация).
+    if (el.waybillFlash && /ХОРОШО|ПЛОХО|Уже отсканировано|засчитано|не найдена в накладной/.test(String(t || ""))) {
+      showWaybillFlash(String(t));
+    }
+  }
+  function showWaybillFlash(text) {
+    if (!el.waybillFlash) return;
+    el.waybillFlash.textContent = text;
+    el.waybillFlash.hidden = false;
+    el.waybillFlash.classList.remove("fw-out");
+    clearTimeout(waybillFlashTimer);
+    waybillFlashTimer = setTimeout(() => {
+      el.waybillFlash.classList.add("fw-out");
+      setTimeout(() => { if (el.waybillFlash) el.waybillFlash.hidden = true; }, 350);
+    }, 2500);
   }
   function renderWaybill() {
     if (!el.waybillList) return;
@@ -4412,21 +4482,46 @@
     // (комбинированно): кнопка просто закрывает окно — сервер при начале отгрузки
     // сам проверяет готовность.
     if (el.waybillFinishBtn) el.waybillFinishBtn.disabled = !doneAll;
-    el.waybillList.innerHTML = wb.items.map((it, i) => {
+    // Кнопки активны, когда есть хотя бы одна отмеченная чекбоксом строка.
+    const hasSel = waybillSelected.size > 0;
+    if (el.waybillMissBtn) el.waybillMissBtn.disabled = !hasSel;
+    if (el.waybillManualBtn) el.waybillManualBtn.disabled = !hasSel;
+    if (el.waybillModalAssembleBtn) el.waybillModalAssembleBtn.disabled = !hasSel;
+    if (el.waybillModalMissBtn) el.waybillModalMissBtn.disabled = !hasSel;
+    const itemHtml = (it, i) => {
       const left = Math.max(0, (Number(it.qty) || 0) - (Number(it.scanned) || 0));
       const done = Number(it.scanned) >= Number(it.qty);
       const miss = !!it.missing;
-      const cls = ["waybill-item", done ? " done" : "", miss ? " missing" : ""].join(" ");
+      const sel = waybillSelected.has(i);
+      const cls = ["waybill-item", done ? " done" : "", miss ? " missing" : "", sel ? " selected" : ""].join(" ");
       const mark = miss
         ? `<span class="waybill-mark">не найдено</span>`
         : (done ? `<span class="waybill-mark">${it.box ? "бокс " + escapeHtml(String(it.box).slice(0, 18)) : "собрано"}</span>` : "");
       return `<div class="${cls}" data-waybill-index="${i}" data-waybill-art="${escapeHtml(it.art)}">
+        <span class="waybill-check" data-wb-check="${i}">${sel ? "☑" : "☐"}</span>
         <div class="waybill-item-art">${escapeHtml(it.art)}</div>
         <div class="waybill-item-name">${escapeHtml(it.name || "")}</div>
         <div class="waybill-item-qty">${Number(it.scanned) || 0}/${Number(it.qty)}</div>
         ${mark}
       </div>`;
-    }).join("");
+    };
+    if (waybillTcd) {
+      // На ТСД вместо прокручиваемого списка — кнопка, открывающая модалку со списком.
+      const doneCount = wb.items.filter((x) => (Number(x.scanned) || 0) >= (Number(x.qty) || 0) || x.missing).length;
+      el.waybillList.innerHTML = `<button type="button" class="ctrl ctrl-primary waybill-list-toggle" id="waybillListToggle">
+        Показать список деталей (${doneCount}/${wb.items.length})
+      </button>`;
+      // Список в модалке ТСД пересобираем ТОЛЬКО когда модалка открыта, и лишь если
+      // его содержимое реально изменилось — не тратим ресурсы ТСД на перерисовку
+      // каждого такта, когда окно закрыто или данные те же.
+      if (el.waybillListModal && el.waybillListModal.open && el.waybillListModalBody) {
+        const html = wb.items.map(itemHtml).join("");
+        if (html !== waybillListModalHtml) { waybillListModalHtml = html; el.waybillListModalBody.innerHTML = html; }
+      }
+    } else {
+      el.waybillList.innerHTML = wb.items.map(itemHtml).join("");
+      if (el.waybillListModalBody) el.waybillListModalBody.innerHTML = "";
+    }
   }
   async function toggleMissingWaybill(idx) {
     if (!waybillLocal || !waybillLocal.items) { setWaybillStatus("Сначала загрузите накладную"); return; }
@@ -4445,6 +4540,7 @@
       });
       if (r && r.ok) {
         item.missing = next;
+        if (next) { item.scanned = 0; item.box = ""; } // пометка и счёт взаимоисключающие
         setWaybillStatus(next ? `Позиция ${art} помечена как «не найдено»` : `Пометка ${art} снята`);
         renderWaybill();
         loadShipments();
@@ -4456,13 +4552,23 @@
     }
     focusWaybillScan();
   }
+  // «Собрать вручную»: собрать полностью каждую отмеченную чекбоксом строку
+  // (эквивалентно нескольким сканам — деталь зеленеет, пометка «не найдено» снимается).
+  async function manualAssembleWaybill() {
+    const idxs = [...waybillSelected];
+    waybillSelected.clear();
+    for (const idx of idxs) {
+      const it = waybillLocal && waybillLocal.items[idx];
+      if (!it) continue;
+      const rem = Math.max(0, (Number(it.qty) || 0) - (Number(it.scanned) || 0));
+      if (rem > 0) await waybillScanDetail(String(it.art), rem);
+    }
+    renderWaybill();
+    focusWaybillScan();
+  }
   function uploadWaybill() {
     const file = el.waybillFile && el.waybillFile.files && el.waybillFile.files[0];
     if (!file) { setWaybillStatus("Выберите файл .xlsx"); return; }
-    if (waybillLocal && waybillLocal.items && waybillLocal.items.length > 0) {
-      setWaybillStatus("Накладная уже привязана к этой точке — новая загрузка недоступна");
-      return;
-    }
     const reader = new FileReader();
     reader.onload = async () => {
       setWaybillStatus("Загружаю накладную…");
@@ -4475,7 +4581,7 @@
         if (r && r.ok) {
           waybillLocal = { items: (r.items || []).map((x) => Object.assign({}, x)) };
           const total = (waybillLocal.items || []).reduce((s, it) => s + (Number(it.scanned) || 0), 0);
-          setWaybillStatus(`Загружено позиций: ${waybillLocal.items.length}${total ? " · собрано " + total : ""}`);
+          setWaybillStatus(`Загружено позиций: ${waybillLocal.items.length}${r.total ? ` · накладная дополнена` : ""}${total ? " · собрано " + total : ""}`);
           renderWaybill();
           loadShipments(); // обновляем родительский список в фоне
           focusWaybillScan();
@@ -4497,111 +4603,203 @@
     const val = el.waybillArtInput ? String(el.waybillArtInput.value || "").trim() : "";
     if (!val) { setWaybillStatus("Введите/отсканируйте код"); focusWaybillScan(); return; }
     // Сборка: ДЕТАЛЬ → «МЕСТО», затем БОКС → «ХОРОШО»/«ПЛОХО». Бокс и артикул
-    // сканируются в ОДНОМ поле, без кнопок и курсора. Порядок определяет, что
-    // сейчас скан: если есть деталь, ожидающая место, — следующий скан это бокс
-    // (код может быть любым, не обязательно «BG…»).
-    if (waybillPendingArt) {
-      // Шаг 2: отсканирован бокс (ожидалась деталь). Привязываем её к этому боксу.
-      // Успех = «ХОРОШО», ошибка привязки = «ПЛОХО».
-      // Если отсканированный код — на самом деле деталь из накладной (а не бокс),
-      // не превращаем её в бокс и не добавляем: это ошибка. Сначала — настоящий бокс.
-      const isAnArt = (waybillLocal.items || []).some((it) => String(it.art) === val);
-      if (isAnArt) {
-        setWaybillStatus("ПЛОХО · " + val + " — это деталь, а не бокс. Отсканируйте бокс");
-        playScanFeedback(false);
-        if (el.waybillArtInput) el.waybillArtInput.value = "";
-        focusWaybillScan();
-        return;
-      }
-      // Защита: код бокса должен быть реальной этикеткой места (BG<routeId>-…),
-      // а не случайным кодом/артикулом — иначе деталь не должна привязываться.
-      if (!String(val).startsWith("BG" + waybillRouteId + "-")) {
-        setWaybillStatus("ПЛОХО · " + val + " — это не код бокса. Отсканируйте настоящий бокс");
-        playScanFeedback(false);
-        if (el.waybillArtInput) el.waybillArtInput.value = "";
-        focusWaybillScan();
-        return;
-      }
-      const art = waybillPendingArt;
-      const scanQty = Math.max(1, Number(el.waybillQtyInput && el.waybillQtyInput.value) || 1);
-      setWaybillBox(val);
-      // Мгновенный отклик: зеленим строку и озвучиваем «Хорошо» СРАЗУ при скане,
-      // не дожидаясь ответа сервера (портальный /waybill/scan может идти секунды).
-      waybillPendingArt = "";
-      const it0 = waybillLocal.items.find((x) => String(x.art) === art && (Number(x.scanned) || 0) < (Number(x.qty) || 0) && !x.missing);
-      const remBefore = it0 ? Math.max(0, (Number(it0.qty) || 0) - (Number(it0.scanned) || 0)) : 0;
-      if (it0) {
-        it0.scanned = Math.min(Number(it0.scanned || 0) + scanQty, Number(it0.qty) || 1);
-        it0.box = val;
-      }
-      // Предупреждение при переборе: оператор ввёл больше, чем осталось — счёт
-      // обрежется по остатку (счёт не меняем, просто сообщаем о сокращении).
-      const clamped = remBefore > 0 && scanQty > remBefore;
-      renderWaybill();
-      playScanFeedback(true, "Хорошо");
-      setWaybillStatus(clamped
-        ? `ХОРОШО · ${art} → бокс ${val} · оставалось ${remBefore} — засчитано ${remBefore}`
-        : `ХОРОШО · ${art} → бокс ${val}`);
-      // Серверное подтверждение в фоне; при отказе откатываем оптимистичный скан.
-      try {
-        const r = await api("/api/routes/" + encodeURIComponent(waybillRouteId) + "/waybill/scan", {
-          method: "POST",
-          body: JSON.stringify({ clientIndex: waybillClientIdx, art, box: val, qty: scanQty }),
-        });
-        if (r && r.ok) {
-          const item = waybillLocal.items.find((x) => String(x.art) === art);
-          if (item && r.item) {
-            item.scanned = (r.item.scanned != null) ? r.item.scanned : item.scanned;
-            item.box = (r.item && r.item.box != null) ? r.item.box : item.box;
+    // сканируются в ОДНОМ поле, без кнопок и курсора.
+    // Привязка к месту (боксу) НЕОБЯЗАТЕЛЬНА: деталь засчитывается сразу при скане
+    // (зеленеет), а бокс — лишь опциональная привязка последней отсканированной детали.
+    if (String(val).startsWith("BG" + waybillRouteId + "-")) {
+      // Отсканирован бокс. Если есть деталь, ожидающая привязки, — привязываем её
+      // к этому боксу (без повторного засчёта: деталь уже засчитана при скане).
+      if (waybillPendingArt) {
+        const art = waybillPendingArt;
+        waybillPendingArt = "";
+        const it0 = waybillLocal.items.find((x) => waybillNormArt(x.art) === waybillNormArt(art) && (Number(x.scanned) || 0) < (Number(x.qty) || 0) && !x.missing);
+        if (it0) it0.box = val;
+        setWaybillBox(val);
+        setWaybillStatus(`Бокс выбран: ${val} — деталь ${art} привязана`);
+        playScanFeedback(true);
+        // Серверное подтверждение привязки в фоне (деталь уже засчитана при скане).
+        try {
+          const r = await api("/api/routes/" + encodeURIComponent(waybillRouteId) + "/waybill/bind", {
+            method: "POST",
+            body: JSON.stringify({ clientIndex: waybillClientIdx, art, box: val }),
+          });
+          if (r && r.ok) {
+            if (it0 && r.item && r.item.box != null) it0.box = r.item.box;
+            renderWaybill();
+            loadShipments();
           }
-          if (r.rebound) {
-            setWaybillStatus(`ХОРОШО · ${art} → бокс ${r.item && r.item.box || val} (перенос)`);
-          } else {
-            const done = (waybillLocal.items || []).filter((it) => Number(it.scanned) >= Number(it.qty)).length;
-            const tail = clamped
-              ? ` · оставалось ${remBefore} — засчитано ${remBefore}`
-              : ` · осталось ${r.left} · готово ${done}/${waybillLocal.items.length}`;
-            setWaybillStatus(`ХОРОШО · ${art} → бокс ${val}${tail}`);
-          }
-          renderWaybill();
-          loadShipments();
-        } else {
-          if (it0) it0.scanned = Math.max(0, Number(it0.scanned || 0) - scanQty);
-          setWaybillStatus("ПЛОХО · " + ((r && r.error) || "Деталь не привязалась к боксу"));
-          playScanFeedback(false, "Плохо");
-          renderWaybill();
-        }
-      } catch (e) {
-        if (it0) it0.scanned = Math.max(0, Number(it0.scanned || 0) - scanQty);
-        setWaybillStatus("ПЛОХО · " + ((e && e.message) || "Ошибка привязки к боксу"));
-        playScanFeedback(false, "Плохо");
-        renderWaybill();
-      }
-    } else if (String(val).startsWith("BG" + waybillRouteId + "-")) {
-      // Явный код этикетки места без ожидающей детали — просто выбираем бокс.
-      setWaybillBox(val);
-      setWaybillStatus(`Бокс выбран: ${val} — отсканируйте деталь`);
-      playScanFeedback(true);
-    } else {
-      // Шаг 1: отсканирована деталь. Если она есть в накладной — «МЕСТО» (ждём бокс),
-      // если нет — «ПЛОХО».
-      const artRows = (waybillLocal.items || []).filter((it) => String(it.art) === val);
-      if (!artRows.length) {
-        setWaybillStatus("ПЛОХО · деталь " + val + " не найдена в накладной");
-        playScanFeedback(false);
-      } else if (artRows.every((it) => (Number(it.scanned) || 0) >= (Number(it.qty) || 1))) {
-        // Артикул уже отсканирован полностью (кол-во исчерпано) — повторный скан
-        // не привязываем к боксу, сообщаем об этом.
-        setWaybillStatus("Уже отсканировано · " + val);
-        playScanFeedback(false);
+        } catch (e) { /* привязка не критична — деталь уже засчитана */ }
       } else {
-        waybillPendingArt = val;
-        setWaybillStatus("МЕСТО · деталь " + val + " — отсканируйте бокс");
-        playScanFeedback(true, "Место");
+        setWaybillBox(val);
+        setWaybillStatus(`Бокс выбран: ${val} — отсканируйте деталь`);
+        playScanFeedback(true);
       }
+    } else {
+      await waybillScanDetail(val);
     }
     if (el.waybillArtInput) el.waybillArtInput.value = "";
     // Сканер «не вставая в строку»: возвращаем фокус на поле штрихкода.
+    focusWaybillScan();
+  }
+
+  // Засчитать деталь (как при сканировании штрихкода) и подтвердить на сервере.
+  // Используется и самим сканером, и двойным кликом по строке накладной.
+  async function waybillScanDetail(val, qtyOverride) {
+    if (!waybillLocal || !waybillLocal.items) { setWaybillStatus("Сначала загрузите накладную"); return; }
+    const normVal = waybillNormArt(val);
+    let artRows = (waybillLocal.items || []).filter((it) => waybillNormArt(it.art) === normVal);
+    let usedArt = artRows.length ? String(artRows[0].art) : "";
+    if (!artRows.length) {
+      // Фолбэк: артикул на стикере может идти с «мусором» (12345 → «12345 AG»).
+      // Разбираем стикер на блоки и ищем единственный совпавший артикул.
+      const res = resolveWaybillArtCandidates(val, waybillLocal.items);
+      if (res) {
+        usedArt = res;
+        artRows = (waybillLocal.items || []).filter((it) => waybillNormArt(it.art) === waybillNormArt(res));
+      }
+    }
+    if (!artRows.length) {
+      setWaybillStatus("ПЛОХО · деталь " + val + " не найдена в накладной");
+      playScanFeedback(false);
+      return;
+    }
+    // Строки с остатком: предпочитаем не помеченные «не найдено», но помеченные
+    // тоже можно сканировать — тогда пометка снимается и деталь зеленеет.
+    let it0 = artRows.find((it) => (Number(it.scanned) || 0) < (Number(it.qty) || 0) && !it.missing);
+    if (!it0) it0 = artRows.find((it) => (Number(it.scanned) || 0) < (Number(it.qty) || 0));
+    if (!it0) {
+      setWaybillStatus("Уже отсканировано · " + val);
+      playScanFeedback(false, "Уже отсканировано");
+      return;
+    }
+    const remBefore = it0 ? Math.max(0, (Number(it0.qty) || 0) - (Number(it0.scanned) || 0)) : 0;
+    // Количественная деталь (осталось больше 1 единицы): голосом просим «Введите
+    // количество» и открываем быструю модалку ввода. Если кол-во передано явно
+    // (кнопка «Собрать», повторный ввод) — спрашивать не нужно.
+    let scanQty = qtyOverride && Number(qtyOverride) > 0
+      ? Math.max(1, Number(qtyOverride))
+      : Math.max(1, Number(el.waybillQtyInput && el.waybillQtyInput.value) || 1);
+    if (!qtyOverride && remBefore > 1) {
+      scanQty = await askWaybillQty(remBefore);
+      if (scanQty == null) {
+        setWaybillStatus("Ввод количества отменён");
+        focusWaybillScan();
+        return;
+      }
+    }
+    if (it0 && it0.missing) it0.missing = false; // нашли ранее «не найденную»
+    if (it0) it0.scanned = Math.min(Number(it0.scanned || 0) + scanQty, Number(it0.qty) || 1);
+    const clamped = remBefore > 0 && scanQty > remBefore;
+    waybillPendingArt = usedArt; // ждём опциональный бокс (канонический артикул)
+    renderWaybill();
+    playScanFeedback(true, "Хорошо");
+    setWaybillStatus(clamped
+      ? `ХОРОШО · ${usedArt} · оставалось ${remBefore} — засчитано ${remBefore}`
+      : `ХОРОШО · ${usedArt}`);
+    try {
+      const r = await api("/api/routes/" + encodeURIComponent(waybillRouteId) + "/waybill/scan", {
+        method: "POST",
+        body: JSON.stringify({ clientIndex: waybillClientIdx, art: usedArt, qty: scanQty }),
+      });
+      if (r && r.ok) {
+        // Обновляем ИМЕННО ту строку, которую засчитали (it0), а не первую строку
+        // с таким артикулом — иначе при нескольких строках одного артикула прогресс
+        // и статус «уже отсканировано» вычислялись по неверной строке.
+        if (it0 && r.item) {
+          it0.scanned = (r.item.scanned != null) ? r.item.scanned : it0.scanned;
+          it0.box = (r.item && r.item.box != null) ? r.item.box : it0.box;
+        }
+        const done = (waybillLocal.items || []).filter((it) => Number(it.scanned) >= Number(it.qty)).length;
+        const tail = clamped
+          ? ` · оставалось ${remBefore} — засчитано ${remBefore}`
+          : ` · осталось ${r.left} · готово ${done}/${waybillLocal.items.length}`;
+        setWaybillStatus(`ХОРОШО · ${val}${tail}`);
+        renderWaybill();
+        loadShipments();
+      } else {
+        if (it0) it0.scanned = Math.max(0, Number(it0.scanned || 0) - scanQty);
+        setWaybillStatus("ПЛОХО · " + ((r && r.error) || "Деталь не принята"));
+        playScanFeedback(false, "Плохо");
+        renderWaybill();
+      }
+    } catch (e) {
+      if (it0) it0.scanned = Math.max(0, Number(it0.scanned || 0) - scanQty);
+      setWaybillStatus("ПЛОХО · " + ((e && e.message) || "Ошибка приёмки детали"));
+      playScanFeedback(false, "Плохо");
+      renderWaybill();
+    }
+  }
+
+  // Приводит артикул к каноническому виду для сравнения: убирает разделители
+  // («мусор») — пробелы, подчёркивания, точки, дефисы и пр. («2345_456»,
+  // «2345 456», «2345.456», «23.45-456» → «2345456»). На оригинальных стикерах/
+  // скане артикул может приходить с этими символами, а реальный артикул — без них.
+  // Применяется одинаково и к стикеру, и к артикулам накладной.
+  function waybillNormArt(s) {
+    return String(s == null ? "" : s).replace(/[\s_.\-,:/;\\]/g, "");
+  }
+  // Возвращает артикул накладной, который содержится в очищенном стикере КАК ЕДИНАЯ
+  // строка (артикул не разбиваем — ищем его целиком, а мусор вокруг отбрасываем).
+  // Пример: стикер «12345AG» содержит артикул «12345» → возвращаем «12345».
+  // Если содержатся несколько разных артикулов, берём самый длинный (наиболее полный);
+  // если совпадений нет — пустая строка.
+  function resolveWaybillArtCandidates(sticker, items) {
+    if (!Array.isArray(items)) return "";
+    const clean = waybillNormArt(sticker);
+    if (!clean) return "";
+    const seen = new Set();
+    const matched = [];
+    for (const it of items) {
+      const a = waybillNormArt(it.art);
+      if (!a || seen.has(a)) continue;
+      seen.add(a);
+      if (clean.includes(a)) matched.push({ norm: a, orig: String(it.art) });
+    }
+    if (!matched.length) return "";
+    matched.sort((x, y) => y.norm.length - x.norm.length); // предпочитаем самый полный
+    return matched[0].orig;
+  }
+
+  // Быстрая модалка ввода количества при скане детали с кол-вом >1.
+  // Голосом озвучивает «Введите количество», открывает окно, возвращает Promise
+  // с введённым числом (или null при отмене). Максимум — оставшееся количество.
+  let waybillQtyAskResolve = null;
+  function askWaybillQty(maxQty) {
+    return new Promise((resolve) => {
+      if (!el.waybillQtyAskModal || !el.waybillQtyAsk) { resolve(null); return; }
+      waybillQtyAskResolve = resolve;
+      const safeMax = Math.max(1, Number(maxQty) || 1);
+      el.waybillQtyAsk.max = String(safeMax);
+      el.waybillQtyAsk.value = String(safeMax);
+      setWaybillStatus(`Введите количество (макс ${safeMax})`);
+      playScanFeedback(true, "Введите количество");
+      try { el.waybillQtyAskModal.showModal(); } catch { /* уже открыта */ }
+      try { el.waybillQtyAsk.focus(); el.waybillQtyAsk.select(); } catch { /* ok */ }
+    });
+  }
+  function finishWaybillQtyAsk(isCancel) {
+    const m = el.waybillQtyAskModal;
+    const resolve = waybillQtyAskResolve;
+    if (isCancel || !el.waybillQtyAsk) {
+      waybillQtyAskResolve = null;
+      if (m && m.open) { try { m.close(); } catch { /* ignore */ } }
+      if (resolve) resolve(null);
+      return;
+    }
+    const v = Math.max(1, Number(el.waybillQtyAsk.value) || 1);
+    const max = Math.max(1, Number(el.waybillQtyAsk.max) || v);
+    if (v > max) {
+      // Ввели больше, чем осталось к приёмке: не засчитываем, не закрываем окно,
+      // голосом указываем на ошибку — пока не введено верное количество.
+      setWaybillStatus(`Больше, чем есть: осталось ${max}`);
+      playScanFeedback(false, "Это Фиаско Братан ты ввел больше чем есть");
+      el.waybillQtyAsk.value = "";
+      try { el.waybillQtyAsk.focus(); } catch { /* ok */ }
+      return;
+    }
+    waybillQtyAskResolve = null;
+    if (m && m.open) { try { m.close(); } catch { /* ignore */ } }
+    if (resolve) resolve(v);
     focusWaybillScan();
   }
 
@@ -5213,7 +5411,14 @@
       isTcdDevice = !!window.AndroidBridge.isTCD();
     }
   } catch (_) { /* нативного моста нет — устройство не ТСД */ }
-  if (isTcdDevice) scanSource = "external";
+  if (isTcdDevice) {
+    scanSource = "external";
+    waybillTcd = true; // на ТСД список деталей — в модальном окне через кнопку
+    document.body.classList.add("tcd");
+    // Поле штрих/артикула на ТСД делаем read-only: клик по нему не открывает
+    // экранную клавиатуру, а код по-прежнему заносится аппаратным сканером.
+    try { if (el.waybillArtInput) el.waybillArtInput.readOnly = true; } catch { /* ignore */ }
+  }
   function applyScanSourceUI() {
     try {
       const ext = scanSource === "external";
@@ -6775,8 +6980,13 @@
       try {
         const r = await api("/api/waybill/parse", { method: "POST", body: JSON.stringify({ fileB64: b64 }) });
         const items = (r && r.items) || [];
-        routeWaybills.set(key, { items, buyer: (r && r.buyer) || "" });
-        toast(items.length ? `Накладная загружена: ${items.length} поз.` : "В накладной нет позиций");
+        // Несколько накладных на одного клиента ДОПОЛНЯЮТ единый список сборки,
+        // а не заменяют предыдущие (одинаковые артикулы остаются отдельными строками).
+        const existing = routeWaybills.get(key);
+        const prev = existing && Array.isArray(existing.items) ? existing.items : [];
+        const combined = prev.concat(items);
+        routeWaybills.set(key, { items: combined, buyer: (r && r.buyer) || (existing && existing.buyer) || "" });
+        toast(items.length ? `Накладная добавлена: ${items.length} поз. · всего ${combined.length}` : "В накладной нет позиций");
       } catch (e) {
         routeWaybills.set(key, { items: [], buyer: "" });
         toast((e && e.message) || "Не удалось разобрать накладную");
@@ -7153,7 +7363,7 @@
               : `<div class="drv-client-avatar">${escapeHtml(String(c.client).trim().charAt(0).toUpperCase())}</div>`}
           <div class="drv-client-main">
             <div class="drv-client-name">${escapeHtml(c.client)}</div>
-            <div class="drv-client-address">${escapeHtml(c.address)}</div>
+            <div class="drv-client-address">${escapeHtml(c.address)}${c.inn ? `<span class="drv-client-inn">ИНН ${escapeHtml(c.inn)}</span>` : ""}</div>
             ${c.bundleId ? `<div class="drv-client-bundle"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 11l-4 4 4 4M15 11l4 4-4 4M12 3l-2 18"/></svg>в связке · ${escapeHtml(c.bundleAddress || c.address)}</div>` : ""}
           </div>
           <div class="drv-client-side">
@@ -7188,6 +7398,7 @@
   async function addDriverClient() {
     const client = (el.driverClientName.value || "").trim();
     const address = (el.driverClientAddress.value || "").trim();
+    const inn = (el.driverClientInn ? el.driverClientInn.value : "").trim().replace(/\s+/g, "");
     if (!client || !address) {
       toast("Укажите и клиента, и адрес");
       return;
@@ -7195,11 +7406,12 @@
     try {
       const r = await api("/api/drivers/clients", {
         method: "POST",
-        body: JSON.stringify({ client, address }),
+        body: JSON.stringify({ client, address, inn }),
       });
       if (r && Array.isArray(r.clients)) renderDriverClients(r.clients);
       if (el.driverClientName) el.driverClientName.value = "";
       if (el.driverClientAddress) el.driverClientAddress.value = "";
+      if (el.driverClientInn) el.driverClientInn.value = "";
       toast("Клиент добавлен");
     } catch (e) {
       toast(e.message);
@@ -7217,6 +7429,7 @@
       <div class="drv-client-main drv-client-edit-form">
         <input class="text-input" id="editClientName-${escapeHtml(id)}" value="${escapeHtml(c.client)}" />
         <input class="text-input" id="editClientAddr-${escapeHtml(id)}" value="${escapeHtml(c.address)}" />
+        <input class="text-input" id="editClientInn-${escapeHtml(id)}" value="${escapeHtml(c.inn || "")}" placeholder="ИНН" autocomplete="off" />
         <div class="driver-edit-actions">
           <button type="button" class="drv-mini-btn drv-mini-primary" id="saveEdit-${escapeHtml(id)}">Сохранить</button>
           <button type="button" class="drv-mini-btn" id="cancelEdit-${escapeHtml(id)}">Отмена</button>
@@ -7226,11 +7439,12 @@
     document.getElementById(`saveEdit-${id}`).addEventListener("click", async () => {
       const client = document.getElementById(`editClientName-${id}`).value.trim();
       const address = document.getElementById(`editClientAddr-${id}`).value.trim();
+      const inn = document.getElementById(`editClientInn-${id}`).value.trim().replace(/\s+/g, "");
       if (!client || !address) { toast("Укажите имя и адрес"); return; }
       try {
         const r = await api("/api/drivers/clients", {
           method: "POST",
-          body: JSON.stringify({ action: "update", id, client, address }),
+          body: JSON.stringify({ action: "update", id, client, address, inn }),
         });
         if (r && Array.isArray(r.clients)) renderDriverClients(r.clients);
         toast("Клиент обновлён");
@@ -7571,12 +7785,12 @@
       toast("Укажите дату, водителя и выберите хотя бы одного клиента");
       return;
     }
-    // Накладные обязательны перед созданием маршрута (если включены): у каждой
-    // точки должен быть загружен .xlsx. Накладную принимает диспетчер.
+    // Маршрут можно создать и без загруженной накладной (если накладные включены):
+    // передаём лишь те, что уже загружены; остальные добавляют позже в «Отгрузке»
+    // или подтянет из 1С при создании маршрута.
     const waybillOn2 = !!state.params.allowWaybill;
     const waybills = [];
     if (waybillOn2) {
-      let missingName = "";
       for (let i = 0; i < chosen.length; i++) {
         const s = chosen[i];
         // Накладные каждого клиента связки (одного адреса) складываем в одну.
@@ -7589,13 +7803,7 @@
           const e = routeWaybills.get(String(c.id));
           if (e && Array.isArray(e.items) && e.items.length) items.push(...e.items);
         }
-        if (!items.length) { missingName = (s.client || s.bundleName || s.address || `Точка ${i + 1}`); break; }
-        waybills.push({ clientIndex: i, items });
-      }
-      if (missingName) {
-        toast(`Загрузите расходную накладную на «${missingName}» перед созданием маршрута`);
-        renderRouteWaybillsBlock();
-        return;
+        if (items.length) waybills.push({ clientIndex: i, items });
       }
     }
     try {
@@ -8662,7 +8870,6 @@
     if (el.allowFinishUnloadIncomplete) el.allowFinishUnloadIncomplete.checked = !!state.params.allowFinishUnloadIncomplete;
     if (el.allowDriverReorderPoints) el.allowDriverReorderPoints.checked = !!state.params.allowDriverReorderPoints;
     if (el.allowWaybill) el.allowWaybill.checked = !!state.params.allowWaybill;
-    if (el.requireAuth) el.requireAuth.checked = !!state.params.authRequired;
     if (el.routeDeleteCode) el.routeDeleteCode.value = state.params.routeDeleteCode || "";
     if (el.scanLogLimit) el.scanLogLimit.value = state.params.scanLogLimit != null ? state.params.scanLogLimit : 30000;
     renderGroupChecks(el.showOverHoursGroups, state.params.showOverHoursGroups || []);
@@ -8906,7 +9113,7 @@
       allowFinishUnloadIncomplete: !!el.allowFinishUnloadIncomplete.checked,
       allowDriverReorderPoints: !!el.allowDriverReorderPoints.checked,
       allowWaybill: !!el.allowWaybill.checked,
-      authRequired: !!(el.requireAuth && el.requireAuth.checked),
+      authRequired: true, // собственный вход (логин/пароль) всегда включён, опции нет
       routeDeleteCode: el.routeDeleteCode ? el.routeDeleteCode.value.trim() : "",
       scanLogLimit: el.scanLogLimit ? (Number(el.scanLogLimit.value) || 30000) : 30000,
       showOverHoursGroups: collectGroupChecks(el.showOverHoursGroups),
@@ -10184,13 +10391,97 @@
       toast("Сборка завершена — можно начать отгрузку");
     });
   }
-  if (el.waybillList) {
-    el.waybillList.addEventListener("click", (ev) => {
-      const row = ev.target.closest && ev.target.closest("[data-waybill-art]");
+  const bindWaybillListEvents = (container) => {
+    container.addEventListener("click", (ev) => {
+      const toggle = ev.target.closest && ev.target.closest("#waybillListToggle");
+      if (toggle) {
+        // Сначала мгновенно показываем окно с «Загрузка…», а тяжёлый список деталей
+        // собираем асинхронно — иначе ТСД ждёт построения всего списка в innerHTML
+        // и модалка открывается с задержкой.
+        waybillListModalHtml = "";
+        if (el.waybillListModalBody) el.waybillListModalBody.innerHTML = '<div class="empty-hint">Загрузка…</div>';
+        try { el.waybillListModal.showModal(); } catch { /* уже открыта */ }
+        const build = () => renderWaybill();
+        if (window.requestIdleCallback) { try { requestIdleCallback(build, { timeout: 200 }); } catch { setTimeout(build, 0); } }
+        else setTimeout(build, 0);
+        return;
+      }
+      const row = ev.target.closest && ev.target.closest("[data-waybill-index]");
       if (!row) return;
-      ev.preventDefault();
-      toggleMissingWaybill(Number(row.dataset.waybillIndex));
+      const i = Number(row.dataset.waybillIndex);
+      if (waybillSelected.has(i)) waybillSelected.delete(i); else waybillSelected.add(i);
+      renderWaybill();
+      focusWaybillScan();
     });
+    container.addEventListener("dblclick", (ev) => {
+      const row = ev.target.closest && ev.target.closest("[data-waybill-index]");
+      if (!row) return;
+      const art = String(row.dataset.waybillArt || "");
+      waybillSelected.add(Number(row.dataset.waybillIndex));
+      if (art) waybillScanDetail(art);
+    });
+  };
+  if (el.waybillList) bindWaybillListEvents(el.waybillList);
+  if (el.waybillListModalBody) bindWaybillListEvents(el.waybillListModalBody);
+  if (el.waybillListModalClose) {
+    el.waybillListModalClose.addEventListener("click", () => { try { el.waybillListModal.close(); } catch {} });
+  }
+  if (el.waybillListModal) {
+    el.waybillListModal.addEventListener("cancel", (e) => { e.preventDefault(); try { el.waybillListModal.close(); } catch {} });
+  }
+  if (el.waybillQtyAskOk) {
+    el.waybillQtyAskOk.addEventListener("click", () => finishWaybillQtyAsk(false));
+  }
+  if (el.waybillQtyAskCancel) {
+    el.waybillQtyAskCancel.addEventListener("click", () => finishWaybillQtyAsk(true));
+  }
+  if (el.waybillQtyAsk) {
+    el.waybillQtyAsk.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); finishWaybillQtyAsk(false); }
+      else if (e.key === "Escape") { e.preventDefault(); finishWaybillQtyAsk(true); }
+    });
+  }
+  if (el.waybillQtyAskModal) {
+    el.waybillQtyAskModal.addEventListener("cancel", (e) => { e.preventDefault(); finishWaybillQtyAsk(true); });
+  }
+  // «Собрать» в модалке: засчитать отмеченные позиции на указанное кол-во.
+  if (el.waybillModalAssembleBtn) {
+    el.waybillModalAssembleBtn.addEventListener("click", () => {
+      const qty = Math.max(1, Number(el.waybillModalQty && el.waybillModalQty.value) || 1);
+      const idxs = [...waybillSelected];
+      waybillSelected.clear();
+      (async () => {
+        for (const idx of idxs) {
+          const it = waybillLocal && waybillLocal.items[idx];
+          if (!it) continue;
+          const rem = Math.max(0, (Number(it.qty) || 0) - (Number(it.scanned) || 0));
+          if (rem > 0) await waybillScanDetail(String(it.art), Math.min(qty, rem));
+        }
+        if (el.waybillModalQty) el.waybillModalQty.value = "1";
+        renderWaybill();
+        focusWaybillScan();
+      })();
+    });
+  }
+  if (el.waybillModalMissBtn) {
+    el.waybillModalMissBtn.addEventListener("click", () => {
+      const idxs = [...waybillSelected];
+      waybillSelected.clear();
+      for (const idx of idxs) toggleMissingWaybill(idx);
+      renderWaybill();
+      focusWaybillScan();
+    });
+  }
+  if (el.waybillMissBtn) {
+    el.waybillMissBtn.addEventListener("click", () => {
+      const idxs = [...waybillSelected];
+      waybillSelected.clear();
+      for (const idx of idxs) toggleMissingWaybill(idx);
+      focusWaybillScan();
+    });
+  }
+  if (el.waybillManualBtn) {
+    el.waybillManualBtn.addEventListener("click", () => manualAssembleWaybill());
   }
   if (el.waybillArtInput) {
     el.waybillArtInput.addEventListener("keydown", (e) => {
@@ -10214,6 +10505,9 @@
   };
   window.addEventListener("keydown", (ev) => {
     if (!el.waybillModal || !el.waybillModal.open) return;
+    // Если открыта модалка ввода количества — цифры и Enter идут в неё, а не в
+    // буфер сканера (иначе на ТСД ввод кол-ва дублировался в скан).
+    if (el.waybillQtyAskModal && el.waybillQtyAskModal.open) return;
     // В поле (ручной ввод) — не дублируем, оно само вызывает скан по Enter.
     const ae = document.activeElement;
     if (ae && el.waybillArtInput && ae === el.waybillArtInput) return;
@@ -10611,6 +10905,23 @@
     // Poll the server in the background so edits made elsewhere (by an admin in
     // "Дни сотрудников", or on another device) reach this timer live, no reload.
     setInterval(pollState, 8000);
+    // SSE-синхронизация: мгновенно узнаём об изменении данных (скан на другом
+    // устройстве, завершение маршрута) и сразу перечитываем актуальное состояние.
+    let sseLast = 0;
+    const onSseChanged = () => {
+      const now = Date.now();
+      if (now - sseLast < 250) return; // схлопываем пачку событий в одно обновление
+      sseLast = now;
+      if (el.waybillModal && el.waybillModal.open) refreshWaybillFromServer();
+      loadShipments();
+    };
+    try {
+      if ("EventSource" in window) {
+        const es = new EventSource("/api/events");
+        es.onmessage = onSseChanged;
+        es.onerror = () => { /* SSE упал — опрос остаётся страховкой */ };
+      }
+    } catch { /* без SSE работаем по опросу */ }
     // Автообновление разделов без ручных кнопок «Обновить». Единый дешёвый
     // таймер раз в 10 секунд тянет данные только для тех разделов, которые
     // сейчас реально открыты (не hidden) и у которых нет собственного таймера
