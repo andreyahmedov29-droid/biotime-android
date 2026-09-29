@@ -581,6 +581,17 @@ class MainActivity : AppCompatActivity() {
             } catch (_: Exception) { /* не критично */ }
         }
 
+        // Выход из закреплённого режима (lock task / kiosk) и перезагрузка WebView.
+        // Нужно, если приложение зависло: веб-кнопка «Перезагрузить» снимает пиннинг
+        // (Home снова работает) и перезагружает страницу.
+        @android.webkit.JavascriptInterface
+        fun unfreezeApp() {
+            try { stopLockTask() } catch (_: Exception) { /* не был в закреплённом режиме */ }
+            runOnUiThread {
+                try { webView.postDelayed({ webView.reload() }, 200) } catch (_: Exception) { /* ignore */ }
+            }
+        }
+
         // Нативный дубль офлайн-очереди действий водителя.
         // Веб хранит очередь в WebView localStorage (
         // biotime.offlineOps), но localStorage может быть очищен системой при
