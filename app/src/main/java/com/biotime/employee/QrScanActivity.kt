@@ -69,6 +69,8 @@ class QrScanActivity : AppCompatActivity() {
     private var action = "load"
     private var callback: String = "qrScanCallback"
     private var counterText: TextView? = null
+    private var torchBtn: TextView? = null
+    private var torchOn = false
     // Коды мест, уже засчитанных в текущей сессии сканирования. Камера
     // (decodeContinuous) может отдавать ОДИН И ТОТ ЖЕ QR несколько раз подряд
     // (разные кадры/детекции = «пики»). Счётчик done растёт ТОЛЬКО на уникальные
@@ -160,11 +162,41 @@ class QrScanActivity : AppCompatActivity() {
         }
         container.addView(closeBtn)
 
+        // Кнопка фонарика: в темноте камера не фокусируется на стикере/QR, свет
+        // даёт контраст. Показывается только в экране сканера (на ТСД камера не
+        // используется — внешний сканер, поэтому на ТСД кнопка не появляется).
+        val torchBtn = TextView(this).apply {
+            text = "💡"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 24f)
+            gravity = Gravity.CENTER
+            val size = dp(52f).toInt()
+            val lp = FrameLayout.LayoutParams(size, size).apply {
+                gravity = Gravity.TOP or Gravity.START
+                setMargins(dp(18f).toInt(), dp(18f).toInt(), 0, 0)
+            }
+            layoutParams = lp
+            background = torchDefaultBg()
+            setOnClickListener { toggleTorch() }
+        }
+        this.torchBtn = torchBtn
+        container.addView(torchBtn)
+
         setContentView(container)
 
         // Декодируем каждый появляющийся QR НЕПРЕРЫВНО. Камеру не закрываем
         // автоматически (даже когда счётчик достиг need): каждый код уходит в веб,
         // а закрытие — только по крестику, «Назад» или при отсутствии моста в веб.
+        // Стабильный автофокус: фокусируется один раз и держит фокус (НЕ дёргается
+        // на каждом кадре, как continuous_video). Без этого на стикере камера
+        // «постоянно перефокусируется» и QR считается дольше положенного.
+        try {
+            barcodeView?.getCameraSettings()?.apply {
+                setAutoFocusEnabled(true)
+                setFocusMode(android.hardware.Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE)
+            }
+        } catch (_: Exception) {
+            // Камера недоступна/настройка не поддержана — сканируем как раньше.
+        }
         barcodeView?.decodeContinuous(object : BarcodeCallback {
             override fun barcodeResult(result: BarcodeResult?) {
                 val text = result?.text ?: return
@@ -213,6 +245,32 @@ class QrScanActivity : AppCompatActivity() {
     /** Закрытие окна сканера по крестику — как системная кнопка «Назад» (отмена). */
     private fun closeSelf() {
         onBackPressed()
+    }
+
+    /** Кружок-фон кнопки фонарика в выключенном состоянии. */
+    private fun torchDefaultBg(): GradientDrawable = GradientDrawable().apply {
+        shape = GradientDrawable.OVAL
+        setColor(0xB3141822.toInt())
+        setStroke(dp(2f).toInt(), 0x66FFFFFF.toInt())
+    }
+
+    /** Кружок-фон кнопки фонарика во включённом состоянии (акцентный). */
+    private fun torchActiveBg(): GradientDrawable = GradientDrawable().apply {
+        shape = GradientDrawable.OVAL
+        setColor(0xFF255C2E.toInt())
+        setStroke(dp(2f).toInt(), 0xFFFFAB38.toInt())
+    }
+
+    /** Включить/выключить фонарик камеры (доступно только на камере, не на ТСД). */
+    private fun toggleTorch() {
+        torchOn = !torchOn
+        try {
+            barcodeView?.getBarcodeView()?.getCameraManager()?.setTorch(torchOn)
+        } catch (_: Exception) {
+            // Камера занята/недоступна — откатываем состояние кнопки.
+            torchOn = !torchOn
+        }
+        torchBtn?.background = if (torchOn) torchActiveBg() else torchDefaultBg()
     }
 
     private fun dp(v: Float): Float {
