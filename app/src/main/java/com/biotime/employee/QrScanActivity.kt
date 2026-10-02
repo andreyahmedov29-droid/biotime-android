@@ -192,7 +192,7 @@ class QrScanActivity : AppCompatActivity() {
         try {
             barcodeView?.getCameraSettings()?.apply {
                 setAutoFocusEnabled(true)
-                setFocusMode(android.hardware.Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE)
+                setFocusMode(com.journeyapps.barcodescanner.CameraSettings.FocusMode.FOCUS_MODE_CONTINUOUS)
             }
         } catch (_: Exception) {
             // Камера недоступна/настройка не поддержана — сканируем как раньше.
@@ -265,7 +265,7 @@ class QrScanActivity : AppCompatActivity() {
     private fun toggleTorch() {
         torchOn = !torchOn
         try {
-            barcodeView?.getBarcodeView()?.getCameraManager()?.setTorch(torchOn)
+            barcodeView?.getCameraManager()?.setTorch(torchOn)
         } catch (_: Exception) {
             // Камера занята/недоступна — откатываем состояние кнопки.
             torchOn = !torchOn
