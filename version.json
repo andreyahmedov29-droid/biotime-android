@@ -1,5 +1,5 @@
 {
-  "versionCode": 45,
-  "versionName": "1.1.24",
-  "notes": "Пересборка: фиксы сканера выгрузки (rebuild APK OTA)"
+  "versionCode": 46,
+  "versionName": "1.1.25",
+  "notes": "Авторелиз 1.1.25 (commit cb7c47d)"
 }
