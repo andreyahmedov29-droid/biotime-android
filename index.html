@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="app-version" content="20260927c201" />
     <title>Личный кабинет ПрофМаркетСистем</title>
   <meta name="theme-color" content="#08090d" />
   <meta name="description" content="Личный кабинет ПрофМаркетСистем — учёт рабочего времени, переработок, маршрутов и отгрузок" />
@@ -77,6 +78,8 @@
       <button class="tab driver-only-tab" data-tab="myroutes" hidden>Мои маршруты</button>
       <button class="tab shipment-only" data-tab="shipment" hidden>Отгрузка</button>
       <button class="tab" data-tab="scanlog">Журнал</button>
+      <button class="tab admin-only" id="notfoundTab" data-tab="notfound">Проблемы со склада</button>
+      <button class="tab admin-only" id="logsTab" data-tab="logs">Логи</button>
     </nav>
     <div class="topbar-right">
       <div class="user-chip" id="userChip" hidden>
@@ -431,7 +434,7 @@
                 <label class="drv-field-label" for="driverRouteDate">Дата</label>
                 <input id="driverRouteDate" class="text-input" type="date" />
               </div>
-              <div class="drv-field">
+              <div class="drv-field drv-route-driver-field">
                 <label class="drv-field-label" for="driverRouteDriver">Водитель</label>
                 <select id="driverRouteDriver" class="select-input"></select>
               </div>
@@ -444,6 +447,10 @@
                 title="Название маршрута. Укажите своё название — оно будет показано в списке маршрутов. Можно создать сколько угодно маршрутов на день с разными названиями."
                 autocomplete="off" />
             </div>
+            <label class="selfpickup-field" title="Самовывоз: клиент забирает товар сам. Доставки водителем нет — маршрут завершается сразу после отгрузки на складе.">
+              <input id="selfPickupChk" type="checkbox" class="selfpickup-chk" />
+              <span class="selfpickup-text">Самовывоз (клиент забирает сам)</span>
+            </label>
 
             <div class="drv-route-label">Последовательность остановок</div>
             <div class="route-multiselect" id="driverRouteClients">
@@ -635,6 +642,11 @@
                 <button type="button" class="shipment-subtab" id="shipmentSubtabDone">Завершённые отгрузки</button>
               </div>
             </div>
+            <div class="shipment-date-filter">
+              <label class="shipment-date-label" for="shipmentDateFilter">Календарь дат</label>
+              <input type="date" id="shipmentDateFilter" class="text-input shipment-date-input" autocomplete="off" />
+              <button type="button" class="mini-btn" id="shipmentDateClear" title="Сбросить фильтр по дате">✕</button>
+            </div>
           </div>
         </div>
         <div class="shipment-list" id="shipmentListActive"></div>
@@ -658,6 +670,7 @@
           <button type="button" class="mini-btn scanlog-filter is-active" data-action="load" role="tab">Погрузка</button>
           <button type="button" class="mini-btn scanlog-filter" data-action="unload" role="tab">Выгрузка</button>
           <button type="button" class="mini-btn scanlog-filter" data-action="waybill" role="tab">Сборка</button>
+          <button type="button" class="mini-btn scanlog-filter" data-action="waybill-missing" role="tab" title="Только позиции, помеченные «не найдено»">Не найдено</button>
         </div>
 
         <div class="scanlog-ranges" id="scanlogRanges">
@@ -674,12 +687,78 @@
             <span class="scanlog-filter-caption">Выгрузка за дату</span>
             <input class="scanlog-date" id="scanlogDateUnload" type="date" />
           </label>
+          <label class="scanlog-filter-field scanlog-date-field" id="scanlogWaybillDateField" hidden>
+            <span class="scanlog-filter-caption">Сборка за дату</span>
+            <input class="scanlog-date" id="scanlogDateWaybill" type="date" />
+          </label>
         </div>
 
         <div class="scanlog-wrap">
           <table class="scanlog-table" id="scanlogTable"></table>
         </div>
         <div class="scanlog-empty" id="scanlogEmpty" hidden>Пока нет записей о сканировании мест.</div>
+      </section>
+    </section>
+
+    <section class="tab-page" id="page-notfound" hidden>
+      <section class="cal-card">
+        <div class="nf-toolbar">
+          <input id="nfSearch" class="text-input" type="text" placeholder="Поиск: клиент / артикул" autocomplete="off" />
+          <button type="button" id="nfRefresh" class="mini-btn">Обновить</button>
+        </div>
+        <nav class="nf-tabs" id="nfTabs">
+          <button type="button" class="nf-tab active" data-nf-view="problems">Проблемы</button>
+          <button type="button" class="nf-tab" data-nf-view="review">На проверке</button>
+          <button type="button" class="nf-tab" data-nf-view="done">Завершённые</button>
+        </nav>
+        <div id="nfSummary" class="nf-summary"></div>
+        <div id="notfoundTable" class="notfound-wrap"></div>
+      </section>
+    </section>
+
+    <!-- Детали позиции «Отчёт не найдено»: клик по строке открывает информацию и статусы -->
+    <dialog class="modal" id="notfoundDetailModal">
+      <div class="postpone-card">
+        <div class="modal-head">
+          <h3>Позиция</h3>
+          <button class="icon-btn modal-close" id="nfdModalClose" aria-label="Закрыть">&times;</button>
+        </div>
+        <div id="nfdModalBody"></div>
+      </div>
+    </dialog>
+
+    <!-- Логи сканов деталей при сборке (основной тулбар, только админ) -->
+    <section class="tab-page" id="page-logs" hidden>
+      <section class="cal-card">
+        <div class="sub-head">
+          <div class="sub-title-wrap">
+            <h4 class="sub-title">Логи</h4>
+            <p class="sub-note">Сканирование штрихкодов деталей при сборке: неуспешные видны в первую очередь для контроля ошибок</p>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button type="button" class="mini-btn" id="scansLogRefresh">Обновить</button>
+            <button type="button" class="mini-btn" id="scansLogClear">Очистить</button>
+          </div>
+        </div>
+        <div class="scans-toolbar">
+          <label class="scans-filter">
+            <input type="checkbox" id="scansOnlyFailed" checked /> <span>Только неуспешные</span>
+          </label>
+          <label class="scans-filter">
+            <span>День:</span>
+            <input type="date" id="scansDate" class="text-input" style="flex:0 1 auto;max-width:170px;" />
+            <button type="button" class="mini-btn" id="scansAllDays" title="Показать логи за все дни">Все дни</button>
+          </label>
+        </div>
+        <div class="scans-summary" id="scansSummary"></div>
+        <div class="notfound-wrap">
+          <table class="admin-table">
+            <thead><tr>
+              <th>Время</th><th>Сотрудник</th><th>Клиент</th><th>Код</th><th>Бокс</th><th>Артикул в накладной</th><th>Статус</th><th>Причина / деталь</th>
+            </tr></thead>
+            <tbody id="scansLogList"></tbody>
+          </table>
+        </div>
       </section>
     </section>
   </main>
@@ -728,7 +807,6 @@
       </div>
     </div>
   </dialog>
-
   <!-- Допечатка дополнительных мест (отдельное окно): выбор ЛЮБОГО клиента
        маршрута — в т.ч. уже отгруженного/закрытого — и допечатка этикеток.
        Данные сохраняются на сервере при каждом допечатывании (автосохранение). -->
@@ -834,8 +912,12 @@
         <div class="sub-head">
           <div class="sub-title-wrap">
             <h4 class="sub-title">Оклады и дни</h4>
-            <p class="sub-note">Оклад, премия, надбавка, отработанные часы и переработка за текущий месяц</p>
+            <p class="sub-note">Оклад, премия, надбавка, отработанные часы и переработка за выбранный месяц</p>
           </div>
+          <label class="nf-toolbar" style="margin:0;gap:8px;">
+            <span style="font-size:12.5px;opacity:.85;">Месяц:</span>
+            <input type="month" id="salMonth" class="text-input" style="flex:0 1 auto;max-width:180px;" />
+          </label>
         </div>
         <div class="admin-table-wrap">
           <table class="admin-table">
@@ -1010,6 +1092,26 @@
             <div class="group-check-list" id="shipmentGroups"></div>
             <span class="group-scope-hint">Раздел «Отгрузка» видят только сотрудники отмеченных групп. Если ничего не отмечено — раздел скрыт у всех.</span>
           </div>
+          <div class="group-scope">
+            <details class="group-collapse">
+              <summary>Доступ к «Проблемы со склада» <span class="group-collapse-count" id="notfoundUsersCount"></span></summary>
+              <div class="group-access">
+                <input id="notfoundUsersSearch" class="text-input group-search" type="text" placeholder="Найти сотрудника..." autocomplete="off" />
+                <div class="group-check-list" id="notfoundUsersGroups"></div>
+                <span class="group-scope-hint">Вкладку «Проблемы со склада» видят отмеченные сотрудники (админ — всегда). Галочки сохраняются сразу.</span>
+              </div>
+            </details>
+          </div>
+          <div class="group-scope">
+            <details class="group-collapse">
+              <summary>Доступ к «Логи» <span class="group-collapse-count" id="logUsersCount"></span></summary>
+              <div class="group-access">
+                <input id="logUsersSearch" class="text-input group-search" type="text" placeholder="Найти сотрудника..." autocomplete="off" />
+                <div class="group-check-list" id="logUsersGroups"></div>
+                <span class="group-scope-hint">Вкладку «Логи» видят отмеченные сотрудники (админ и модератор — всегда). Галочки сохраняются сразу.</span>
+              </div>
+            </details>
+          </div>
           <div class="toggle-row">
             <div class="toggle-info">
               <div class="toggle-title">Начинать маршрут без отгрузки</div>
@@ -1037,16 +1139,6 @@
             </div>
             <label class="switch">
               <input type="checkbox" id="allowDriverReorderPoints" />
-              <span class="slider"></span>
-            </label>
-          </div>
-          <div class="setting-row">
-            <div class="setting-text">
-              <span class="setting-title">Расходные накладные при сборке</span>
-              <span class="setting-sub">Разрешить складу загружать расходную накладную по маршруту/клиенту и собирать товар по сканированию штрихкода артикула (раздел «Отгрузка»). Если выключено — возможность скрыта.</span>
-            </div>
-            <label class="switch">
-              <input type="checkbox" id="allowWaybill" />
               <span class="slider"></span>
             </label>
           </div>
@@ -1176,6 +1268,10 @@
       <div class="status-clear-wrap">
         <button class="mini-btn status-clear" id="statusClear" type="button">Сбросить (авто)</button>
       </div>
+      <div class="status-clear-wrap status-reopen-wrap">
+        <button class="mini-btn status-reopen" id="statusReopen" type="button" title="Убрать «завершён» у дня этого сотрудника — день снова открыт, можно работать/сканировать">Открыть день</button>
+        <button class="mini-btn status-reopen-clear" id="statusReopenClear" type="button" title="Удалить время этого дня у сотрудника и открыть его заново">Сбросить время и открыть</button>
+      </div>
     </div>
   </dialog>
 
@@ -1201,6 +1297,12 @@
             <line x1="21" y1="12" x2="9" y2="12"/>
           </svg>
           <span>Выйти</span>
+        </button>
+        <button type="button" class="mini-btn" id="accountReloadBtn" title="Выйти из закреплённого режима и перезагрузить (если зависло)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+          </svg>
+          <span>Перезагрузить</span>
         </button>
         <div class="account-password-box" id="cpBox" hidden>
           <h4>Сменить пароль</h4>
@@ -1321,6 +1423,7 @@
     <div class="postpone-card">
       <div class="modal-head">
         <h3 id="waybillTitle">Расходная накладная</h3>
+        <button type="button" class="nfd-action-btn nfd-btn-danger waybill-remove-missing" id="waybillRemoveMissing" hidden>Убрать «не найдено»</button>
         <button class="icon-btn modal-close" id="waybillClose" aria-label="Закрыть">&times;</button>
       </div>
       <div class="waybill-body">
@@ -1329,11 +1432,6 @@
         <div class="waybill-scan-row">
           <input class="text-input" id="waybillArtInput" type="text" autocomplete="off" spellcheck="false"
                  placeholder="Штрихкод / артикул" enterkeyhint="go" />
-          <label class="waybill-qty-field" title="Сколько единиц одного артикула засчитывается за один скан (если на стикере несколько штук)">
-            <input class="text-input waybill-qty-input" id="waybillQtyInput" type="number" min="1" step="1" value="1" />
-            <span class="waybill-qty-label">Шт./скан</span>
-          </label>
-          <button type="button" class="ctrl ctrl-primary" id="waybillScanBtn">Сканировать</button>
         </div>
         <div class="waybill-box-row">
           <div class="waybill-box-cur" id="waybillBoxCur" data-state="empty" title="Бокс, в который складываются отсканированные детали">
@@ -1397,6 +1495,22 @@
     </div>
   </dialog>
 
+  <!-- Общий (мультидевайсный) ввод количества: деталь просит кол-во, отвечает любой
+       открытый клиент сборки (ПК/телефон/ТСД) — засчитывается на сервере у всех -->
+  <dialog class="modal" id="waybillSharedQtyModal">
+    <div class="postpone-card waybill-qty-ask">
+      <div class="modal-head">
+        <h3>Введите количество</h3>
+      </div>
+      <div class="waybill-qty-info" id="waybillSharedQtyInfo"></div>
+      <input id="waybillSharedQty" class="text-input waybill-qty-ask-input" type="number" min="1" step="1" inputmode="numeric" autocomplete="off" />
+      <div class="row-actions waybill-qty-ask-actions">
+        <button type="button" class="ctrl ctrl-primary" id="waybillSharedQtyOk">ОК</button>
+        <button type="button" class="ctrl ctrl-soft" id="waybillSharedQtyCancel">Отмена</button>
+      </div>
+    </div>
+  </dialog>
+
   <div class="toast" id="toast"></div>
 
   <!-- Оверлей живого прогресса сканирования: крупно показывает клиента и
@@ -1428,6 +1542,6 @@
     }
   </script>
   <script src="qr.js"></script>
-  <script src="app.js?v=20260927b57"></script>
+  <script src="app.js?v=RELEASE"></script>
 </body>
 </html>
