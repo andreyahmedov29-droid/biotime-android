@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.webkit.WebChromeClient
 import android.webkit.CookieManager
 import android.webkit.WebResourceRequest
@@ -311,6 +312,20 @@ class MainActivity : AppCompatActivity() {
         webView.webViewClient = object : WebViewClient() {
             // Оставляем навигацию внутри WebView (не открываем системный браузер).
             override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean = false
+            // Проброс консоли WebView (console.log/error/warn из app.js) в Logcat.
+            // Раньше JS-ошибки были невидимы — пользователь нажимал кнопку, «ничего
+            // не происходило» и «не пишет ошибок», потому что WebView не логировал
+            // ничего. Теперь любая ошибка/предупреждение веба видна под тегом
+            // BIOTIME_WEB: adb logcat -s BIOTIME_WEB
+            override fun onConsoleMessage(consoleMessage: android.webkit.ConsoleMessage): Boolean {
+                val line = "[WebView] (${consoleMessage.lineNumber()}) ${consoleMessage.message()}"
+                when (consoleMessage.messageLevel()) {
+                    android.webkit.ConsoleMessage.MessageLevel.ERROR -> Log.e("BIOTIME_WEB", line)
+                    android.webkit.ConsoleMessage.MessageLevel.WARNING -> Log.w("BIOTIME_WEB", line)
+                    else -> Log.d("BIOTIME_WEB", line)
+                }
+                return super.onConsoleMessage(consoleMessage)
+            }
             // При загрузке основного документа шлюз платформы может вернуть
             // 401/403 (BH_LOGIN_REQUIRED) — типично при включённом VPN, когда
             // сессия не проходит через туннель. Показываем понятное сообщение
