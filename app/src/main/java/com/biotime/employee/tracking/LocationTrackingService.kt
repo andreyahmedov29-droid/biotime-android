@@ -28,6 +28,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import org.json.JSONArray
 import android.webkit.CookieManager
 import java.net.HttpURLConnection
 import java.net.URL
@@ -36,6 +37,10 @@ import java.net.URL
  * Фоновый трекер геолокации водителя. Работает даже при свёрнутом/заблокированном
  * приложении (Foreground Service + запрос "всегда"). Шлёт координаты на готовый
  * эндпоинт BIOTIME POST /api/drivers/location каждые [UPDATE_INTERVAL_MS].
+ *
+ * Офлайн-буфер: если сеть недоступна, точка не теряется, а кладётся в файл
+ * track_buffer.json (переживает перезапуск) и досылается пачкой ({points:[...]})
+ * при появлении сети. Сервер принял пачку для /api/drivers/location.
  */
 class LocationTrackingService : Service() {
 
@@ -58,15 +63,12 @@ class LocationTrackingService : Service() {
         // Трекер работает ТОЛЬКО у водителя и пока его рабочий день начат и не
         // завершён. Для не-водителей (не состоят в группе «Водители») геолокация
         // не запрашивается вообще.
-        // Если день не активен (ещё не начат или уже завершён) — не запускаем
-        // геолокацию и останавливаем сервис. Статус дня и роль задаёт веб через
-        // AndroidBridge.setWorkActive(...) / AndroidBridge.setDriver(...).
         if (!isDriver() || !isWorkActive()) {
             stopSelf()
             return START_NOT_STICKY
         }
         startLocationUpdates()
-        return START_STICKY // перезапуск системой после убийства процесс
+        return START_STICKY
     }
 
     private fun buildNotification(): Notification {
@@ -115,43 +117,87 @@ class LocationTrackingService : Service() {
 
     private fun send(loc: Location) {
         scope.launch {
+            // Защита от гонки: если пользователь не водитель или день
+            // завершился, пока координата летела — не отправляем её.
+            if (!isDriver() || !isWorkActive()) return@launch
+            val routeId = prefs().getString(KEY_ROUTE_ID, "") ?: ""
+            // Сначала пробуем отправить накопленный офлайн-буфер (сеть могла
+            // вернуться): если он уйдёт — освобождаем место на устройстве.
+            flushBuffer()
+            val body = JSONObject()
+                .put("lat", loc.latitude)
+                .put("lon", loc.longitude)
+                .apply { if (routeId.isNotEmpty()) put("routeId", routeId) }
             try {
-                // Защита от гонки: если пользователь не водитель или день
-                // завершился, пока координата летела — не отправляем её.
-                if (!isDriver() || !isWorkActive()) return@launch
-                val routeId = prefs().getString(KEY_ROUTE_ID, "") ?: ""
-                val body = JSONObject()
-                    .put("lat", loc.latitude)
-                    .put("lon", loc.longitude)
-                    .apply { if (routeId.isNotEmpty()) put("routeId", routeId) }
-
-                val url = URL(MainActivity.APP_URL.trimEnd('/') + "/api/drivers/location")
-                val conn = url.openConnection() as HttpURLConnection
-                conn.requestMethod = "POST"
-                conn.connectTimeout = 15_000
-                conn.readTimeout = 15_000
-                conn.setRequestProperty("Content-Type", "application/json")
-                // Фоновый keepalive сессии: каждый координатный POST в фоне идёт на домен
-                // приложения через платформенный Gateway. Чтобы Gateway признал запрос и
-                // продлил сессию (_vibe_gw), передаём накопленную WebView-куку сессии так же,
-                // как это делает активная вкладка. Пока рабочий день активен, трекер работает
-                // в фоне каждые ~15 c — значит Gateway-сессия не протухает за время простоя.
-                // Если куки уже нет (например, приложение закрывали дольше срока токена) —
-                // запрос просто вернёт 401, как и раньше, ничего не ломая.
-                try {
-                    val cookie = CookieManager.getInstance().getCookie(url.toString())
-                    if (!cookie.isNullOrEmpty()) conn.setRequestProperty("Cookie", cookie)
-                } catch (_: Exception) {
-                    // куки — вспомогательное; сбой не должен ронять фон
-                }
-                conn.doOutput = true
-                conn.outputStream.use { it.write(body.toString().toByteArray()) }
-                conn.responseCode // 200 — ок; 401/403 — сессия истекла (нужен вход в WebView)
-                conn.disconnect()
+                postJson(body)
             } catch (_: Exception) {
-                // сеть недоступна — следующая точка догонит
+                // сеть недоступна — кладём точку в офлайн-буфер, вышлем при
+                // появлении сети (flushBuffer в следующем тике).
+                appendToBuffer(loc, routeId, System.currentTimeMillis())
             }
         }
+    }
+
+    /** Файл офлайн-буфера координат (переживает перезапуски приложения). */
+    private fun bufferFile() = java.io.File(filesDir, "track_buffer.json")
+
+    private fun readBuffer(): JSONArray {
+        val f = bufferFile()
+        return try { if (f.exists()) JSONArray(f.readText()) else JSONArray() } catch (_: Exception) { JSONArray() }
+    }
+
+    /** Кладёт точку в офлайн-буфер, ограничивая его последними ~500 точками. */
+    private fun appendToBuffer(loc: Location, routeId: String, ts: Long) {
+        try {
+            val arr = readBuffer()
+            val o = JSONObject().put("lat", loc.latitude).put("lon", loc.longitude).put("ts", ts)
+            if (routeId.isNotEmpty()) o.put("routeId", routeId)
+            arr.put(o)
+            val start = if (arr.length() > 500) arr.length() - 500 else 0
+            val out = JSONArray()
+            for (i in start until arr.length()) out.put(arr.get(i))
+            bufferFile().writeText(out.toString())
+        } catch (_: Exception) { /* не критично */ }
+    }
+
+    /** Отправляет накопленный офлайн-буфер пачкой; при успехе очищает его. */
+    private fun flushBuffer(): Boolean {
+        try {
+            val f = bufferFile()
+            if (!f.exists()) return true
+            val arr = JSONArray(f.readText())
+            if (arr.length() == 0) { f.delete(); return true }
+            val body = JSONObject().put("points", arr)
+            postJson(body)
+            f.delete()
+            return true
+        } catch (_: Exception) {
+            return false
+        }
+    }
+
+    /** Единая отправка JSON POST на /api/drivers/location (с кукой сессии). */
+    private fun postJson(body: JSONObject) {
+        val url = URL(MainActivity.APP_URL.trimEnd('/') + "/api/drivers/location")
+        val conn = url.openConnection() as HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.connectTimeout = 15_000
+        conn.readTimeout = 15_000
+        conn.setRequestProperty("Content-Type", "application/json")
+        // Фоновый keepalive сессии: каждый координатный POST в фоне идёт на домен
+        // приложения через платформенный Gateway. Чтобы Gateway признал запрос и
+        // продлил сессию (_vibe_gw), передаём накопленную WebView-куку сессии так же,
+        // как это делает активная вкладка.
+        try {
+            val cookie = CookieManager.getInstance().getCookie(url.toString())
+            if (!cookie.isNullOrEmpty()) conn.setRequestProperty("Cookie", cookie)
+        } catch (_: Exception) {
+            // куки — вспомогательное; сбой не должен ронять фон
+        }
+        conn.doOutput = true
+        conn.outputStream.use { it.write(body.toString().toByteArray()) }
+        conn.responseCode // 200 — ок; 401/403 — сессия истекла (нужен вход в WebView)
+        conn.disconnect()
     }
 
     private fun prefs() = getSharedPreferences("biotime", Context.MODE_PRIVATE)
@@ -178,21 +224,14 @@ class LocationTrackingService : Service() {
         private const val KEY_IS_DRIVER = "is_driver"
         private const val UPDATE_INTERVAL_MS = 15_000L // 15 секунд
 
-        /** Признак активного рабочего дня (начат и не завершён). */
         fun isWorkActive(context: Context): Boolean =
             context.getSharedPreferences("biotime", Context.MODE_PRIVATE)
                 .getBoolean(KEY_WORK_ACTIVE, false)
 
-        /** Признак «сотрудник — водитель» (состоит в группе «Водители»). */
         fun isDriver(context: Context): Boolean =
             context.getSharedPreferences("biotime", Context.MODE_PRIVATE)
                 .getBoolean(KEY_IS_DRIVER, false)
 
-        /**
-         * Устанавливает, является ли сотрудник водителем (приходит от веба из
-         * /api/state → me.isDriver). Для не-водителей геолокация НЕ запрашивается:
-         * если роль сменилась на «не водитель» — останавливаем трекер.
-         */
         fun setDriver(context: Context, isDriver: Boolean) {
             context.getSharedPreferences("biotime", Context.MODE_PRIVATE)
                 .edit().putBoolean(KEY_IS_DRIVER, isDriver).apply()
@@ -201,14 +240,6 @@ class LocationTrackingService : Service() {
             }
         }
 
-        /**
-         * Устанавливает статус рабочего дня и запускает/останавливает фоновый
-         * трекер геолокации соответственно:
-         *  - active == true  — день начат: запускает сервис (если ещё не бежит);
-         *  - active == false — день завершён (или ещё не начат): останавливает.
-         * Трекер сработает только у водителя (isDriver), иначе игнорируется.
-         * Вызывается из веб-интерфейса через AndroidBridge.setWorkActive(...).
-         */
         fun setWorkActive(context: Context, active: Boolean) {
             context.getSharedPreferences("biotime", Context.MODE_PRIVATE)
                 .edit().putBoolean(KEY_WORK_ACTIVE, active).apply()
@@ -220,7 +251,6 @@ class LocationTrackingService : Service() {
         }
 
         fun start(context: Context) {
-            // Не начинаем трекинг ни вне рабочего дня, ни для не-водителей.
             if (!isDriver(context) || !isWorkActive(context)) return
             val intent = Intent(context, LocationTrackingService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
