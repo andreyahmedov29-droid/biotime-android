@@ -13,6 +13,7 @@ module.exports = function createRouteActionHandler({
   allowIncompleteFinish,
   unloadCounts,
   relinkRouteLabels,
+  relinkRouteWaybills,
 } = {}) {
   return async function handleRouteActionRoutes(req, res, urlPath, method, user, admin) {
     const db = getDb ? getDb() : {};
@@ -286,8 +287,15 @@ module.exports = function createRouteActionHandler({
         if (JSON.stringify(frozenCurrent) !== JSON.stringify(frozenNew)) {
           return sendJson(res, 409, { error: "Нельзя менять уже пройденные точки или точку, где вы стоите" });
         }
+        const prevClients = route.clients;
         route.clients = newOrder;
         relinkRouteLabels(route.id, newOrder, db.labels);
+        // Накладные (сборка/«не найдено») привязаны к позиции — переносим их на
+        // новые индексы своих клиентов, иначе содержимое сборки одного клиента
+        // «переезжает» к другому после перестановки точек (Фроз -> Система).
+        if (typeof relinkRouteWaybills === "function" && route.waybills) {
+          route.waybills = relinkRouteWaybills(prevClients, newOrder, route.waybills);
+        }
         await persistDb();
         return sendJson(res, 200, routeResp());
       }

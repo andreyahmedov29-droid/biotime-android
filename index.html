@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <meta name="app-version" content="20260927c201" />
     <title>Личный кабинет ПрофМаркетСистем</title>
   <meta name="theme-color" content="#08090d" />
@@ -339,6 +339,7 @@
           <button type="button" class="drv-subtab" data-sub="route" role="tab" id="subtab-route">Маршрут на день</button>
           <button type="button" class="drv-subtab" data-sub="routes" role="tab" id="subtab-routes">Маршруты</button>
           <button type="button" class="drv-subtab" data-sub="report" role="tab" id="subtab-report">Отчёт</button>
+          <button type="button" class="drv-subtab" data-sub="location" role="tab" id="subtab-location">Местоположение</button>
           <button type="button" class="drv-subtab tracking-only" data-sub="tracking" role="tab" id="subtab-tracking">Трекинг</button>
         </div>
 
@@ -575,6 +576,48 @@
             </div>
             <div class="drv-report-stub" id="driverReportStub" style="display:none">
               <div class="empty-hint">За выбранную дату данных о движении нет.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Вкладка: Местоположение — где находился водитель в течение дня (15-мин сетка) -->
+        <div class="drv-subpanel" id="routesub-location" role="tabpanel" hidden>
+          <div class="drv-panel">
+            <div class="drv-panel-head">
+              <div class="drv-panel-title">
+                <span class="drv-panel-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 21s-7-5.6-7-11a7 7 0 1 1 14 0c0 5.4-7 11-7 11z"/><circle cx="12" cy="10" r="2.2"/></svg>
+                </span>
+                Местоположение водителя
+              </div>
+            </div>
+            <div class="drv-report-sub">Где находился водитель в течение календарного дня</div>
+            <div class="driver-map-toolbar">
+              <select id="locationDriverSelect" class="text-input routes-date-filter" title="Выбрать водителя"></select>
+              <input id="locationDateFilter" class="text-input routes-date-filter" type="date" />
+              <select id="locationInterval" class="text-input routes-date-filter" title="Интервал сетки, минут">
+                <option value="5">5 мин</option>
+                <option value="10">10 мин</option>
+                <option value="15" selected>15 мин</option>
+                <option value="30">30 мин</option>
+                <option value="60">60 мин</option>
+              </select>
+              <button type="button" class="ctrl ctrl-soft" id="locationGoBtn">Показать</button>
+            </div>
+            <div class="report-table-wrap" id="locationTableWrap" hidden>
+              <table class="report-table" id="locationTable">
+                <thead>
+                  <tr>
+                    <th>Время</th>
+                    <th>Адрес</th>
+                    <th>Координаты</th>
+                  </tr>
+                </thead>
+                <tbody id="locationBody"></tbody>
+              </table>
+            </div>
+            <div class="drv-report-stub" id="locationStub" style="display:none">
+              <div class="empty-hint">За выбранную дату и водителя данных о местоположении нет.</div>
             </div>
           </div>
         </div>
@@ -1289,6 +1332,25 @@
         <div class="account-row"><span class="account-label">Роль</span><span class="account-value" id="acctRole">—</span></div>
         <div class="account-row"><span class="account-label">Администратор</span><span class="account-value" id="acctAdmin">—</span></div>
         <div class="account-row"><span class="account-label">Версия</span><span class="account-value" id="acctVersion">—</span></div>
+        <div class="account-row" id="acctIpRow" hidden><span class="account-label">IP-адрес</span><span class="account-value" id="acctIp">—</span></div>
+        <div class="account-row" id="acctHostRow" hidden><span class="account-label">Адрес приложения</span><span class="account-value" id="acctHost">—</span></div>
+        <script>
+          // Проставляет адрес приложения/IP сразу при загрузке страницы (не дожидаясь
+          // app.js из Service Worker-кэша). Host всегда доступен; числовой IP сервера
+          // подставляем поверх, только если сервер смог его определить (/api/ip).
+          (function () {
+            function put(id, v) { var el = document.getElementById(id); if (el && v) el.textContent = v; }
+            var host = window.location.host || window.location.hostname || "";
+            put("acctHost", host);
+            put("acctIp", host); // запасной вариант — не даём «—»
+            try {
+              fetch("/api/ip", { headers: { "Accept": "application/json" } })
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (d) { if (d && d.ip) put("acctIp", d.ip); })
+                .catch(function () {});
+            } catch (e) {}
+          })();
+        </script>
         <div class="account-note" id="acctReason" hidden></div>
         <button type="button" class="mini-btn account-logout-btn" id="accountLogout">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -1304,6 +1366,14 @@
           </svg>
           <span>Перезагрузить</span>
         </button>
+        <button type="button" class="mini-btn" id="accountLogBtn" title="Диагностический журнал приложения (сканер, ошибки)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M8 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3"/>
+            <path d="M16 3h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3"/>
+            <line x1="12" y1="9" x2="12" y2="15"/><line x1="9" y1="12" x2="15" y2="12"/>
+          </svg>
+          <span>Логи</span>
+        </button>
         <div class="account-password-box" id="cpBox" hidden>
           <h4>Сменить пароль</h4>
           <div class="drv-route-label">Текущий пароль <input class="text-input" id="cpCurrent" type="password" autocomplete="current-password" /></div>
@@ -1311,6 +1381,25 @@
           <button type="button" class="mini-btn" id="cpSubmit">Сменить пароль</button>
           <div class="auth-hint" id="cpHint"></div>
         </div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Диагностический журнал приложения. Пишется на устройстве (localStorage):
+       события сканера выгрузки, ответы нативного моста, ошибки JS. Открывается
+       из «Учётная запись» -> «Логи», чтобы водитель мог скопировать и прислать,
+       когда кнопка «не срабатывает и ничего не происходит». -->
+  <dialog class="modal" id="appLogModal">
+    <div class="postpone-card">
+      <div class="modal-head">
+        <h3>Логи приложения</h3>
+        <button class="icon-btn modal-close" id="appLogClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <p class="modal-note">Диагностический журнал этого устройства. Если кнопка «Сканировать выгрузку» не срабатывает, нажмите «Скопировать» и пришлите текст.</p>
+      <textarea readonly class="app-log-area" id="appLogArea" spellcheck="false" placeholder="Пока пусто. Откройте сканер повторно — события появятся здесь."></textarea>
+      <div class="route-confirm-actions" style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end;">
+        <button type="button" class="ctrl" id="appLogClear">Очистить</button>
+        <button type="button" class="ctrl ctrl-finish" id="appLogCopy">Скопировать</button>
       </div>
     </div>
   </dialog>

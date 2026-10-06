@@ -878,6 +878,7 @@
           lat: pos.coords.latitude,
           lon: pos.coords.longitude,
           routeId: rid,
+          ts: Date.now(), // реальное время устройства водителя (не сервера)
         }),
       }).catch(() => {});
     };
@@ -1455,7 +1456,8 @@
     settingsBtn: $("settingsBtn"), settingsModal: $("settingsModal"), toast: $("toast"), tabs: $("tabs"),
     userChip: $("userChip"), userName: $("userName"), userAvatar: $("userAvatar"),
     accountModal: $("accountModal"), accountClose: $("accountClose"),
-    accountLogout: $("accountLogout"), authScreen: $("authScreen"), authLoginBtn: $("authLoginBtn"), authHint: $("authHint"),
+    accountLogout: $("accountLogout"), accountLogBtn: $("accountLogBtn"), authScreen: $("authScreen"), authLoginBtn: $("authLoginBtn"), authHint: $("authHint"),
+    appLogModal: $("appLogModal"), appLogArea: $("appLogArea"), appLogClose: $("appLogClose"), appLogCopy: $("appLogCopy"), appLogClear: $("appLogClear"),
     acctName: $("acctName"), acctId: $("acctId"), acctIdKind: $("acctIdKind"), acctRole: $("acctRole"), acctAdmin: $("acctAdmin"), acctVersion: $("acctVersion"), acctReason: $("acctReason"),
     monthList: $("monthList"), calSalaryChip: $("calSalaryChip"),
     pageTimer: $("page-timer"), pageCalendar: $("page-calendar"), pageLive: $("page-live"), pageReport: $("page-report"), pageDrivers: $("page-drivers"),
@@ -1482,8 +1484,11 @@
     selfPickupChk: $("selfPickupChk"),
     routeClientSearch: $("routeClientSearch"), routeClientOptions: $("routeClientOptions"), routeClientSelected: $("routeClientSelected"),
     routeStepCount: $("routeStepCount"), routeSelectedCount: $("routeSelectedCount"), routeTotalPill: $("routeTotalPill"),
-    subtabContr: $("subtab-contr"), subtabRoute: $("subtab-route"), subtabRoutes: $("subtab-routes"), subtabReport: $("subtab-report"), subtabTracking: $("subtab-tracking"),
-    routesubContr: $("routesub-contr"), routesubRoute: $("routesub-route"), routesubRoutes: $("routesub-routes"), routesubReport: $("routesub-report"), routesubTracking: $("routesub-tracking"),
+    subtabContr: $("subtab-contr"), subtabRoute: $("subtab-route"), subtabRoutes: $("subtab-routes"), subtabReport: $("subtab-report"), subtabLocation: $("subtab-location"), subtabTracking: $("subtab-tracking"),
+    routesubContr: $("routesub-contr"), routesubRoute: $("routesub-route"), routesubRoutes: $("routesub-routes"), routesubReport: $("routesub-report"), routesubLocation: $("routesub-location"), routesubTracking: $("routesub-tracking"),
+    locationDriverSelect: $("locationDriverSelect"), locationDateFilter: $("locationDateFilter"), locationGoBtn: $("locationGoBtn"),
+    locationInterval: $("locationInterval"),
+    locationBody: $("locationBody"), locationTableWrap: $("locationTableWrap"), locationStub: $("locationStub"),
     driverMap: $("driverMap"), driverMapCount: $("driverMapCount"), driverMapHint: $("driverMapHint"), driverTrackDate: $("driverTrackDate"), driverTrackStatus: $("driverTrackStatus"),
     motionDateFilter: $("motionDateFilter"),
     motionDrivers: $("motionDrivers"), motionKm: $("motionKm"), motionMove: $("motionMove"), motionLunch: $("motionLunch"),
@@ -1604,6 +1609,77 @@
     el.toast.classList.add("show");
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => el.toast.classList.remove("show"), 2600);
+  }
+
+  // ------------- Диагностический журнал на устройстве -------------
+  // Пишет события сканера выгрузки, ответы нативного моста и ошибки JS в
+  // localStorage, чтобы водитель мог открыть «Учётная запись» -> «Логи» и
+  // посмотреть/скопировать, когда кнопка «Сканировать выгрузку» молчит.
+  // В APK (WebView) console-логи в Logcat видны только через adb, а этот буфер
+  // доступен прямо на устройстве.
+  const APP_LOG_KEY = "biotime_app_log";
+  const APP_LOG_LIMIT = 400;
+  function readAppLog() {
+    try {
+      const raw = localStorage.getItem(APP_LOG_KEY);
+      const a = raw ? JSON.parse(raw) : [];
+      return Array.isArray(a) ? a : [];
+    } catch { return []; }
+  }
+  function logApp(level, msg) {
+    let line;
+    try {
+      const t = new Date().toISOString().slice(11, 19);
+      line = "[" + t + "] " + String(level).toUpperCase() + " " + String(msg);
+    } catch {
+      line = String(msg);
+    }
+    try {
+      if (console && typeof console[level] === "function") console[level](msg);
+      else if (console && console.log) console.log(msg);
+    } catch { /* ignore */ }
+    try {
+      const a = readAppLog();
+      a.push(line);
+      if (a.length > APP_LOG_LIMIT) a.splice(0, a.length - APP_LOG_LIMIT);
+      localStorage.setItem(APP_LOG_KEY, JSON.stringify(a));
+    } catch { /* ignore */ }
+    return line;
+  }
+  function openAppLogModal() {
+    if (el.appLogArea) el.appLogArea.value = readAppLog().join("\n");
+    if (el.appLogModal) { try { el.appLogModal.showModal(); } catch { /* уже открыта */ } }
+  }
+  function closeAppLogModal() {
+    if (el.appLogModal && el.appLogModal.open) { try { el.appLogModal.close(); } catch { /* ignore */ } }
+  }
+  function copyAppLog() {
+    const txt = readAppLog().join("\n");
+    if (!txt) { toast("Логи пока пусты"); return; }
+    const done = () => toast("Логи скопированы");
+    const fail = () => {
+      // Фолбэк без Clipboard API (старый WebView): выделяем и говорим водителю.
+      if (el.appLogArea) { try { el.appLogArea.focus(); el.appLogArea.select(); } catch { /* ignore */ } }
+      toast("Выделите текст и скопируйте вручную");
+    };
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(txt).then(done).catch(fail);
+      } else {
+        const ta = document.createElement("textarea");
+        ta.value = txt;
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand("copy");
+        ta.remove();
+        ok ? done() : fail();
+      }
+    } catch { fail(); }
+  }
+  function clearAppLog() {
+    try { localStorage.removeItem(APP_LOG_KEY); } catch { /* ignore */ }
+    if (el.appLogArea) el.appLogArea.value = "";
+    toast("Логи очищены");
   }
 
   // ------------- Actions -------------
@@ -3084,6 +3160,7 @@
       { key: "route", btn: el.subtabRoute, panel: el.routesubRoute },
       { key: "routes", btn: el.subtabRoutes, panel: el.routesubRoutes },
       { key: "report", btn: el.subtabReport, panel: el.routesubReport },
+      { key: "location", btn: el.subtabLocation, panel: el.routesubLocation },
       { key: "tracking", btn: el.subtabTracking, panel: el.routesubTracking },
     ];
     for (const t of tabs) {
@@ -3101,6 +3178,85 @@
     if (name === "tracking") loadDriverMap();
     // Дашборд движения водителей грузим при каждом открытии «Отчёта».
     if (name === "report") loadMotionReport();
+    // Отчёт «Местоположение»: наполняем список водителей и грузим данные.
+    if (name === "location") {
+      populateLocationDrivers();
+      loadLocationReport();
+    }
+  }
+
+  // Наполняет селект «Водитель» в отчёте «Местоположение» (из state.staff).
+  function populateLocationDrivers() {
+    if (!el.locationDriverSelect) return;
+    const prev = el.locationDriverSelect.value;
+    // Только пользователи группы «Водители» (как в селекте водителя маршрута);
+    // остальные сотрудники не выводятся.
+    const driverGroup = (Array.isArray(state.groups) ? state.groups : [])
+      .find((g) => /водител/i.test(String(g.name || "")));
+    const ids = driverGroup && Array.isArray(driverGroup.memberIds) ? new Set(driverGroup.memberIds) : null;
+    const allStaff = Array.isArray(state.staff) ? state.staff : [];
+    const staff = ids ? allStaff.filter((s) => ids.has(String(s.id))) : allStaff;
+    const options = staff
+      .slice()
+      .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")))
+      .map((s) => `<option value="${escapeHtml(String(s.id))}">${escapeHtml(s.name || "—")}</option>`)
+      .join("");
+    el.locationDriverSelect.innerHTML = options || '<option value="">—</option>';
+    if (prev && [...el.locationDriverSelect.options].some((o) => o.value === prev)) {
+      el.locationDriverSelect.value = prev;
+    }
+    if (!el.locationDateFilter) return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(el.locationDateFilter.value || "")) {
+      el.locationDateFilter.value = dayKeyOf(Date.now());
+    }
+    // Восстанавливаем сохранённый интервал (по умолчанию 15 мин).
+    if (el.locationInterval) {
+      try {
+        const saved = localStorage.getItem("biotime_location_interval");
+        if (saved && [...el.locationInterval.options].some((o) => o.value === saved)) {
+          el.locationInterval.value = saved;
+        }
+      } catch { /* ignore */ }
+    }
+  }
+
+  // Отчёт «Местоположение»: где был водитель за календарный день, шаг 15 минут.
+  async function loadLocationReport() {
+    if (!el.locationBody || !el.locationDriverSelect) return;
+    if (el.locationStub) el.locationStub.style.display = "none";
+    const driverId = el.locationDriverSelect.value;
+    const date = el.locationDateFilter ? el.locationDateFilter.value : "";
+    if (!driverId || !/^\d{4}-\d{2}-\d{2}$/.test(date || "")) {
+      if (el.locationTableWrap) el.locationTableWrap.hidden = true;
+      if (el.locationStub) el.locationStub.style.display = "";
+      return;
+    }
+    const interval = el.locationInterval ? (Number(el.locationInterval.value) || 15) : 15;
+    let data = null;
+    try {
+      data = await api("/api/drivers/location-report?date=" + encodeURIComponent(date) +
+        "&driverId=" + encodeURIComponent(driverId) +
+        "&interval=" + encodeURIComponent(String(interval)));
+    } catch { data = null; }
+    const rows = (data && data.rows) || [];
+    const body = el.locationBody;
+    body.innerHTML = "";
+    if (el.locationStub) el.locationStub.style.display = rows.length ? "none" : "";
+    if (el.locationTableWrap) el.locationTableWrap.hidden = !rows.length;
+    if (!rows.length) return;
+    const frag = document.createDocumentFragment();
+    rows.forEach((r) => {
+      const tr = document.createElement("tr");
+      const coords = (r.lat != null && r.lon != null)
+        ? `${Number(r.lat).toFixed(5)}, ${Number(r.lon).toFixed(5)}`
+        : "—";
+      tr.innerHTML =
+        `<td>${escapeHtml(r.time || "—")}</td>` +
+        `<td>${r.address ? escapeHtml(r.address) : "—"}</td>` +
+        `<td>${escapeHtml(coords)}</td>`;
+      frag.appendChild(tr);
+    });
+    body.appendChild(frag);
   }
 
   // ---- Живая карта водителей (вкладка «Отчёт» маршрутизации) ----
@@ -4054,13 +4210,13 @@
     // развернул карточку (expandedShipmentCards), она ДОЛЖНА остаться раскрытой
     // и при последующих перерисовках (автообновление раз в N сек) — иначе карточка
     // «сама схлопывается» через пару секунд. Активный маршрут всегда раскрыт.
-    const dExpanded = !dActive && expandedShipmentCards.has(String(d.id));
+    const dExpanded = !dActive && expandedShipmentCards.has(String(d.routeId));
     const dCollapsed = dActive ? "" : (dExpanded ? "" : " route-collapsed");
     return `
-      <div class="delivery-card${dCollapsed}">
+      <div class="delivery-card${dCollapsed}" data-route-id="${escapeHtml(String(d.routeId))}">
         <div class="delivery-card-head">
           <div class="delivery-driver">
-            <span class="delivery-driver-name">${escapeHtml(d.driverName || "Водитель")}</span>
+            <span class="delivery-driver-name">${escapeHtml(d.driverId ? (d.driverName || "Водитель") : "Маршрут: Самовывоз")}</span>
             <span class="delivery-driver-route">${escapeHtml(slot)} · ${escapeHtml(dateStr)} ${routePlaces}</span>
           </div>
           ${statusBadge}
@@ -4125,7 +4281,10 @@
 
   function renderMyRoutesList(routes) {
     const filter = el.myroutesDateFilter ? el.myroutesDateFilter.value : "";
-    const list = filter ? routes.filter((r) => String(r.date) === filter) : routes;
+    // Маршруты самовывоза (без назначенного водителя) в «Моих маршрутах» не показываем —
+    // водителю видны только маршруты, назначенные на него.
+    const mine = (Array.isArray(routes) ? routes : []).filter((r) => r && r.driverId);
+    const list = filter ? mine.filter((r) => String(r.date) === filter) : mine;
     if (el.myroutesCount) {
       el.myroutesCount.textContent = list.length
         ? `${list.length} ${plural(list.length, "маршрут", "маршрута", "маршрутов")}`
@@ -4284,6 +4443,10 @@
   // loadMyRoutes каждые несколько секунд, и без него раскрытая карточка маршрута
   // при перерисовке снова сворачивалась бы, из-за чего маршрут «сразу исчезал».
   const expandedMyRouteCards = new Set(loadCollapsedSet("biotime_expanded_myroutes"));
+  // Развёрнутые водителем карточки маршрутов в разделе «Движение водителей»
+  // (drv-route-card): раздел перерисовывается автообновлением, и без этого набора
+  // вручную раскрытая карточка снова сворачивалась бы при каждом обновлении.
+  const expandedDriverRouteCards = new Set();
   function applyShipmentCollapseUI() {
     const showActive = shipmentSubtab === "active";
     const showDone = shipmentSubtab === "done";
@@ -5170,14 +5333,18 @@
     // Без активного бокса деталь НЕ засчитываем: оператор должен сначала отсканировать
     // бокс (голосом «Бокс выбран»), затем деталь. Если бокс не выбран или «слетел» —
     // жёстко не считаем сканирование и просим пересканировать бокс.
-    if (!waybillBox) {
+    // Исключение: деталь УЖЕ была привязана к боксу ранней привязкой (it0.box задан,
+    // например, предыдущим сканом/вводом количества) — тогда активный бокс как бы
+    // «восстанавливается» из строки, и скан нельзя терять: деталь не должна
+    // «отвязываться» из-за случайного обнуления waybillBox (перерисовка/автообновление).
+    if (!waybillBox && !(it0 && it0.box)) {
       setWaybillStatus("Не выбран бокс — отсканируйте бокс сначала");
       playScanFeedback(false, "Не выбран бокс");
       logBarcodeScan("detail", val, false, "не выбран бокс");
       focusWaybillScan();
       return;
     }
-    const activeBox = waybillBox || "";
+    const activeBox = waybillBox || (it0 && it0.box) || "";
     // Количественная деталь (осталось больше 1 единицы): голосом просим «Введите
     // количество» и открываем быструю модалку ввода. Если кол-во передано явно
     // (кнопка «Собрать», повторный ввод) — спрашивать не нужно.
@@ -5927,20 +6094,24 @@
     }
     try {
       // Новая сигнатура: scanQR(callback, action, done, need, client)
-      window.AndroidBridge.scanQR(
+      logApp("info", "invokeNativeScan call " + action + " done=" + done + " need=" + need + " client=" + client);
+      const res = window.AndroidBridge.scanQR(
         callback,
         action,
         Number(done) || 0,
         Number(need) || 0,
         String(client || "")
       );
+      logApp("info", "invokeNativeScan returned " + String(res));
       return true;
     } catch (e) {
+      logApp("error", "invokeNativeScan new-signature failed: " + (e && e.message ? e.message : String(e)));
       // Старый мост не принимает 5 аргументов — пробуем усечённую сигнатуру.
       try {
         window.AndroidBridge.scanQR(callback, action);
         return true;
       } catch (_) {
+        logApp("error", "invokeNativeScan legacy failed too");
         return false;
       }
     }
@@ -6586,27 +6757,50 @@
   let driverUnloadClientIdx = null;
 
   function startDriverUnloadScan(routeId, clientIdx) {
-    driverUnloadRouteId = routeId;
-    driverUnloadClientIdx = Number(clientIdx) || 0;
-    if (window.AndroidBridge && typeof window.AndroidBridge.scanQR === "function") {
-      if (typeof window.driverUnloadCallback !== "function") window.driverUnloadCallback = driverUnloadCallback;
-      const cur = findDriverUnloadClient();
-      const d = cur ? Number(cur.unloadDone) || 0 : 0;
-      const n = cur ? Number(cur.unloadTotal) || 0 : 0;
-      const cl = cur ? (cur.client || "—") : "—";
-      // Результат проверяем: если нативный скан НЕ открылся (мост есть, но scanQR
-      // бросил исключение / камера не стартовала), не молчим — открываем ручную
-      // модалку ввода кода, чтобы кнопка всегда давала результат водителю.
-      const opened = invokeNativeScan("driverUnloadCallback", "unload", d, n, cl);
-      if (opened) return;
+    try {
+      driverUnloadRouteId = routeId;
+      driverUnloadClientIdx = Number(clientIdx) || 0;
+      logApp("info", "startDriverUnloadScan route=" + String(routeId) + " idx=" + String(clientIdx));
+      if (window.AndroidBridge && typeof window.AndroidBridge.scanQR === "function") {
+        if (typeof window.driverUnloadCallback !== "function") window.driverUnloadCallback = driverUnloadCallback;
+        const cur = findDriverUnloadClient();
+        const d = cur ? Number(cur.unloadDone) || 0 : 0;
+        const n = cur ? Number(cur.unloadTotal) || 0 : 0;
+        const cl = cur ? (cur.client || "—") : "—";
+        // Точек совсем нет (need=0): нативная камера открывается и мгновенно
+        // закрывается (счётчик 0 из 0), что со стороны выглядит как «кнопка
+        // нажимается, но ничего не происходит». Не открываем камеру впустую —
+        // явно сообщаем водителю и сразу открываем ручной ввод кода.
+        if ((Number(n) || 0) === 0) {
+          logApp("info", "Нет мест для выгрузки (need=0) — открываем ручной ввод");
+          try { setDriverManualScan(routeId, driverUnloadClientIdx); } catch (e2) {
+            logApp("error", "setDriverManualScan error: " + (e2 && e2.message ? e2.message : String(e2)));
+          }
+          try { toast("Мест для выгрузки нет (0). Если боксы есть — введите код вручную"); } catch (_) { /* ignore */ }
+          return;
+        }
+        // Результат проверяем: если нативный скан НЕ открылся (мост есть, но scanQR
+        // бросил исключение / камера не стартовала), не молчим — открываем ручную
+        // модалку ввода кода, чтобы кнопка всегда давала результат водителю.
+        const opened = invokeNativeScan("driverUnloadCallback", "unload", d, n, cl);
+        logApp("info", "invokeNativeScan opened=" + String(opened) + " done=" + d + " need=" + n);
+        if (opened) return;
+        logApp("info", "native scan не открылся — открываем ручную модалку");
+        openDriverScanModal();
+        return;
+      }
+      // Fallback без камеры: ручной ввод кода этикетки. Используем НЕБЛОКИРУЮЩУЮ
+      // модалку вместо нативного prompt(): синхронный prompt() в Android WebView
+      // (без обработчика WebChromeClient) вешает UI — кнопки перестают нажиматься
+      // до перезапуска приложения «на каждой точке».
       openDriverScanModal();
-      return;
+    } catch (err) {
+      logApp("error", "startDriverUnloadScan error: " + (err && err.message ? err.message : String(err)));
+      // Никогда не молчим: при любой ошибке показываем водителю модалку ручного
+      // ввода, чтобы кнопка всегда давала результат (иначе «кликается, но ничего»).
+      try { openDriverScanModal(); } catch (_) { /* даже это не вышло — тост ниже */ }
+      try { toast("Не удалось открыть сканер: " + (err && err.message ? err.message : "ошибка")); } catch (_) { /* ignore */ }
     }
-    // Fallback без камеры: ручной ввод кода этикетки. Используем НЕБЛОКИРУЮЩУЮ
-    // модалку вместо нативного prompt(): синхронный prompt() в Android WebView
-    // (без обработчика WebChromeClient) вешает UI — кнопки перестают нажиматься
-    // до перезапуска приложения «на каждой точке».
-    openDriverScanModal();
   }
 
   function openDriverScanModal() {
@@ -6945,7 +7139,13 @@
         // «Сканировать выгрузку» активна и подсвечена, ПОКА не всё выгружено.
         // Когда все места отсканированы (unReady) либо выгрузка уже завершена
         // (unFinished) — кнопка сканирования гаснет, активируется «Завершить выгрузку».
-        const scanDisabled = unReady || unFinished;
+        // «Сканировать выгрузку» активна, пока выгрузка НЕ завершена водителем
+        // (unFinished). Раньше кнопка гасла и от unReady, а unReady=true при
+        // unloadTotal===0 (склад не погрузил боксы / механические боксы без
+        // этикеток) — из-за этого водитель на телефоне не мог открыть сканер
+        // («кнопка нажимается, ничего не происходит»). Теперь сканер доступен
+        // всегда, пока водитель сам не нажал «Завершить выгрузку».
+        const scanDisabled = unFinished;
         const scanHint = unReady
           ? "Все места уже выгружены — сканирование не требуется"
           : "";
@@ -8282,8 +8482,11 @@
       const collapseBtn = routeActive
         ? `<button type="button" class="drv-ico-btn route-collapse is-locked" disabled title="Активный маршрут нельзя свернуть">▾</button>`
         : `<button type="button" class="drv-ico-btn route-collapse" data-route-collapse title="Свернуть/развернуть">▸</button>`;
-      // По умолчанию маршруты показываются свёрнутыми (активные — раскрытыми).
-      const drvCollapsed = routeActive ? "" : " route-collapsed";
+      // По умолчанию маршруты показываются свёрнутыми (активные — раскрытыми);
+      // вручную раскрытые пользователем (expandedDriverRouteCards) остаются раскрытыми
+      // и после автообновления раздела (иначе карточка «разворачивается и сворачивается»).
+      const drvCollapsedNow = routeActive ? false : !expandedDriverRouteCards.has(String(r.id));
+      const drvCollapsed = drvCollapsedNow ? " route-collapsed" : "";
       // Кнопки управления маршрутом.
       //  • Завершённый (done) — удаляется только по коду из «Параметры»:
       //    рисуем замок, по клику открывается ввод кода. Разблокировке done не
@@ -8326,7 +8529,7 @@
 </button>`;
       }
       return `
-        <div class="drv-route-card${drvCollapsed}">
+        <div class="drv-route-card${drvCollapsed}" data-route-id="${escapeHtml(String(r.id))}">
           <div class="drv-route-card-head">
             <div class="drv-route-card-meta">
               <span class="drv-route-name" title="Название маршрута">${escapeHtml(r.routeName || "Маршрут")}</span>
@@ -8343,7 +8546,7 @@
             ${collapseBtn}
             ${editDelBtns}
           </div>
-          <div class="route-collapsible"${routeActive ? "" : " hidden"}>
+          <div class="route-collapsible"${drvCollapsedNow ? " hidden" : ""}>
             <ol class="drv-stops">${clientsHtml}</ol>
           </div>
         </div>
@@ -8949,7 +9152,11 @@
     const curYM = todayKey.slice(0, 7);
     byMonth.forEach((keys, m) => {
       const mf = document.createElement("div");
-      const openMonth = m === curYM; // текущий месяц раскрыт, прошлые свёрнуты
+      const monthKey = "month:" + m;
+      // Текущий месяц по умолчанию раскрыт, прошлые свёрнуты. Ручное сворачивание
+      // месяца сохраняем в state.collapsed (как у дней), чтобы автообновление
+      // списка не «разворачивало» месяц обратно — иначе его невозможно свернуть.
+      const openMonth = state.collapsed.has(monthKey) ? false : m === curYM;
       mf.className = "month-folder" + (openMonth ? " open" : "");
       const mHead = document.createElement("div");
       mHead.className = "month-folder-head";
@@ -8998,7 +9205,13 @@
         if (open) buildTodayRows(list, key, canEdit);
         mBody.appendChild(folder);
       });
-      mHead.addEventListener("click", () => { mf.classList.toggle("open"); });
+      mHead.addEventListener("click", () => {
+        const willOpen = !mf.classList.contains("open");
+        mf.classList.toggle("open", willOpen);
+        if (willOpen) state.collapsed.delete(monthKey);
+        else state.collapsed.add(monthKey);
+        saveCollapsed(state.collapsed);
+      });
       mf.appendChild(mHead);
       mf.appendChild(mBody);
       frag.appendChild(mf);
@@ -10361,6 +10574,7 @@
   bindSubtab(el.subtabRoute, "route");
   bindSubtab(el.subtabRoutes, "routes");
   bindSubtab(el.subtabReport, "report");
+  bindSubtab(el.subtabLocation, "location");
   bindSubtab(el.subtabTracking, "tracking");
   // Подвкладки раздела «Отгрузка»: «В работе» и «Завершённые отгрузки».
   const setShipmentSubtab = (tab) => {
@@ -10423,6 +10637,9 @@
       } else if (card.classList.contains("delivery-card")) {
         if (collapsedNow) expandedShipmentCards.delete(idStr);
         else expandedShipmentCards.add(idStr);
+      } else if (card.classList.contains("drv-route-card")) {
+        if (collapsedNow) expandedDriverRouteCards.delete(idStr);
+        else expandedDriverRouteCards.add(idStr);
       }
     }
   });
@@ -10688,6 +10905,23 @@
   // периодический таймер в switchRouteSubtab, см. sectionAutoRefresh).
   if (el.motionDateFilter) {
     el.motionDateFilter.addEventListener("change", loadMotionReport);
+  }
+  // Отчёт «Местоположение»: кнопка «Показать» и смена даты перезагружают данные.
+  if (el.locationGoBtn) {
+    el.locationGoBtn.addEventListener("click", () => { populateLocationDrivers(); loadLocationReport(); });
+  }
+  if (el.locationDateFilter) {
+    el.locationDateFilter.addEventListener("change", loadLocationReport);
+  }
+  if (el.locationDriverSelect) {
+    el.locationDriverSelect.addEventListener("change", loadLocationReport);
+  }
+  // Интервал сетки: сохраняем автоматически и сразу перезагружаем отчёт.
+  if (el.locationInterval) {
+    el.locationInterval.addEventListener("change", () => {
+      try { localStorage.setItem("biotime_location_interval", String(el.locationInterval.value)); } catch { /* ignore */ }
+      loadLocationReport();
+    });
   }
   // Доставка: смена даты перезагружает данные (автообновление — периодический
   // таймер в switchTab, см. sectionAutoRefresh).
@@ -11606,6 +11840,9 @@
     el.acctRole.textContent = roleLabel;
     el.acctAdmin.textContent = d.isAdmin ? "Да" : "Нет";
     el.acctAdmin.style.color = d.isAdmin ? "var(--ok, #16a34a)" : "var(--danger, #dc2626)";
+    // Технические данные (IP-адрес, адрес приложения) показываем только админу.
+    if (el.acctIpRow) el.acctIpRow.hidden = !d.isAdmin;
+    if (el.acctHostRow) el.acctHostRow.hidden = !d.isAdmin;
     if (el.acctVersion) {
       // Показываем актуальную версию приложения (единый источник — version.json,
       // отдаёт /api/app/update-info). Если ещё не получена — дозапрашиваем.
@@ -11620,6 +11857,18 @@
           })
           .catch(() => { /* нет сети — версию не показываем */ });
       }
+    }
+    // Реальный публичный IP сервера. Сервер определяет его через внешний echo-сервис
+    // (/api/ip); пока IP не получен (или он недоступен за шлюзом), показываем адрес
+    // приложения — host, под которым пользователь открыл его. Так поле никогда не
+    // остаётся пустым/прочерком, у пользователя всегда есть полезное значение.
+    if (el.acctIp) {
+      el.acctIp.textContent = window.location.host || "—";
+      api("/api/ip")
+        .then((r) => {
+          if (el.acctIp && r && r.ip) el.acctIp.textContent = String(r.ip);
+        })
+        .catch(() => { /* IP недоступен — остаётся адрес приложения */ });
     }
     if (d.reason) {
       el.acctReason.hidden = false;
@@ -11697,6 +11946,32 @@
       if (!unfrozen) { try { location.reload(); } catch { /* ignore */ } }
     });
   }
+  if (el.accountLogBtn) {
+    el.accountLogBtn.addEventListener("click", openAppLogModal);
+  }
+  if (el.appLogClose) {
+    el.appLogClose.addEventListener("click", closeAppLogModal);
+  }
+  if (el.appLogModal) {
+    el.appLogModal.addEventListener("cancel", (e) => { e.preventDefault(); closeAppLogModal(); });
+  }
+  if (el.appLogCopy) {
+    el.appLogCopy.addEventListener("click", copyAppLog);
+  }
+  if (el.appLogClear) {
+    el.appLogClear.addEventListener("click", clearAppLog);
+  }
+  // Любые непойманные ошибки/отклонённые промисы тоже пишем в журнал — тогда
+  // «кнопка молчит» всегда оставляет след на устройстве.
+  try {
+    window.addEventListener("error", (ev) => {
+      logApp("error", "onerror: " + (ev && ev.message ? ev.message : String(ev && ev.error || "?")));
+    });
+    window.addEventListener("unhandledrejection", (ev) => {
+      const r = ev && ev.reason;
+      logApp("error", "unhandledrejection: " + (r && r.message ? r.message : String(r)));
+    });
+  } catch { /* ignore */ }
   if (el.authLoginBtn) {
     // «Войти» — возвращаемся в рабочее состояние. Шлюз сам подтвердит сессию,
     // приложение перечитает данные с сервера (обычная перезагрузка страницы).
@@ -12340,6 +12615,9 @@
       if (!el.pageScanlog.hidden) loadScanLog();
       // «Движение водителей» — подвкладка «Отчёт» раздела «Маршрутизация».
       if (!el.pageDrivers.hidden && el.routesubReport && !el.routesubReport.hidden) loadMotionReport();
+      // «Местоположение водителя» — подвкладка маршрутизации: автообновление,
+      // чтобы новые точки GPS подтягивались без клика «Показать»/F5.
+      if (!el.pageDrivers.hidden && el.routesubLocation && !el.routesubLocation.hidden) loadLocationReport();
     }, 10000);
 
     // Live ticking counter for the "Таймер" page. The worked/overtime figures are

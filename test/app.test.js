@@ -39,6 +39,22 @@ test("GET /api/maps/config админ -> ключ карты", async () => {
   assert.strictEqual(res._json.obj.yandexKey, "KEY");
 });
 
+test("GET /api/ip отдаёт реальный IP сервера", async () => {
+  const h = make({ resolvePublicIp: async () => "203.0.113.7" });
+  const res = {};
+  await h({ headers: {} }, res, "/api/ip", "GET", false);
+  assert.strictEqual(res._json.status, 200);
+  assert.strictEqual(res._json.obj.ip, "203.0.113.7");
+});
+
+test("GET /api/ip при недоступном резолвере -> ip:null (не падает)", async () => {
+  const h = make({ resolvePublicIp: async () => { throw new Error("net"); } });
+  const res = {};
+  await h({ headers: {} }, res, "/api/ip", "GET", false);
+  assert.strictEqual(res._json.status, 200);
+  assert.strictEqual(res._json.obj.ip, null);
+});
+
 test("POST /api/app/update c неверным токеном -> 401", async () => {
   const h = make();
   const res = {};

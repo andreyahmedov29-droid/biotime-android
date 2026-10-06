@@ -19,11 +19,21 @@ module.exports = function createAppHandler({
   readVersionSource,
   fetchRemoteApkVersion,
   yandexMapsKey,
+  resolvePublicIp,
 } = {}) {
   return async function handleAppRoutes(req, res, urlPath, method, admin) {
     if (urlPath === "/api/maps/config" && method === "GET") {
       if (!admin) return sendJson(res, 403, { error: "forbidden" });
       return sendJson(res, 200, { ok: true, yandexKey: yandexMapsKey });
+    }
+
+    // Реальный публичный IP сервера (определяет сервер; снаружи в поле /api/ip).
+    if (urlPath === "/api/ip" && method === "GET") {
+      let ip = null;
+      try {
+        ip = await (resolvePublicIp ? resolvePublicIp() : Promise.resolve(null));
+      } catch { ip = null; }
+      return sendJson(res, 200, { ok: true, ip: ip || null });
     }
 
     if (urlPath === "/api/app/update" && method === "POST") {

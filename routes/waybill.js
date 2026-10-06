@@ -79,14 +79,19 @@ module.exports = function createWaybillHandler({
       if (action === "scan") {
         const art = String(body.art || "").trim();
         if (!art) return sendJson(res, 422, { ok: false, error: "Пустой артикул" });
-        const box = String(body.box || "").trim();
+        // Активный бокс из запроса. Если он пуст, НО у уже найденной строки
+        // (и в filled ветке) деталь ранее была привязана к боксу — привязку
+        // сохраняем: случайный пустой `box` (слетевший активный бокс на ТСД /
+        // компьютерном сканере) не должен «отвязывать» собранную деталь.
+        const sentBox = String(body.box || "").trim();
         const item = wb.items.find((it) =>
           artNorm(it.art) === artNorm(art) && (Number(it.scanned) || 0) < (Number(it.qty) || 0)
         );
         if (!item) {
           const existing = wb.items.find((it) => artNorm(it.art) === artNorm(art));
-          if (existing && box) {
-            existing.box = box;
+          if (existing) {
+            const box = sentBox || existing.box || "";
+            if (box) existing.box = box;
             route.at = Date.now();
             await persistDb();
             return sendJson(res, 200, {
@@ -103,6 +108,7 @@ module.exports = function createWaybillHandler({
         let qty = Math.max(1, Number(body.qty) || 1);
         if (qty > left) qty = left;
         item.scanned += qty;
+        const box = sentBox || item.box || "";
         if (box) item.box = box;
         item.missing = false;
         item.missingQty = 0;

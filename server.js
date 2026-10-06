@@ -1285,6 +1285,28 @@ function enrichUnloadProgress(route, labels) {
 // «лишние» места).
 // (релink этикеток вынесен в routes/helpers.js — см. relinkRouteLabels там)
 const relinkRouteLabels = require("./routes/helpers").relinkRouteLabels;
+// Перепривязка накладных (сборка + «не найдено») при reorder: накладная привязана
+// к позиции маршрута, поэтому при перестановке клиентов её надо перенести на
+// новый индекс своего клиента (по id), иначе сборка одного клиента «переезжает»
+// к другому (позиция из сборки «Фроза» попадает в «Система»).
+function relinkRouteWaybills(oldClients, newClients, waybills) {
+  if (!waybills || typeof waybills !== "object") return waybills;
+  if (!Array.isArray(oldClients) || !Array.isArray(newClients)) return waybills;
+  const newIdxById = new Map(newClients.map((c, i) => [String(c && c.id), i]));
+  const out = {};
+  oldClients.forEach((oldC, oldIdx) => {
+    if (!oldC) return;
+    const wb = waybills[oldIdx];
+    if (wb == null) return;
+    const newIdx = newIdxById.get(String(oldC.id));
+    if (newIdx != null) out[newIdx] = wb;
+  });
+  for (const key of Object.keys(waybills)) {
+    const i = Number(key);
+    if (Number.isInteger(i) && out[i] === undefined) out[i] = waybills[key];
+  }
+  return out;
+}
 
 // Протяжённость маршрута в км по последовательности остановок:
 // база → точки маршрута → возврат на базу (как в отчёте движения).
@@ -1431,6 +1453,41 @@ function geocodeAddress(address) {
             }
           }
           resolve(null);
+        } catch { resolve(null); }
+      });
+    });
+    req.on("error", () => resolve(null));
+    req.setTimeout(15000, () => { req.destroy(); resolve(null); });
+  });
+}
+
+// Обратное геокодирование координат [lat, lon] → текстовый адрес. Тот же ключ
+// YANDEX_GEO_KEY, что и прямое геокодирование; кэшируем по координатам, чтобы
+// 15-минутный отчёт «Местоположение» не долбил API десятками одинаковых запросов.
+const reverseGeocodeCache = new Map();
+function reverseGeocode(lat, lon) {
+  return new Promise((resolve) => {
+    if (!YANDEX_GEO_KEY || !Number.isFinite(lat) || !Number.isFinite(lon)) return resolve(null);
+    const ck = lat.toFixed(5) + "," + lon.toFixed(5);
+    if (reverseGeocodeCache.has(ck)) return resolve(reverseGeocodeCache.get(ck));
+    const url = YANDEX_GEO_URL + "?format=json&results=1&lang=ru_RU&apikey=" +
+      encodeURIComponent(YANDEX_GEO_KEY) + "&geocode=" + encodeURIComponent(lon + "," + lat);
+    const req = https.get(url, { headers: GEO_HEADERS }, (res) => {
+      let data = "";
+      res.on("data", (c) => { data += c; });
+      res.on("end", () => {
+        try {
+          const j = JSON.parse(data);
+          const fm = j && j.response && j.response.GeoObjectCollection &&
+            j.response.GeoObjectCollection.featureMember;
+          let addr = null;
+          if (Array.isArray(fm) && fm[0] && fm[0].GeoObject) {
+            const md = fm[0].GeoObject.metaDataProperty &&
+              fm[0].GeoObject.metaDataProperty.GeocoderMetaData;
+            addr = (md && md.text) || fm[0].GeoObject.name || null;
+          }
+          if (addr) reverseGeocodeCache.set(ck, addr);
+          return resolve(addr);
         } catch { resolve(null); }
       });
     });
@@ -3120,6 +3177,52 @@ const handleAuthRoutes = require("./routes/auth")({
   AUTH_COOKIE,
 });
 
+// ---- Реальный публичный IP, под которым приложение выходит в интернет ----
+// Браузер сам такие данные не видит, поэтому их определяет сервер: запрашиваем
+// внешний «echo-IP» сервис, кэшируем на 10 минут и по возможности пробуем
+// несколько источников. Если ни один не ответил — возвращаем null (клиент
+// покажет запасной вариант — адрес приложения). Чистых прав это не трогает.
+let publicIpCache = { ip: null, ts: 0 };
+const PUBLIC_IP_TTL_MS = 10 * 60 * 1000;
+async function resolvePublicIp() {
+  const now = Date.now();
+  if (publicIpCache.ip && now - publicIpCache.ts < PUBLIC_IP_TTL_MS) {
+    return publicIpCache.ip;
+  }
+  const sources = [
+    "https://api.ipify.org?format=json",
+    "https://ifconfig.me/ip",
+  ];
+  for (const src of sources) {
+    try {
+      const ctl = new AbortController();
+      const to = setTimeout(() => ctl.abort(), 3500);
+      let res;
+      try {
+        res = await fetch(src, { signal: ctl.signal });
+      } finally {
+        clearTimeout(to);
+      }
+      if (!res || !res.ok) continue;
+      const text = await res.text();
+      let ip = null;
+      try {
+        const j = JSON.parse(text);
+        if (j && typeof j === "object" && j.ip) ip = String(j.ip);
+      } catch { /* не JSON */ }
+      if (!ip) {
+        const m = String(text).trim();
+        if (/^\d{1,3}(\.\d{1,3}){3}$/.test(m)) ip = m;
+      }
+      if (ip) {
+        publicIpCache = { ip, ts: now };
+        return ip;
+      }
+    } catch { /* пробуем следующий источник */ }
+  }
+  return null;
+}
+
 // ---- Версия/состояние приложения и конфиг карты ----
 // Реализация вынесена в routes/app.js (там же единственная константа WEB_BUILD).
 const handleAppRoutes = require("./routes/app")({
@@ -3131,6 +3234,7 @@ const handleAppRoutes = require("./routes/app")({
   readVersionSource,
   fetchRemoteApkVersion,
   yandexMapsKey: YANDEX_MAPS_KEY,
+  resolvePublicIp,
 });
 
 // ---- Управление группами (админ) ----
@@ -3212,6 +3316,7 @@ const handleLocationRoutes = require("./routes/location")({
   motionDayKey,
   tracksByDay,
   scheduleTracksSave,
+  reverseGeocode,
 });
 // GPS-следы водителей (/api/drivers/tracks и /tracks/snapped).
 const handleTracksRoutes = require("./routes/tracks")({
@@ -3326,6 +3431,7 @@ const handleRouteActionRoutes = require("./routes/route-action")({
   allowIncompleteFinish,
   unloadCounts,
   relinkRouteLabels,
+  relinkRouteWaybills,
 });
 // Сотрудники: создание/оклады/премии/удаление/блокировка (/api/staff*).
 const handleStaffRoutes = require("./routes/staff")({
