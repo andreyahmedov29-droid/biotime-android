@@ -12,10 +12,20 @@ module.exports = function createWaybillHandler({
   isAdmin,
   isModerator,
 } = {}) {
+  // Сокращённая форма партстикера: убираем ведущие нули числовой части
+  // (000000000020217/4 → 20217/4). Используется и для сравнения при скане,
+  // чтобы полный и сокращённый код совпадали.
+  const shortPs = (s) => {
+    const p = String(s == null ? "" : s);
+    const i = p.indexOf("/");
+    const head = (i > 0 ? p.slice(0, i) : p).replace(/^0+/, "");
+    return (i > 0 ? head + p.slice(i) : head);
+  };
+  const psEq = (a, b) => shortPs(a) === shortPs(b);
   return async function handleWaybillRoutes(req, res, urlPath, method, user, admin) {
     const db = getDb ? getDb() : {};
 
-    let wm = urlPath.match(/^\/api\/routes\/([^/]+)\/waybill(\/(scan|missing|bind|finish|qtyrequest|qtyresolve))?$/) || null;
+    let wm = urlPath.match(/^\/api\/routes\/([^/]+)\/waybill(\/(scan|missing|bind|finish|qtyrequest|qtyresolve|delete-unscanned))?$/) || null;
     // Разбор xlsx для формы создания маршрута (диспетчер): возвращает позиции без
     // сохранения — их отдаст сам POST создания маршрута.
     if (urlPath === "/api/waybill/parse" && method === "POST") {
@@ -76,6 +86,29 @@ module.exports = function createWaybillHandler({
       if (!route.waybills) route.waybills = {};
       route.waybills[clientIndex] = route.waybills[clientIndex] || { items: [] };
       const wb = route.waybills[clientIndex];
+      if (action === "delete-unscanned") {
+        // «Удалить не собранные»: вычищаем из накладной строки, по которым собрано
+        // 0 шт (дубли-хвосты, «не найдено» и т.п.), чтобы сборка была актуальной.
+        // Только администратор.
+        if (!admin && !(isAdmin && isAdmin(db, user))) return sendJson(res, 403, { ok: false, error: "forbidden" });
+        const arr = Array.isArray(wb.items) ? wb.items : [];
+        const removedItems = arr.filter((it) => (Number(it && it.scanned) || 0) === 0);
+        const before = arr.length;
+        wb.items = arr.filter((it) => (Number(it && it.scanned) || 0) > 0);
+        const removed = before - wb.items.length;
+        // Чистим историю «не найдено» (scanLog) для удалённых артикулов, иначе записи
+        // остались бы в «Проблемах склада» после удаления строки из накладной.
+        if (removedItems.length && Array.isArray(db.scanLog)) {
+          const removedArts = removedItems.map((it) => String((it && it.art) || "").trim()).filter(Boolean);
+          if (removedArts.length) {
+            db.scanLog = db.scanLog.filter((e) => !(e && e.action === "waybill" && e.missing
+              && removedArts.some((a) => a && artNorm(a) === artNorm(String(e.code || "")))));
+          }
+        }
+        route.at = Date.now();
+        await persistDb();
+        return sendJson(res, 200, { ok: true, removed, total: wb.items.length });
+      }
       if (action === "scan") {
         const art = String(body.art || "").trim();
         if (!art) return sendJson(res, 422, { ok: false, error: "Пустой артикул" });
@@ -83,15 +116,31 @@ module.exports = function createWaybillHandler({
         // (и в filled ветке) деталь ранее была привязана к боксу — привязку
         // сохраняем: случайный пустой `box` (слетевший активный бокс на ТСД /
         // компьютерном сканере) не должен «отвязывать» собранную деталь.
-        const sentBox = String(body.box || "").trim();
-        const item = wb.items.find((it) =>
-          artNorm(it.art) === artNorm(art) && (Number(it.scanned) || 0) < (Number(it.qty) || 0)
+      const sentBox = String(body.box || "").trim();
+        const artN = artNorm(art);
+        // Строка ищется по артикулу ИЛИ по партстикеру (id_partstiker).
+        let item = wb.items.find((it) =>
+          artNorm(it.art) === artN && (Number(it.scanned) || 0) < (Number(it.qty) || 0)
         );
+        const partMatch = !!item ? psEq(item.partsticker, art) : false;
+        if (!item && artN) {
+          item = wb.items.find((it) =>
+            it.partsticker && psEq(it.partsticker, art)
+              && (Number(it.scanned) || 0) < (Number(it.qty) || 0)
+          );
+        }
         if (!item) {
           const existing = wb.items.find((it) => artNorm(it.art) === artNorm(art));
           if (existing) {
             const box = sentBox || existing.box || "";
-            if (box) existing.box = box;
+            if (box) {
+              existing.box = box;
+              // Размещение в бокс = деталь найдена: снимаем «не найдено», иначе
+              // деталь висит и в боксе, и в пометке/отчёте «Проблемы склада».
+              existing.missing = false;
+              existing.missingQty = 0;
+            }
+            logWaybillScan(route, clientIndex, existing, true, Object.assign({}, body, { box }), user);
             route.at = Date.now();
             await persistDb();
             return sendJson(res, 200, {
@@ -105,7 +154,10 @@ module.exports = function createWaybillHandler({
         }
         const left = item.qty - item.scanned;
         if (left <= 0) return sendJson(res, 409, { ok: false, error: "Этот артикул уже собран полностью" });
-        let qty = Math.max(1, Number(body.qty) || 1);
+        // Скан партстикера: если количество не передано явно — берём «зашитое»
+        // в партстикер (partQty) и засчитываем сразу.
+        const viaPart = !!item && !!item.partsticker && psEq(item.partsticker, art);
+        let qty = Math.max(1, Number(body.qty) || (viaPart ? (Number(item.partQty) || 1) : 1));
         if (qty > left) qty = left;
         item.scanned += qty;
         const box = sentBox || item.box || "";
@@ -130,6 +182,9 @@ module.exports = function createWaybillHandler({
         const item = wb.items.find((it) => artNorm(it.art) === artNorm(art));
         if (!item) return sendJson(res, 404, { ok: false, error: "Артикул не найден в накладной" });
         item.box = box;
+        // Размещение в бокс = деталь найдена: снимаем «не найдено».
+        item.missing = false;
+        item.missingQty = 0;
         route.at = Date.now();
         await persistDb();
         return sendJson(res, 200, {
@@ -202,10 +257,16 @@ module.exports = function createWaybillHandler({
       if (action === "qtyrequest") {
         const art = String(body.art || "").trim();
         const items = (Array.isArray(wb.items) ? wb.items : []);
-        const it = items.find((x) => artNorm(x.art) === artNorm(art) && (Number(x.scanned) || 0) < (Number(x.qty) || 0) && !x.missing);
+        const it = items.find((x) =>
+          ((x.partsticker && psEq(x.partsticker, art)) || artNorm(x.art) === artNorm(art))
+          && (Number(x.scanned) || 0) < (Number(x.qty) || 0) && !x.missing
+        );
         if (!it) return sendJson(res, 404, { ok: false, error: "Не найдено строки с остатком" });
         const remaining = Math.max(1, (Number(it.qty) || 0) - (Number(it.scanned) || 0));
-        wb.pending = { art: String(it.art), remaining, by: String((user && (user.name || user.NAME)) || ""), at: Date.now() };
+        // Сохраняем активный бокс инициатора в pending — тогда подтвердить количество
+        // может любое устройство, и деталь стабильно привяжется к ТОМУ ЖЕ боксу.
+        const pendingBox = String(body.box || "") || (it && String(it.box || ""));
+        wb.pending = { art: String(it.art), remaining, by: String((user && (user.name || user.NAME)) || ""), at: Date.now(), box: pendingBox };
         route.at = Date.now();
         await persistDb();
         return sendJson(res, 200, { ok: true, pending: wb.pending });
@@ -214,15 +275,25 @@ module.exports = function createWaybillHandler({
         const art = String(body.art || "").trim();
         const cancel = body.cancel === true;
         const items = Array.isArray(wb.items) ? wb.items : [];
-        const it = items.find((x) => artNorm(x.art) === artNorm(art) && (Number(x.scanned) || 0) < (Number(x.qty) || 0));
+        const it = items.find((x) =>
+          ((x.partsticker && psEq(x.partsticker, art)) || artNorm(x.art) === artNorm(art))
+          && (Number(x.scanned) || 0) < (Number(x.qty) || 0)
+        );
         if (!cancel && it) {
           let qty = Math.max(1, Number(body.qty) || 1);
           const rem = Math.max(0, (Number(it.qty) || 0) - (Number(it.scanned) || 0));
           if (qty > rem) qty = rem;
+          // Бокс обязателен: берём из запроса, затем из pending (qtyrequest инициатора),
+          // затем из уже привязанной детали. Без бокса НЕ засчитываем — иначе деталь
+          // «через раз» принимается без привязки (живой баг).
+          const box = String(body.box || "") || (wb.pending && String(wb.pending.box || "")) || String(it.box || "");
+          if (!box) {
+            return sendJson(res, 400, { ok: false, error: "Не выбран бокс — отсканируйте бокс сначала" });
+          }
           it.scanned += qty;
           it.missing = false; it.missingQty = 0;
-          const box = String(body.box || "");
-          if (box) it.box = box;
+          it.box = box;
+          logWaybillScan(route, clientIndex, it, true, body, user);
         }
         if (wb.pending && artNorm(wb.pending.art) === artNorm(art)) wb.pending = null;
         route.at = Date.now();
@@ -241,7 +312,15 @@ module.exports = function createWaybillHandler({
       const parsed = parseXlsxItems(buf);
       if (parsed.error) return sendJson(res, 400, { ok: false, error: parsed.error });
       if (!parsed.items.length) return sendJson(res, 400, { ok: false, error: "В накладной нет позиций" });
-      const newItems = parsed.items.map((x) => Object.assign({}, x, { missing: false }));
+      // Поддержка двух форматов: из 1С позиция несёт партину
+      // (partsticker/partQty/shipmentQty), из .xlsx — только art/name/qty.
+      // Приводим к единой структуре, чтобы сборка/скан вели себя одинаково.
+      const newItems = parsed.items.map((x) => Object.assign({}, x, {
+        missing: false,
+        partsticker: x.partsticker != null ? String(x.partsticker).trim() : "",
+        partQty: Number(x.partQty) > 0 ? Number(x.partQty) : (Number(x.qty) > 0 ? Number(x.qty) : 1),
+        shipmentQty: Number(x.shipmentQty) > 0 ? Number(x.shipmentQty) : (Number(x.qty) > 0 ? Number(x.qty) : 0),
+      }));
       if (!Array.isArray(wb.items)) wb.items = [];
       wb.items = wb.items.concat(newItems);
       wb.buyer = parsed.buyer || wb.buyer || "";

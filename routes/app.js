@@ -20,11 +20,174 @@ module.exports = function createAppHandler({
   fetchRemoteApkVersion,
   yandexMapsKey,
   resolvePublicIp,
+  pushOnecPullLog,
+  getOnecPullLog,
+  deleteOnecPullLog,
 } = {}) {
   return async function handleAppRoutes(req, res, urlPath, method, admin) {
     if (urlPath === "/api/maps/config" && method === "GET") {
       if (!admin) return sendJson(res, 403, { error: "forbidden" });
       return sendJson(res, 200, { ok: true, yandexKey: yandexMapsKey });
+    }
+
+    // Диагностический «пинг» в 1С: делает POST к ONEC_API_URL.../shipment с базовой
+    // авторизацией. Основной забор работает только POST (GET сервер 1С отвечает 405),
+    // поэтому проверяем единственный рабочий метод и сразу даём вывод.
+    if (urlPath === "/api/1c/ping" && method === "GET") {
+      if (!admin) return sendJson(res, 403, { error: "forbidden" });
+      const base = String(process.env.ONEC_API_URL || "").trim().replace(/\/+$/, "");
+      const user = String(process.env.ONEC_API_USER || "").trim();
+      const pass = String(process.env.ONEC_API_PASS || "").trim();
+      if (!base) return sendJson(res, 200, { ok: false, error: "ONEC_API_URL не настроен" });
+      const url = /\/shipment$/.test(base) ? base : base + "/shipment";
+      const auth = (user || pass) ? "Basic " + Buffer.from(user + ":" + pass).toString("base64") : "";
+      let ok1c = false;
+      let detail = "";
+      try {
+        const ctrl = new AbortController();
+        const to = setTimeout(() => ctrl.abort(), 20000);
+        let res2;
+        try {
+          res2 = await fetch(url, {
+            method: "POST",
+            headers: Object.assign(
+              { Accept: "application/json", "Content-Type": "application/json" },
+              auth ? { Authorization: auth } : {}
+            ),
+            body: JSON.stringify({ inn: "", login: "" }),
+            signal: ctrl.signal,
+          });
+        } finally {
+          clearTimeout(to);
+        }
+        const text = await res2.text().catch(() => "");
+        detail = "POST → HTTP " + res2.status + (text.length > 140 ? " · " + text.replace(/\s+/g, " ").slice(0, 140) : "");
+        ok1c = res2.ok;
+      } catch (e) {
+        detail = "POST → error: " + e.message;
+      }
+      return sendJson(res, 200, {
+        ok: true,
+        ok1c,
+        summary: ok1c ? "1С доступна (POST): " + url : "1С недоступна — " + detail,
+        results: [detail],
+      });
+    }
+
+    // Журнал заборов из 1С (админ): последние операции, что и когда забрали.
+    if (urlPath === "/api/1c/log" && method === "GET") {
+      if (!admin) return sendJson(res, 403, { error: "forbidden" });
+      const rows = getOnecPullLog ? getOnecPullLog() : [];
+      return sendJson(res, 200, { ok: true, rows });
+    }
+
+    // Удалить запись из журнала заборов 1С (админ) — чтобы накладную можно было
+    // забрать из 1С повторно (защита от дублей снимается для этого номера).
+    if (urlPath === "/api/1c/log/delete" && method === "POST") {
+      if (!admin) return sendJson(res, 403, { error: "forbidden" });
+      const body = await readBody(req);
+      const id = String((body && body.id) || "");
+      if (!id) return sendJson(res, 422, { ok: false, error: "no id" });
+      const ok = deleteOnecPullLog ? deleteOnecPullLog(id) : false;
+      return sendJson(res, ok ? 200 : 404, ok ? { ok: true } : { ok: false, error: "не найдено" });
+    }
+
+    // Заполнить накладные выбранных клиентов из 1С (до сохранения маршрута).
+    // Принимает { clients: [{ inn, login }] } (в порядке выбранных), для каждой
+    // пары Inn+login запрашивает реализацию и возвращает накладные по индексам.
+    if (urlPath === "/api/waybills/from-1c" && method === "POST") {
+      if (!admin) return sendJson(res, 403, { error: "forbidden" });
+      const body = await readBody(req);
+      const clients = Array.isArray(body && body.clients) ? body.clients : [];
+      const base = String(process.env.ONEC_API_URL || "").trim().replace(/\/+$/, "");
+      if (!base) return sendJson(res, 200, { ok: false, error: "ONEC_API_URL не настроен" });
+      const user = String(process.env.ONEC_API_USER || "").trim();
+      const pass = String(process.env.ONEC_API_PASS || "").trim();
+      const target = /\/shipment$/.test(base) ? base : base + "/shipment";
+      const auth = (user || pass) ? "Basic " + Buffer.from(user + ":" + pass).toString("base64") : "";
+      const header = Object.assign(
+        { Accept: "application/json", "Content-Type": "application/json" },
+        auth ? { Authorization: auth } : {}
+      );
+      const out = [];
+      for (const c of clients) {
+        const inn = String((c && c.inn) || "").trim();
+        const login = String((c && c.login) || "").trim();
+        if (!inn) { out.push({ ok: false, reason: "no_inn" }); continue; }
+        try {
+          const ctrl = new AbortController();
+          const to = setTimeout(() => ctrl.abort(), 20000);
+          let r;
+          try {
+            r = await fetch(target, {
+              method: "POST",
+              headers: header,
+              body: JSON.stringify({ inn, login }),
+              signal: ctrl.signal,
+            });
+          } finally { clearTimeout(to); }
+          if (!r || !r.ok) { out.push({ ok: false, reason: "http_" + (r ? r.status : "?") }); continue; }
+          const data = await r.json().catch(() => null);
+          const arr = Array.isArray(data) ? data : (data ? [data] : []);
+          // Собираем ВСЕ отгрузки контрагента из ответа 1С и «стакаем» их в одну
+          // накладную клиента. Защита: отгрузка, номер которой уже «забран»
+          // (ok-запись в журнале), не стакается повторно.
+          const alreadyLog = getOnecPullLog ? getOnecPullLog() : [];
+          const shipments = [];
+          for (const d of arr) {
+            const list = Array.isArray(d && d.id_partstiker_list) ? d.id_partstiker_list : [];
+            if (!list.length) continue;
+            const items = list
+              .map((it) => {
+                const part = String((it && (it.id_partstiker || it.partsticker)) || "").trim();
+                const art = String((it && (it.articul_number || it.article || it.art)) || "").trim() || part;
+                const shipmentQty = Number(it && it.shipment_quantity != null ? it.shipment_quantity : (it.quantity != null ? it.quantity : it.qty));
+                const partQty = Number(it && it.quantity != null ? it.quantity : shipmentQty);
+                const rawName = String((it && (it.name || it.наименование || it.id_partstiker)) || "").trim();
+                const name = String(rawName || "").trim();
+                const nm = (() => {
+                  let n = name;
+                  if (art) {
+                    const esc = String(art).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+                    n = n.replace(new RegExp(esc, "gi"), " ");
+                    n = n.replace(/\s+/g, " ").trim();
+                  }
+                  const m2 = n.match(/^(.*?)\s*\[[^\]]*\]\s*$/);
+                  if (m2 && m2[1]) n = m2[1].trim();
+                  return n || name;
+                })();
+                return {
+                  art, name: nm,
+                  qty: partQty > 0 ? partQty : 1,
+                  scanned: 0, missing: false,
+                  partsticker: part, partQty: partQty > 0 ? partQty : 1,
+                  shipmentQty: shipmentQty > 0 ? shipmentQty : 1,
+                };
+              })
+              .filter((it) => it.art);
+            if (!items.length) continue;
+            const buyer = String((d && (d.shipment_number || d.number)) || "").trim();
+            const dup = alreadyLog.some((e) => e && e.ok && String(e.number) === buyer);
+            if (dup) continue;
+            shipments.push({ buyer, items });
+            if (pushOnecPullLog) pushOnecPullLog({ source: "button", inn, login, ok: true, number: buyer, posCount: items.length, items });
+          }
+          if (shipments.length) {
+            out.push({
+              ok: true,
+              buyer: shipments.map((s) => s.buyer).join(" | "),
+              items: shipments.reduce((acc, s) => acc.concat(s.items), []),
+            });
+          } else {
+            out.push({ ok: false, reason: "empty" });
+          }
+        } catch (e) {
+          out.push({ ok: false, reason: "err" });
+        }
+      }
+      const filled = out.filter((o) => o.ok).length;
+      const noInn = out.filter((o) => o.reason === "no_inn").length;
+      return sendJson(res, 200, { ok: true, filled, noInn, waybills: out });
     }
 
     // Реальный публичный IP сервера (определяет сервер; снаружи в поле /api/ip).

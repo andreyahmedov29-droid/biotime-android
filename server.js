@@ -264,6 +264,29 @@ function osrmMatchTrack(pts) {
 // ТОЛЬКО если реально построена дорожная геометрия (TomTom или OSRM). Если
 // дорожные сервисы недоступны (нет ключей/таймаут/403) — snapped:false, path —
 // исходные точки. Так потребитель не примет «сырые» GPS-точки за дорожный путь.
+const FREEROUTE_API_URL = (String(process.env.FREEROUTE_API_BASE || "https://api.maps.freeroute.org/v1") || "").replace(/\/+$/, "");
+const FREEROUTE_API_KEY2 = String(process.env.FREEROUTE_API_KEY || "").trim();
+
+// Дорожный маршрут между двумя точками через FreeRoute (directions/driving-car).
+// Возвращает массив [lat, lon] по дорожной сети или null, если не получилось.
+async function freeRouteRouteGeometry(a, b) {
+  if (!FREEROUTE_API_KEY2 || !FREEROUTE_API_URL) return null;
+  try {
+    const r = await fetch(`${FREEROUTE_API_URL}/directions/driving-car?api_key=${encodeURIComponent(FREEROUTE_API_KEY2)}&format=geojson`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/geo+json" },
+      body: JSON.stringify({ coordinates: [[a[1], a[0]], [b[1], b[0]]] }),
+    });
+    if (!r.ok) return null;
+    const j = await r.json().catch(() => null);
+    const geo = j && j.routes && j.routes[0] && j.routes[0].geometry;
+    if (geo && Array.isArray(geo.coordinates) && geo.coordinates.length >= 2) {
+      return geo.coordinates.map((c) => [Number(c[1]), Number(c[0])]);
+    }
+    return null;
+  } catch { return null; }
+}
+
 async function snapTrackToRoads(raw) {
   const clean = (raw || []).filter((p) =>
     Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1])
@@ -282,7 +305,7 @@ async function snapTrackToRoads(raw) {
   let anyRoad = false;
   for (let i = 0; i < simp.length - 1; i++) {
     const a = simp[i], b = simp[i + 1];
-    const seg = await tomtomRouteGeometry(a, b);
+    const seg = await freeRouteRouteGeometry(a, b);
     if (seg && seg.length >= 2) { segOut.push(seg); anyRoad = true; }
     else segOut.push([a, b]);
   }
@@ -557,6 +580,7 @@ function loadDb() {
       logoText: c.logoText || "",
       bundleName: c.bundleName || "",
       inn: String(c.inn || "").trim(),
+      login: String(c.login || "").trim(),
     }));
     return dbOut;
   } catch {
@@ -664,8 +688,35 @@ function persistDb() {
   return writeQueue;
 }
 
+// Однократная нормализация данных при старте: позиция, у которой задан бокс,
+// не может одновременно нести пометку «не найдено» (размещение в бокс = найдена).
+// Чинит фантомные «проблемы склада», появившиеся до фикса в routes/waybill.js.
+let staleMissingNormalized = false;
+function normalizeStaleMissing(d) {
+  let changed = false;
+  for (const r of (Array.isArray(d.driverRoutes) ? d.driverRoutes : [])) {
+    const wb = r && r.waybills;
+    if (!wb || typeof wb !== "object") continue;
+    for (const k of Object.keys(wb)) {
+      const items = wb[k] && Array.isArray(wb[k].items) ? wb[k].items : [];
+      for (const it of items) {
+        if (it && String(it.box || "") && ((it.missing) || (Number(it.missingQty) || 0) > 0)) {
+          it.missing = false;
+          it.missingQty = 0;
+          changed = true;
+        }
+      }
+    }
+  }
+  return changed;
+}
+
 function ensureLoaded() {
   if (!db) db = loadDb();
+  if (!staleMissingNormalized) {
+    staleMissingNormalized = true;
+    if (normalizeStaleMissing(db)) { void persistDb().catch(() => {}); }
+  }
   // Подмешиваем durable-файл статусов «Проблемы со склада» (переживает откат db.json).
   try {
     if (fs.existsSync(NOTFOUND_FILE)) {
@@ -1031,7 +1082,9 @@ function sendJson(res, status, obj) {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
     "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "no-referrer",
+    // Referrer нужен Яндекс.Картам: ключ ограничен по HTTP Referer, и без origin
+    // приложения Яндex не активирует карту («ключ не разрешает этот домен»).
+    "Referrer-Policy": "strict-origin-when-cross-origin",
   });
   res.end(body);
 }
@@ -2711,6 +2764,7 @@ function logWaybillScan(route, clientIndex, item, missing, body, user) {
       ? cl.members.map((m) => String(m.client || m.address || "").slice(0, 80)).filter(Boolean).slice(0, 50)
       : [],
     code: String(item.art || ""),
+    partsticker: String((item && item.partsticker) || ""),
     name: String(item.name || "").slice(0, 200),
     qty: Number(item.qty) || 0,
     missing: !!missing,
@@ -2987,21 +3041,40 @@ function innForClient(routeClient, dbData) {
   return byName ? String(byName.inn || "").trim() : "";
 }
 
-async function fetchOnecRealization(inn) {
+// Буквенный логин контрагента в 1С (нужен для сопоставления реализации).
+function loginForClient(routeClient, dbData) {
+  if (routeClient && String((routeClient && routeClient.login) || "").trim()) {
+    return String(routeClient.login).trim();
+  }
+  const byName = (dbData && dbData.driverClients || []).find(
+    (c) => String(c.client) === String(routeClient && routeClient.client)
+  );
+  return byName ? String(byName.login || "").trim() : "";
+}
+
+async function fetchOnecRealization(inn, login) {
   const innV = String(inn || "").trim();
+  const loginV = String(login || "").trim();
   const url = String(process.env.ONEC_API_URL || "").trim().replace(/\/+$/, "");
   if (!url || !innV) return null;
-  const key = String(process.env.ONEC_API_KEY || "").trim();
+  // Авторизация у реального HTTP-сервиса 1С — базовая (логин/пароль), как в
+  // наших .env ONEC_API_USER / ONEC_API_PASS. Легаси X-Api-Key не используется.
+  const user = String(process.env.ONEC_API_USER || "").trim();
+  const pass = String(process.env.ONEC_API_PASS || "").trim();
+  const target = /\/shipment$/.test(url) ? url : url + "/shipment";
+  const auth = (user || pass) ? "Basic " + Buffer.from(user + ":" + pass).toString("base64") : "";
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 20000);
     let res;
     try {
-      res = await fetch(`${url}/realizations?inn=${encodeURIComponent(innV)}`, {
+      res = await fetch(target, {
+        method: "POST",
         headers: Object.assign(
-          { Accept: "application/json" },
-          key ? { "X-Api-Key": key } : {}
+          { Accept: "application/json", "Content-Type": "application/json" },
+          auth ? { Authorization: auth } : {}
         ),
+        body: JSON.stringify({ inn: innV, login: loginV }),
         signal: controller.signal,
       });
     } finally {
@@ -3009,28 +3082,110 @@ async function fetchOnecRealization(inn) {
     }
     if (!res || !res.ok) return null;
     const data = await res.json().catch(() => null);
-    const docs = Array.isArray(data) ? data : (data && Array.isArray(data.realizations) ? data.realizations : null);
-    if (!docs) return null;
-    const doc = docs.find((d) => !(d && d.taken === true));
-    if (!doc) return null;
-    const items = (Array.isArray(doc.items) ? doc.items : [])
-      .map((it) => ({
-        art: String((it && (it.article != null ? it.article : it.art)) || "").trim(),
-        name: String((it && (it.name || it.наименование)) || "").trim(),
-        qty: Number(it && it.qty) > 0 ? Number(it.qty) : 1,
-        scanned: 0,
-        missing: false,
-      }))
-      .filter((it) => it.art);
-    if (!items.length) return null;
-    return {
-      id: String((doc && doc.id) || ""),
-      number: String((doc && (doc.number || doc.номер)) || ""),
-      items,
-    };
+    if (!data) return null;
+    // Реальный ответ 1С: { shipment_number, inn, id_partstiker_list: [{id_partstiker, quantity}] }
+    // (может прийти и массивом). Нормализуем в список накладных.
+    const arr = Array.isArray(data) ? data : [data];
+    for (const d of arr) {
+      const list = Array.isArray(d && d.id_partstiker_list)
+        ? d.id_partstiker_list
+        : (Array.isArray(d && d.items) ? d.items : []);
+      const items = list
+        .map((it) => {
+          const part = String((it && (it.id_partstiker || it.partsticker)) || "").trim();
+          const art = String((it && (it.articul_number || it.article || it.art)) || "").trim() || part;
+          const shipmentQty = Number(it && it.shipment_quantity != null ? it.shipment_quantity : (it.quantity != null ? it.quantity : it.qty));
+          const partQty = Number(it && it.quantity != null ? it.quantity : shipmentQty);
+          const rawName = String((it && (it.name || it.наименование || it.id_partstiker)) || "").trim();
+          return {
+            art,
+            name: cleanPartstickerName(rawName, art),
+            qty: partQty > 0 ? partQty : 1,                 // цель строки = кол-во этой порции (партисткера)
+            scanned: 0,
+            missing: false,
+            partsticker: part,                              // храним внутри (не выводим)
+            partQty: partQty > 0 ? partQty : 1,
+            shipmentQty: shipmentQty > 0 ? shipmentQty : 1, // контроль всей отгрузки артикула
+          };
+        })
+        .filter((it) => it.art);
+      if (!items.length) continue;
+      const number = String((d && (d.shipment_number || d.number || d.номер)) || "").trim();
+      pushOnecPullLog({ source: "auto", inn: innV, login: loginV, ok: true, number, posCount: items.length, items });
+      return {
+        id: number || String((d && d.id) || ""),
+        number,
+        items,
+      };
+    }
+    return null;
   } catch {
     return null;
   }
+}
+
+// Журнал заборов из 1С (показывается админу в «Маршрутизация → Логи 1С»).
+// Хранится в файле /data и переживает передеплой/рестарт (не только в памяти).
+const ONEC_PULL_LOG_FILE = path.join(DATA_DIR, "onec-pull-log.json");
+function loadOnecPullLog() {
+  try {
+    if (fs.existsSync(ONEC_PULL_LOG_FILE)) {
+      const arr = JSON.parse(fs.readFileSync(ONEC_PULL_LOG_FILE, "utf8"));
+      if (Array.isArray(arr)) return arr;
+    }
+  } catch { /* пусто */ }
+  return [];
+}
+const onecPullLog = loadOnecPullLog();
+let onecLogSaveTimer = null;
+function saveOnecPullLog() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    const tmp = ONEC_PULL_LOG_FILE + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(onecPullLog));
+    fs.renameSync(tmp, ONEC_PULL_LOG_FILE);
+  } catch { /* не критично */ }
+}
+// Старые записи журнала могли сохраниться без id (до добавления). Проставляем им
+// id при старте, чтобы кнопка «Удалить из лога» работала и для них.
+{
+  let needSave = false;
+  onecPullLog.forEach((e) => { if (e && !e.id) { e.id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6); needSave = true; } });
+  if (needSave) saveOnecPullLog();
+}
+function pushOnecPullLog(entry) {
+  const id = (entry && entry.id) || (Date.now().toString(36) + Math.random().toString(36).slice(2, 6));
+  onecPullLog.push(Object.assign({ id, ts: Date.now() }, entry));
+  if (onecPullLog.length > 300) onecPullLog.shift();
+  if (!onecLogSaveTimer) {
+    onecLogSaveTimer = setTimeout(() => { onecLogSaveTimer = null; saveOnecPullLog(); }, 600);
+  }
+}
+function getOnecPullLog() { return onecPullLog.slice(); }
+function deleteOnecPullLog(id) {
+  const i = onecPullLog.findIndex((e) => String(e && e.id) === String(id));
+  if (i < 0) return false;
+  onecPullLog.splice(i, 1);
+  saveOnecPullLog();
+  return true;
+}
+
+// Наименование из 1С часто начинается с артикула («5825437000 РЕГУЛЯТОР …»).
+// Вычленяем ведущий артикул и убираем его, оставляя только текстовое наименование.
+function cleanPartstickerName(rawName, art) {
+  let n = String(rawName || "").trim();
+  const a = String(art || "").trim();
+  if (a) {
+    // Убираем артикул, где бы он ни встретился в наименовании (в начале/середине/конце)
+    // — и ведущий, и хвостовой («Разъем 8206673202» → «Разъем»).
+    const esc = a.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    n = n.replace(new RegExp(esc, "gi"), " ");
+    n = n.replace(/\s+/g, " ").trim();
+  }
+  // Убираем скобочный суффикс («…[ORG]» и т.п.) — остаётся чистое наименование.
+  const m = n.match(/^(.*?)\s*\[[^\]]*\]\s*$/);
+  if (m && m[1]) n = m[1].trim();
+  return n || String(rawName || "").trim();
 }
 
 // Заполняет накладные маршрута для клиентов, у которых есть ИНН и нет ещё накладной.
@@ -3043,7 +3198,8 @@ async function autoPullWaybillsFrom1c(clients, waybillsArr, dbData) {
     if (have.has(i)) continue;
     const inn = innForClient(clients[i], dbData);
     if (!inn) continue;
-    const doc = await fetchOnecRealization(inn);
+    const login = loginForClient(clients[i], dbData);
+    const doc = await fetchOnecRealization(inn, login);
     if (doc && doc.items && doc.items.length) {
       waybillsArr.push({ clientIndex: i, items: doc.items, buyer: String(doc.number || "") });
       have.add(i);
@@ -3235,6 +3391,9 @@ const handleAppRoutes = require("./routes/app")({
   fetchRemoteApkVersion,
   yandexMapsKey: YANDEX_MAPS_KEY,
   resolvePublicIp,
+  pushOnecPullLog,
+  getOnecPullLog,
+  deleteOnecPullLog,
 });
 
 // ---- Управление группами (админ) ----
@@ -3295,6 +3454,7 @@ const handleShipmentRoutes = require("./routes/shipments")({
   withResolvedBundleNames,
   normalizeRouteProgress,
   purgeEmptyBoxes,
+  getOnecPullLog,
 });
 // «Проблемы со склада» (/api/notfound).
 const handleNotfoundRoutes = require("./routes/notfound")({
@@ -3305,6 +3465,7 @@ const handleNotfoundRoutes = require("./routes/notfound")({
   canSeeNotfound,
   alignWaybillsToClients,
   persistNotFoundStatuses,
+  isAdmin,
 });
 // Геолокация водителей (/api/drivers/location).
 const handleLocationRoutes = require("./routes/location")({
@@ -3328,6 +3489,12 @@ const handleTracksRoutes = require("./routes/tracks")({
   snappedTracks,
   snapTrackToRoads,
   scheduleSnappedSave,
+});
+// Гео-маршрутизация по дорогам через FreeRoute (/api/geo/route-from-track).
+const handleGeoRoutes = require("./routes/geo")({
+  getDb: () => db,
+  sendJson,
+  readBody,
 });
 // Дашборд движения водителей (/api/drivers/motion).
 const handleMotionRoutes = require("./routes/motion")({
@@ -3558,6 +3725,12 @@ async function handleApi(req, res, urlPath) {
   }
   if (!sessionsLoaded) { loadSessionsFromDisk(); sessionsLoaded = true; }
   const method = req.method;
+  // Версия сборки (меняется при каждом деплое). Клиент периодически опрашивает
+  // её и автоматически перезагружает страницу после обновления — без ручных
+  // действий на браузере, мобильном и в Electron.
+  if (urlPath === "/api/version" && method === "GET") {
+    return sendJson(res, 200, { v: cacheVersion() });
+  }
   // Личность, под которой пришёл запрос (сессия собственной авторизации > шлюз >
   // локальный фолбэк). Нужна для защиты «первого входа», чтобы нельзя было
   // задать логин/пароль за чужого сотрудника.
@@ -3655,6 +3828,11 @@ async function handleApi(req, res, urlPath) {
   // ?limit=N (сколько последних вернуть; по умолчанию 300, максимум 2000).
   if (await handleScanlogRoutes(req, res, urlPath, method) !== false) {
     return; // маршрут «журнал сканирования мест» обработан
+  }
+
+  // Гео-маршрутизация по дорогам (/api/geo/route-from-track).
+  if (await handleGeoRoutes(req, res, urlPath, method) !== false) {
+    return; // маршрут «гео» обработан
   }
 
   if (await handleDriverRoutes(req, res, urlPath, method, user, admin) !== false) {
@@ -3757,7 +3935,17 @@ function serveHtml(res, data) {
   res.writeHead(200, {
     "Content-Type": MIME[".html"],
     "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "no-referrer",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    // Разрешаем карту: скрипт/стиль Leaflet (unpkg.com) и тайлы OpenStreetMap
+    // (tile.openstreetmap.org). Без этого прод-шлюз блокирует внешние ресурсы
+    // и карта в «Трекинге» не отрисовывается (проверено живым кейсом).
+    "Content-Security-Policy":
+      "default-src 'self'; " +
+      "script-src 'self' https://unpkg.com https://api-maps.yandex.ru https://yastatic.net https://*.yastatic.net https://*.yandex.ru https://*.maps.yandex.net 'unsafe-inline' 'unsafe-eval'; " +
+      "style-src 'self' https://unpkg.com https://fonts.googleapis.com 'unsafe-inline'; " +
+      "img-src 'self' data: blob: https://yandex.ru https://*.yandex.ru https://yastatic.net https://*.yastatic.net https://tile.openstreetmap.org https://*.tile.openstreetmap.org https://yandex.net https://*.yandex.net https://*.tile.maps.yandex.net https://core-renderer-tiles.maps.yandex.net; " +
+      "connect-src 'self' https://unpkg.com https://tile.openstreetmap.org https://*.tile.openstreetmap.org https://api-maps.yandex.ru https://*.yandex.ru https://*.yandex.net https://yastatic.net https://*.yastatic.net; " +
+      "font-src 'self' data: https://fonts.gstatic.com;",
   });
   res.end(out);
 }

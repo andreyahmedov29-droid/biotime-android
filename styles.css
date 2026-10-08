@@ -2855,37 +2855,59 @@ body.state-finished .total-cell.accent .total-value { color: var(--red-soft); }
 
 /* Внутренние вкладки маршрутизации */
 .drv-subtabs {
+  position: relative;
   display: flex;
   gap: 8px;
-  flex-wrap: wrap;
-  margin: 2px 0 16px;
+  margin: 2px 0 18px;
+  padding: 6px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  border-radius: 16px;
+  -webkit-overflow-scrolling: touch;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.015));
+  border: 1px solid var(--line);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 .drv-subtab {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 16px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--panel-soft);
+  padding: 9px 14px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
   color: var(--ink-dim);
   font-family: var(--font-mono);
   font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.01em;
+  white-space: nowrap;
   cursor: pointer;
-  transition: color var(--t-fast), border-color var(--t-fast), background var(--t-fast), box-shadow var(--t-fast);
+  transition: color var(--t-fast), border-color var(--t-fast), background var(--t-fast), transform var(--t-fast), box-shadow var(--t-fast);
+}
+.drv-subtab svg {
+  flex: none;
+  opacity: 0.72;
+  transition: opacity var(--t-fast), transform var(--t-fast);
 }
 .drv-subtab:hover {
   color: var(--ink);
-  border-color: var(--line-strong);
   background: rgba(255, 255, 255, 0.06);
+  border-color: var(--line-strong);
+  transform: translateY(-1px);
+}
+.drv-subtab:hover svg {
+  opacity: 1;
+  transform: scale(1.12);
 }
 .drv-subtab.active {
   color: var(--amber-ink);
-  background: var(--amber);
-  border-color: transparent;
-  box-shadow: 0 8px 22px rgba(255, 171, 56, 0.28);
+  background: linear-gradient(180deg, rgba(255, 171, 56, 0.22), rgba(255, 171, 56, 0.1));
+  border-color: rgba(255, 171, 56, 0.45);
+  box-shadow: inset 0 0 0 1px rgba(255, 171, 56, 0.16), 0 6px 16px rgba(255, 171, 56, 0.16);
+}
+.drv-subtab.active svg {
+  opacity: 1;
 }
 .drv-subpanel { animation: subtab-in var(--t-med) var(--ease); }
 @keyframes subtab-in {
@@ -4311,11 +4333,30 @@ body.hide-over-sum .earned-cell { display: none !important; }
 .waybill-del-box-item.is-locked { opacity: .6; cursor: not-allowed; }
 .waybill-del-box-item input:disabled { cursor: not-allowed; }
 .waybill-del-box-item.has-content { cursor: pointer; }
-.waybill-box-details { display: flex; flex-direction: column; gap: 6px; max-height: 60vh; overflow: auto; }
-.waybill-box-detail { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border: 1px solid var(--stroke, rgba(255,255,255,.12)); border-radius: 8px; font-size: 13px; }
+#boxDetailsModal { width: 100%; max-width: min(1000px, 96vw); }
+#boxDetailsModal .waybill-box-details { display: flex; flex-direction: column; gap: 6px; max-height: 66vh; overflow: auto; }
+.waybill-box-detail { display: grid; grid-template-columns: 150px 160px 1fr 74px; align-items: center; gap: 10px; padding: 6px 10px; border: 1px solid var(--stroke, rgba(255,255,255,.12)); border-radius: 8px; font-size: 13px; }
 .waybill-box-detail .wbd-art { font-family: var(--font-mono); font-weight: 700; }
 .waybill-box-detail .wbd-name { flex: 1 1 auto; opacity: .9; }
-.waybill-box-detail .wbd-qty { opacity: .7; }
+.waybill-box-detail .wbd-qty { opacity: .7; text-align: right; }
+.waybill-box-detail.wbd-head {
+  border-color: transparent;
+  font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+  color: #888; font-weight: 700; padding-top: 2px; padding-bottom: 2px;
+}
+@media (max-width: 719px) {
+  /* На телефоне/fold/ТСД содержимое бокса компактно: партисткер своей строкой. */
+  .waybill-box-detail {
+    grid-template-columns: 1fr auto;
+    gap: 4px 8px;
+    font-size: 12px;
+  }
+  .waybill-box-detail .wbd-ps { grid-column: 1 / -1; color: #999; }
+  .waybill-box-detail .wbd-name,
+  .waybill-box-detail.wbd-head .wbd-ps { grid-column: 1; }
+  .waybill-box-detail .wbd-qty { grid-column: 2; text-align: right; }
+  .waybill-box-detail.wbd-head .wbd-name { grid-column: 1; }
+}
 /* --- ТСД / маленькие экраны: компактное окно «Сборка» --- */
 .waybill-list-toggle { width: 100%; font-size: 14px; font-weight: 700; padding: 14px 16px; }
 .waybill-list-modal { flex: 1 1 auto; min-height: 0; overflow-y: auto; max-height: none; }
@@ -4552,6 +4593,63 @@ body.hide-over-sum .earned-cell { display: none !important; }
   cursor: pointer;
   transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
 }
+/* Настоящая таблица накладной: каждый столбец — отдельная ячейка. */
+.waybill-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.waybill-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-card, #1c1c20);
+  z-index: 1;
+  padding: 8px 10px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: #999;
+  text-align: left;
+  border-bottom: 1px solid rgba(255,255,255,.08);
+}
+.waybill-table tr.waybill-item {
+  display: table-row;
+  grid-template-columns: none;
+}
+.waybill-table td {
+  padding: 8px 10px;
+  vertical-align: middle;
+  border-bottom: 1px solid rgba(255,255,255,.05);
+}
+.waybill-table .th-check,
+.waybill-table .th-mark { width: 30px; }
+.waybill-table .th-ps { width: 110px; }
+.waybill-table .th-art { width: 180px; }
+.waybill-table .th-name { width: 340px; }
+.waybill-table .th-qty { width: 76px; text-align: right; }
+.waybill-table .waybill-check { text-align: center; cursor: pointer; font-size: 16px; color: var(--ink-faint); }
+.waybill-table .waybill-item-qty { text-align: right; white-space: nowrap; font-weight: 800; }
+.waybill-table .waybill-markcell { width: 110px; text-align: right; }
+.waybill-table .waybill-item-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+
+/* Логи 1С: таблица не растягивается за экран, правая колонка (крестик) помещается. */
+.report-table { width: 100%; table-layout: fixed; word-break: break-word; }
+.report-table th { text-align: center; }
+.report-table td { text-align: center; vertical-align: middle; }
+.report-table th:last-child,
+.report-table th:last-child { width: 46px; text-align: center; }
+.report-table td:last-child { width: 46px; text-align: center; vertical-align: middle; }
+.report-table td:last-child .icon-btn { width: 26px; height: 26px; padding: 0; font-size: 14px; line-height: 1; }
+.report-table-wrap { max-width: 100%; overflow-x: auto; }
+#routesub-1clog .drv-panel { width: 100%; max-width: 100%; overflow-x: hidden; }
+table.oneclog-items { table-layout: fixed; }
+table.oneclog-items th:nth-child(1),
+table.oneclog-items td:nth-child(1) { width: 20%; white-space: nowrap; }
+table.oneclog-items th:nth-child(2),
+table.oneclog-items td:nth-child(2) { width: 22%; white-space: nowrap; }
+table.oneclog-items td:nth-child(3) { overflow-wrap: anywhere; }
+table.oneclog-items th:nth-child(4),
+table.oneclog-items td:nth-child(4) { width: 12%; text-align: right; white-space: nowrap; }
 .waybill-item:hover { border-color: var(--line-strong, rgba(255,255,255,.22)); }
 .waybill-item.selected {
   border-color: var(--amber);
@@ -4576,6 +4674,12 @@ body.hide-over-sum .earned-cell { display: none !important; }
 .waybill-item-name {
   color: var(--ink); font-size: 12.5px; font-weight: 500; line-height: 1.3;
   overflow-wrap: anywhere;
+  /* Не даём длинному наименованию растягиваться на всю ширину строки:
+     ограничиваем и аккуратно обрезаем с многоточием. */
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .waybill-item-qty {
   color: var(--ink); font-size: 13px; font-weight: 800; text-align: right;
@@ -4716,9 +4820,21 @@ body.hide-over-sum .earned-cell { display: none !important; }
   border: none;
   background: transparent;
   padding: 0;
-  max-width: 420px;
   width: 100%;
+  max-width: calc(100vw - 24px); /* на любом экране не выходит за границы */
   margin: auto;
+}
+/* Адаптивные ширины модалок под монитор / телефон / fold / ТСД. */
+@media (min-width: 720px) {
+  .modal { max-width: 460px; }
+  #boxDetailsModal { max-width: min(1000px, 96vw); }
+}
+@media (min-width: 1200px) {
+  .modal { max-width: 520px; }
+}
+@media (max-width: 719px) {
+  .modal { max-width: calc(100vw - 20px); }
+  #boxDetailsModal { max-width: calc(100vw - 16px); }
 }
 
 .modal::backdrop {
@@ -6530,8 +6646,47 @@ button.icon-btn svg,
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 10px;
+  margin-bottom: 14px;
   flex-wrap: wrap;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.015));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.driver-map-toolbar .ctrl-soft {
+  border-color: rgba(255, 171, 56, 0.4);
+  color: var(--amber-ink);
+  background: linear-gradient(180deg, rgba(255, 171, 56, 0.18), rgba(255, 171, 56, 0.08));
+}
+.driver-map-toolbar .ctrl-soft:hover {
+  background: linear-gradient(180deg, rgba(255, 171, 56, 0.26), rgba(255, 171, 56, 0.12));
+}
+/* Таблица треков «Местоположение водителя» — Время | Адрес | Координаты */
+#locationTableWrap {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.18);
+}
+#locationTable { width: 100%; border-collapse: collapse; font-size: 12px; }
+#locationTable th {
+  text-align: left;
+  color: var(--ink-faint);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line-strong);
+  background: rgba(255, 255, 255, 0.02);
+}
+#locationTable th:nth-child(1), #locationTable td:nth-child(1) { width: 68px; }
+#locationTable th:nth-child(3), #locationTable td:nth-child(3) { width: 140px; text-align: right; }
+#locationTable td { padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; color: var(--ink-dim); }
+#locationTable tbody tr:hover td { background: rgba(255, 171, 56, 0.06); }
+#locationTable td:nth-child(1) { white-space: nowrap; font-family: var(--font-mono); font-weight: 600; color: var(--ink); }
+#locationTable td:nth-child(3) { font-family: var(--font-mono); white-space: nowrap; font-size: 12px; color: var(--ink); font-weight: 600; }
+#locationTable tbody tr:last-child td { border-bottom: none; }
 }
 .driver-map {
   position: relative;
@@ -7694,6 +7849,7 @@ button.icon-btn svg,
 .wbl-arrow { width: 12px; text-align: center; color: var(--green-soft); }
 .wb-log-client .wbl-arrow { color: var(--amber); }
 .wbl-time { font-family: ui-monospace, Consolas, monospace; font-size: 11px; opacity: .6; white-space: nowrap; }
+.wbl-ps { font-family: ui-monospace, Consolas, monospace; font-size: 11px; font-weight: 700; color: var(--brand-1, #0b58ca); opacity: .85; white-space: nowrap; }
 .wbl-art { font-family: ui-monospace, Consolas, monospace; font-weight: 700; min-width: 92px; }
 .wbl-name { flex: 1 1 auto; opacity: .9; }
 .wbl-client-sub { font-size: 12px; opacity: .65; font-weight: 600; }
@@ -7783,6 +7939,8 @@ button.icon-btn svg,
 .nf-table thead th:nth-child(8) { width: 12%; }
 .nf-table thead th:nth-child(9) { width: 8%; }
 .nf-table thead th:nth-child(10) { width: 12%; }
+.nf-table .nf-check-cell { width: 26px; text-align: center; white-space: nowrap; }
+.nf-table input.nf-check { width: 16px; height: 16px; accent-color: var(--brand-1, #0b58ca); cursor: pointer; vertical-align: middle; }
 .nf-table select.nf-status-sel, .nf-table select.nf-mstatus-sel,
 .nf-table input.nf-comment-inp, .nf-table input.nf-mcomment-inp {
   width: 100%; min-width: 0; max-width: 100%;

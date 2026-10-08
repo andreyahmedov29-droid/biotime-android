@@ -24,6 +24,7 @@ module.exports = function createLogsHandler({
         userName: String(user.name || ""),
         ok: body.ok === true,
         code: String(body.code || "").slice(0, 80),
+        partsticker: String(body.partsticker || "").slice(0, 60),
         kind: String(body.kind || "detail").slice(0, 20),
         client: String(body.client || "").slice(0, 200),
         box: String(body.box || "").slice(0, 60),

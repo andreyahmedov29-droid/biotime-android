@@ -28,6 +28,52 @@ module.exports = function createRouteCreateHandler({
   return async function handleRouteCreateRoutes(req, res, urlPath, method, user, admin) {
     const db = getDb ? getDb() : {};
 
+    // Заполнить накладные маршрута из 1С для всех клиентов (у кого есть ИНН/+логин
+    // и ещё нет накладной). Ручной аналог autoPullWaybillsFrom1c по кнопке.
+    const fillMatch = urlPath.match(/^\/api\/routes\/([^/]+)\/fill-from-1c$/);
+    if (fillMatch && method === "POST") {
+      if (!canManageShipment(user, db)) return sendJson(res, 403, { error: "forbidden" });
+      const id = String(fillMatch[1]);
+      const route = (db.driverRoutes || []).find((r) => String(r.id) === String(id));
+      if (!route) return sendJson(res, 404, { error: "Маршрут не найден" });
+      const clients = Array.isArray(route.clients) ? route.clients : [];
+      const clientInn = (rc) => {
+        const own = rc && String(rc.inn || "").trim();
+        if (own) return own;
+        const by = (db.driverClients || []).find((c) => String(c.client) === String(rc && rc.client));
+        return by ? String(by.inn || "").trim() : "";
+      };
+      const wbObj = route.waybills && typeof route.waybills === "object" ? route.waybills : {};
+      const waybillsArr = Object.entries(wbObj).map(([k, w]) => ({
+        clientIndex: Number(k),
+        items: Array.isArray(w && w.items) ? w.items : [],
+        buyer: String((w && w.buyer) || ""),
+      }));
+      const before = waybillsArr.filter((w) => (w.items || []).length).length;
+      const noInn = clients.filter((rc) => !clientInn(rc)).length;
+      await autoPullWaybillsFrom1c(clients, waybillsArr, db);
+      route.waybills = Object.fromEntries(waybillsArr.map((w) => [
+        w.clientIndex,
+        { items: w.items, buyer: String(w.buyer || ""), loadedAt: Date.now() },
+      ]));
+      route.at = Date.now();
+      await persistDb();
+      const withItems = waybillsArr.filter((w) => (w.items || []).length).length;
+      const filled = withItems - before;
+      const skipped = clients.length - withItems;
+      // клиенты с ИНН, но которым 1С ничего не вернула (не заполнилось)
+      const empty = Math.max(0, clients.length - noInn - withItems);
+      return sendJson(res, 200, {
+        ok: true,
+        filled: Math.max(0, filled),
+        skipped: Math.max(0, skipped),
+        noInn,
+        empty,
+        already: before,
+        total: clients.length,
+      });
+    }
+
     if (urlPath === "/api/drivers/routes" && method === "POST") {
       if (!admin) return sendJson(res, 403, { error: "forbidden" });
       const body = await readBody(req);
@@ -117,6 +163,12 @@ module.exports = function createRouteCreateHandler({
                   qty: Number(it && it.qty) > 0 ? Number(it.qty) : 1,
                   scanned: 0,
                   missing: false,
+                  // Поддержка двух форматов: из 1С позиция несёт партину
+                  // (partsticker/partQty/shipmentQty), из .xlsx — только
+                  // art/name/qty. Приводим к единой структуре.
+                  partsticker: String((it && (it.partsticker != null ? it.partsticker : "")) || "").trim(),
+                  partQty: Number(it && it.partQty) > 0 ? Number(it.partQty) : (Number(it && it.qty) > 0 ? Number(it.qty) : 1),
+                  shipmentQty: Number(it && it.shipmentQty) > 0 ? Number(it.shipmentQty) : (Number(it && it.qty) > 0 ? Number(it.qty) : 0),
                 }))
                 .filter((it) => it.art)
             : [];
@@ -151,7 +203,14 @@ module.exports = function createRouteCreateHandler({
         if (waybillsArr.length) {
           if (!db.driverRoutes[existIdx].waybills) db.driverRoutes[existIdx].waybills = {};
           waybillsArr.forEach((w) => {
-            db.driverRoutes[existIdx].waybills[w.clientIndex] = { items: w.items, buyer: String(w.buyer || ""), loadedAt: Date.now() };
+            const k = w.clientIndex;
+            if (db.driverRoutes[existIdx].waybills[k]) {
+              // Несколько накладных/порций одного клиента — стакаем позиции.
+              db.driverRoutes[existIdx].waybills[k].items = (db.driverRoutes[existIdx].waybills[k].items || []).concat(w.items || []);
+              if (w.buyer) db.driverRoutes[existIdx].waybills[k].buyer = String(w.buyer);
+            } else {
+              db.driverRoutes[existIdx].waybills[k] = { items: w.items || [], buyer: String(w.buyer || ""), loadedAt: Date.now() };
+            }
           });
         }
         if (Number.isFinite(Number(body.km)) && Number(body.km) >= 0) {
@@ -171,9 +230,16 @@ module.exports = function createRouteCreateHandler({
             : undefined,
           addedBy: user.id,
           at: Date.now(),
-          waybills: waybillsArr.length
-            ? Object.fromEntries(waybillsArr.map((w) => [w.clientIndex, { items: w.items, buyer: String(w.buyer || ""), loadedAt: Date.now() }]))
-            : undefined,
+          waybills: (() => {
+            if (!waybillsArr.length) return undefined;
+            const merged = {};
+            for (const w of waybillsArr) {
+              const k = w.clientIndex;
+              if (merged[k]) merged[k].items = merged[k].items.concat(w.items || []);
+              else merged[k] = { items: (w.items || []).slice(), buyer: String(w.buyer || ""), loadedAt: Date.now() };
+            }
+            return merged;
+          })(),
         });
       }
       if (db.driverRoutes.length > 3000) db.driverRoutes = db.driverRoutes.slice(-3000);

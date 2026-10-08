@@ -33,6 +33,25 @@ test("GET /api/shipments админ -> список маршрутов", async (
   assert.ok(Array.isArray(res._json.obj.routes));
 });
 
+test("GET /api/shipments дообогащает позиции партисткером из журнала 1С", async () => {
+  const db = {
+    driverRoutes: [{ id: "r1", waybills: { 0: { items: [{ art: "5825437000", qty: 1, scanned: 0 }] } } }],
+    labels: [],
+  };
+  const h = make({
+    getDb: () => db,
+    getOnecPullLog: () => [{
+      ts: Date.now(), items: [{ art: "5825437000", partsticker: "000000000020230/1", partQty: 1 }],
+    }],
+  });
+  const res = {};
+  await h({ headers: {} }, res, "/api/shipments", "GET", { id: "1" }, true);
+  assert.strictEqual(res._json.status, 200);
+  const it = res._json.obj.routes[0].waybills[0].items[0];
+  assert.strictEqual(it.partsticker, "000000000020230/1");
+  assert.strictEqual(it.partQty, 1);
+});
+
 test("POST /api/shipments/complete помечает shippedAt", async () => {
   const route = { id: "r1", progress: { status: "idle" } };
   const db = { driverRoutes: [route], labels: [] };

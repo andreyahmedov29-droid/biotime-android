@@ -43,6 +43,19 @@ test("POST /api/drivers/clients создаёт клиента", async () => {
   assert.strictEqual(res._json.obj.clients.length, 1);
 });
 
+test("POST /api/drivers/clients сохраняет ИНН и буквенный логин", async () => {
+  const db = { driverClients: [], driverRoutes: [] };
+  const h = make({
+    getDb: () => db,
+    readBody: async () => ({ client: "Клиент", address: "Ул. 1", inn: "7701234567", login: "KLIENT01" }),
+  });
+  const res = {};
+  await h({ headers: {}, url: "/api/drivers/clients" }, res, "/api/drivers/clients", "POST", admin, true);
+  assert.strictEqual(res._json.status, 200);
+  assert.strictEqual(res._json.obj.clients[0].inn, "7701234567");
+  assert.strictEqual(res._json.obj.clients[0].login, "KLIENT01");
+});
+
 test("POST /api/drivers/clients без адреса -> 400", async () => {
   const h = make({ readBody: async () => ({ client: "Клиент" }) });
   const res = {};

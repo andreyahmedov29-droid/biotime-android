@@ -101,6 +101,8 @@ module.exports = function createDriverClientsHandler({
         found.client = client;
         found.address = address;
         found.inn = String(body.inn != null ? body.inn : found.inn || "").trim();
+        // Буквенный логин контрагента в 1С (нужен для сопоставления реализации).
+        found.login = String(body.login != null ? body.login : found.login || "").trim();
         // Адрес изменился — старые координаты недействительны, переглокализуем.
         found.lat = null;
         found.lon = null;
@@ -123,6 +125,7 @@ module.exports = function createDriverClientsHandler({
         client,
         address,
         inn: String(body.inn || "").trim(),
+        login: String(body.login || "").trim(),
         bundleId: null,
         addedBy: user.id,
         at: Date.now(),

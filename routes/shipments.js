@@ -12,6 +12,7 @@ module.exports = function createShipmentHandler({
   withResolvedBundleNames,
   normalizeRouteProgress,
   purgeEmptyBoxes,
+  getOnecPullLog,
 } = {}) {
   return async function handleShipmentRoutes(req, res, urlPath, method, user, admin) {
     const db = getDb ? getDb() : {};
@@ -22,6 +23,38 @@ module.exports = function createShipmentHandler({
         .filter((r) => !!r)
         .map((r) => {
           const route = alignWaybillsToClients(withResolvedBundleNames(normalizeRouteProgress(r), db));
+          // Дообогащение из журнала заборов 1С: у позиций накладной, где партисткер
+          // отсутствует (накладная создана раньше / из xlsx), дозаполняем `partsticker`
+          // и `partQty` по совпадающему артикулу из последних записей журнала. Так
+          // партисткеры появляются в сборке без повторного «Заполнить из 1С».
+          if (getOnecPullLog && route && route.waybills) {
+            const logRows = getOnecPullLog();
+            if (Array.isArray(logRows) && logRows.length) {
+              const used = new Set();
+              try {
+                Object.values(route.waybills).forEach((wb) => {
+                  if (!wb || !Array.isArray(wb.items)) return;
+                  wb.items = wb.items.map((it) => {
+                    if (!it || it.partsticker || it.art == null) return it;
+                    for (const e of logRows) {
+                      if (!Array.isArray(e && e.items)) continue;
+                      for (const li of e.items) {
+                        if (!li || !li.partsticker) continue;
+                        if (String(li.art) === String(it.art) && !used.has(String(li.partsticker))) {
+                          used.add(String(li.partsticker));
+                          return Object.assign({}, it, {
+                            partsticker: li.partsticker,
+                            partQty: (li.partQty != null ? Number(li.partQty) : (Number(li.qty) || 1)),
+                          });
+                        }
+                      }
+                    }
+                    return it;
+                  });
+                });
+              } catch { /* не критично */ }
+            }
+          }
           const labels = (db.labels || []).filter((l) => String(l.routeId) === String(route.id));
           route.clients = (route.clients || []).map((c, i) => ({
             ...c,

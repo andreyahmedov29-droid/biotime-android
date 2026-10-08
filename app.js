@@ -856,6 +856,7 @@
   function startLocationReporting() {
     if (locWatchId != null || !navigator.geolocation) return;
     let lastSent = 0;
+    let _gpsSpeedSmooth = null; // скользящее среднее GPS-скорости
     const activeRouteId = () => {
       const a = (myRoutesCache || []).find((r) => r.progress && r.progress.status === "active");
       return a ? a.id : "";
@@ -865,6 +866,15 @@
       if (now - lastSent < 15000) return;
       lastSent = now;
       const rid = activeRouteId();
+      // Реальная скорость от GPS-приёмника (м/с → км/ч) + сглаживание скользящим
+      // средним (эффект «варианта 3» — акселерометр-эквивалент: убирает рывки/скачки).
+      let gpsSpeedKmh = (pos && pos.coords && Number.isFinite(pos.coords.speed))
+        ? Math.round((pos.coords.speed * 3.6) * 10) / 10
+        : null;
+      if (gpsSpeedKmh != null) {
+        _gpsSpeedSmooth = (_gpsSpeedSmooth == null) ? gpsSpeedKmh : Math.round(((_gpsSpeedSmooth * 0.6) + (gpsSpeedKmh * 0.4)) * 10) / 10;
+        gpsSpeedKmh = _gpsSpeedSmooth;
+      }
       // Передаём активный маршрут нативному Android-трекеру (WebView-обёртка):
       // тот шлёт координаты на /api/drivers/location в фоне вместе с routeId.
       try {
@@ -878,7 +888,10 @@
           lat: pos.coords.latitude,
           lon: pos.coords.longitude,
           routeId: rid,
-          ts: Date.now(), // реальное время устройства водителя (не сервера)
+          speed: gpsSpeedKmh,
+          // Реальное время устройства водителя + поправка (мин), заданная в настройке
+          // устройства, — компенсирует рассинхрон часов ТСД/сканера.
+          ts: Date.now() + deviceTimeOffsetMs(),
         }),
       }).catch(() => {});
     };
@@ -890,6 +903,12 @@
   }
 
   // ------------- Helpers -------------
+  // Поправка времени устройства (мин), заданная в профиле: компенсирует рассинхрон
+  // часов ТСД/сканера — прибавляется к метке геолокации.
+  function deviceTimeOffsetMs() {
+    try { return (Number(localStorage.getItem("biotime_time_offset_min")) || 0) * 60000; } catch { return 0; }
+  }
+
   function dayKeyOf(ts) {
     const d = new Date(ts);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -1473,9 +1492,9 @@
     scanlogLoadDateField: $("scanlogLoadDateField"), scanlogUnloadDateField: $("scanlogUnloadDateField"),
     scanlogWaybillDateField: $("scanlogWaybillDateField"), scanlogDateWaybill: $("scanlogDateWaybill"),
     scanlogWbToggle: $("scanlogWbToggle"), scanlogWbAll: $("scanlogWbAll"), scanlogWbMissing: $("scanlogWbMissing"),
-    notfoundTable: $("notfoundTable"), nfSearch: $("nfSearch"), nfRefresh: $("nfRefresh"), nfdDate: $("nfdDate"),
+    notfoundTable: $("notfoundTable"), nfSearch: $("nfSearch"), nfRefresh: $("nfRefresh"), nfDeleteSelected: $("nfDeleteSelected"), nfdDate: $("nfdDate"),
     pageDelivery: $("page-delivery"), deliveryList: $("deliveryList"), deliveryDateFilter: $("deliveryDateFilter"), deliveryCount: $("deliveryCount"),
-    driverClientName: $("driverClientName"), driverClientAddress: $("driverClientAddress"), driverClientInn: $("driverClientInn"),
+    driverClientName: $("driverClientName"), driverClientAddress: $("driverClientAddress"), driverClientInn: $("driverClientInn"), driverClientLogin: $("driverClientLogin"),
     driverClientsForm: $("driverClientsForm"), driverClientsBlock: $("driverClientsBlock"), driverClientsToggle: $("driverClientsToggle"), driverRouteForm: $("driverRouteForm"),
     addDriverClientBtn: $("addDriverClientBtn"), driverClientsList: $("driverClientsList"), driverClientsCount: $("driverClientsCount"),
     bundleToggle: $("bundleToggle"), bundlePanel: $("bundlePanel"), bundlePickList: $("bundlePickList"),
@@ -1484,17 +1503,21 @@
     selfPickupChk: $("selfPickupChk"),
     routeClientSearch: $("routeClientSearch"), routeClientOptions: $("routeClientOptions"), routeClientSelected: $("routeClientSelected"),
     routeStepCount: $("routeStepCount"), routeSelectedCount: $("routeSelectedCount"), routeTotalPill: $("routeTotalPill"),
-    subtabContr: $("subtab-contr"), subtabRoute: $("subtab-route"), subtabRoutes: $("subtab-routes"), subtabReport: $("subtab-report"), subtabLocation: $("subtab-location"), subtabTracking: $("subtab-tracking"),
-    routesubContr: $("routesub-contr"), routesubRoute: $("routesub-route"), routesubRoutes: $("routesub-routes"), routesubReport: $("routesub-report"), routesubLocation: $("routesub-location"), routesubTracking: $("routesub-tracking"),
+    subtabContr: $("subtab-contr"), subtabRoute: $("subtab-route"), subtabRoutes: $("subtab-routes"), subtabReport: $("subtab-report"), subtabLocation: $("subtab-location"), subtab1cLog: $("subtab-1clog"), subtabTracking: $("subtab-tracking"),
+    routesubContr: $("routesub-contr"), routesubRoute: $("routesub-route"), routesubRoutes: $("routesub-routes"), routesubReport: $("routesub-report"), routesubLocation: $("routesub-location"), routesub1cLog: $("routesub-1clog"), routesubTracking: $("routesub-tracking"),
+    oneclogBody: $("oneclogBody"), oneclogStub: $("oneclogStub"),
     locationDriverSelect: $("locationDriverSelect"), locationDateFilter: $("locationDateFilter"), locationGoBtn: $("locationGoBtn"),
     locationInterval: $("locationInterval"),
     locationBody: $("locationBody"), locationTableWrap: $("locationTableWrap"), locationStub: $("locationStub"),
+    onecPingRow: $("onecPingRow"), onecPingBtn: $("onecPingBtn"), onecPingRes: $("onecPingRes"),
+    acctTzRow: $("acctTzRow"), acctTzOffset: $("acctTzOffset"),
     driverMap: $("driverMap"), driverMapCount: $("driverMapCount"), driverMapHint: $("driverMapHint"), driverTrackDate: $("driverTrackDate"), driverTrackStatus: $("driverTrackStatus"),
     motionDateFilter: $("motionDateFilter"),
     motionDrivers: $("motionDrivers"), motionKm: $("motionKm"), motionMove: $("motionMove"), motionLunch: $("motionLunch"),
     motionTable: $("motionTable"), motionBody: $("motionBody"),
     netBanner: $("netBanner"), netBannerText: $("netBannerText"), netRetry: $("netRetry"),
     saveDriverRouteBtn: $("saveDriverRouteBtn"), driverRoutesList: $("driverRoutesList"), driverRoutesCount: $("driverRoutesCount"),
+    fillFrom1CBtn: $("fillFrom1CBtn"),
     routeWaybillsBlock: $("routeWaybillsBlock"), routeWaybillsList: $("routeWaybillsList"),
     autoRouteBtn: $("autoRouteBtn"), routeBaseAddress: $("routeBaseAddress"), autoRouteStatus: $("autoRouteStatus"),
     driverRoutesDateFilter: $("driverRoutesDateFilter"),
@@ -1560,7 +1583,7 @@
     multRuleFormTitle: $("multRuleFormTitle"), multRuleList: $("multRuleList"),
     goToMultiplierTab: $("goToMultiplierTab"),
     waybillModal: $("waybillModal"), waybillTitle: $("waybillTitle"),
-    waybillClose: $("waybillClose"), waybillFile: $("waybillFile"), waybillRemoveMissing: $("waybillRemoveMissing"),
+    waybillClose: $("waybillClose"), waybillFile: $("waybillFile"), waybillRemoveMissing: $("waybillRemoveMissing"), waybillCleanBtn: $("waybillCleanBtn"),
     waybillStatus: $("waybillStatus"), waybillFlash: $("waybillFlash"), waybillArtInput: $("waybillArtInput"),
     waybillQtyInput: $("waybillQtyInput"),
     waybillScanBtn: $("waybillScanBtn"), waybillList: $("waybillList"),
@@ -3050,8 +3073,11 @@
       }
       function detailRow(e) {
         const miss = !!e.missing;
+        // Партстикер позиции — сокращённой формой, как в сборке (ведущие нули урезаем).
+        const ps = (e && e.partsticker) ? escapeHtml(shortPs(e.partsticker)) : "";
         return `<div class="wb-log-detail${miss ? " wb-missing" : ""}">
           <span class="wbl-time">${e.ts ? fmtDateTimeSec(e.ts) : ""}</span>
+          ${ps ? `<span class="wbl-ps">${ps}</span>` : ""}
           <span class="wbl-art">${escapeHtml(e.code || "—")}</span>
           <span class="wbl-name">${escapeHtml(e.name || "")}</span>
           <span class="wbl-qty">${miss ? "не найдено" : (Number(e.qty) || "—")}</span>
@@ -3073,9 +3099,6 @@
           <span class="wbl-who">Собирал: ${escapeHtml([...(meta.who || [])].filter(Boolean).join(", ") || "—")}</span>
         </div>`;
         html += `<div class="wb-log-boxes" id="wbox-${ci}"${clientOpen ? "" : " hidden"}>`;
-        // Сортировка боксов по НОМЕРУ, а не как строки: иначе «Бокс 10..19» встанут
-        // перед «Бокс 2» (строковая сортировка: "10" < "2" < "3" ...). В журнале
-        // боксы должны идти по порядку номеров (2,3,5,...,10,11,...).
         const boxKeys = [...boxes.keys()].sort((a, b) => {
           const na = parseInt(waybillBoxNumber(a), 10) || 0;
           const nb = parseInt(waybillBoxNumber(b), 10) || 0;
@@ -3084,8 +3107,6 @@
         let bi = 0;
         for (const box of boxKeys) {
           const dets = boxes.get(box);
-          // Одна и та же деталь (артикул), помеченная два и более раз, — в журнале
-          // показываем ОДНОЙ строкой, а не дублями.
           const uniq = [];
           const seenP = new Set();
           for (const e of dets) {
@@ -3110,8 +3131,6 @@
     const rows = entries.map((e) => {
       const isLoad = e.action === "load";
       const actionLabel = isLoad ? "Погрузка" : (e.action === "unload" ? "Выгрузка" : (e.action || "—"));
-      // Номер места и общее число мест: «1 из 2». Общее число приходит с сервера
-      // (totalPlaces); если его нет — показываем только номер места.
       const placeLabel = e.place != null
         ? (e.totalPlaces != null ? `${e.place} из ${e.totalPlaces}` : String(e.place))
         : "—";
@@ -3161,6 +3180,7 @@
       { key: "routes", btn: el.subtabRoutes, panel: el.routesubRoutes },
       { key: "report", btn: el.subtabReport, panel: el.routesubReport },
       { key: "location", btn: el.subtabLocation, panel: el.routesubLocation },
+      { key: "1clog", btn: el.subtab1cLog, panel: el.routesub1cLog },
       { key: "tracking", btn: el.subtabTracking, panel: el.routesubTracking },
     ];
     for (const t of tabs) {
@@ -3183,6 +3203,82 @@
       populateLocationDrivers();
       loadLocationReport();
     }
+    if (name === "1clog") loadOnecLog();
+  }
+
+  // Логи заборов из 1С (что и когда забирали).
+  // Сигнатура журнала: при опросе не перерисовываем список, если данные не
+  // изменились — иначе вручную раскрытая строка состава сворачивалась бы
+  // каждые 10 секунд автообновлением.
+  let onecLogLastSig = null;
+  async function loadOnecLog() {
+    if (!el.oneclogBody) return;
+    let rows = [];
+    try { const r = await api("/api/1c/log"); rows = (r && Array.isArray(r.rows)) ? r.rows : []; } catch { rows = []; }
+    const sig = JSON.stringify(rows.map((e) => [String(e && e.ts), String(e && e.inn), String(e && e.login), String(e && e.ok), String(e && e.number), String(e && e.posCount)]));
+    if (sig === onecLogLastSig) return; // данные не изменились — не трогаем DOM
+    onecLogLastSig = sig;
+    const body = el.oneclogBody;
+    body.innerHTML = "";
+    if (el.oneclogStub) el.oneclogStub.style.display = rows.length ? "none" : "";
+    if (!rows.length) return;
+    const frag = document.createDocumentFragment();
+    rows.slice().reverse().forEach((e) => {
+      const tr = document.createElement("tr");
+      const ok = !!(e && e.ok);
+      const time = e && e.ts ? new Date(Number(e.ts) + (3 * 3600000)).toISOString().slice(11, 19) : "—";
+      const result = ok ? ("Хорошо · " + ((e.reason) || "забрано")) : ("Пусто · " + ((e && e.reason) || "нет данных"));
+      const items = (e && Array.isArray(e.items) && e.items.length) ? e.items : [];
+      // Успешная запись с составом — клик раскрывает список позиций.
+      if (items.length) {
+        tr.style.cursor = "pointer";
+        tr.addEventListener("click", () => {
+          const sub = tr.nextElementSibling;
+          if (sub) sub.hidden = !sub.hidden;
+        });
+      }
+      tr.innerHTML =
+        `<td>${escapeHtml(time)}</td>` +
+        `<td>${escapeHtml((e && e.inn) || "—")}</td>` +
+        `<td>${escapeHtml((e && e.login) || "—")}</td>` +
+        `<td>${escapeHtml((e && e.number) || "—")}</td>` +
+        `<td>${escapeHtml(String((e && e.posCount) != null ? e.posCount : "—"))}</td>` +
+        `<td>${escapeHtml(result)}</td>` +
+        `<td style="width:38px;text-align:center;vertical-align:middle;padding:4px 6px"><button type="button" class="icon-btn" data-1clog-del="${escapeHtml(String((e && e.id) || ""))}" title="Удалить из лога (позволит забрать накладную повторно)">✕</button></td>`;
+      frag.appendChild(tr);
+      const sub = document.createElement("tr");
+      sub.hidden = true;
+      const itemRows = items.map((it) =>
+        `<tr>
+           <td style="padding:3px 10px;white-space:nowrap">${escapeHtml(shortPs((it && it.partsticker) || "") || "—")}</td>
+           <td style="padding:3px 10px;white-space:nowrap">${escapeHtml(String((it && it.art) || ""))}</td>
+           <td style="padding:3px 10px">${escapeHtml(String((it && it.name) || ""))}</td>
+           <td style="padding:3px 10px;text-align:right;white-space:nowrap">${escapeHtml(String((it && it.qty) != null ? it.qty : ""))} шт</td>
+         </tr>`
+      ).join("");
+      sub.innerHTML = `<td colspan="7"><table class="oneclog-items" style="width:100%;border-collapse:collapse;font-size:12px;color:var(--text-2,#aaa)">
+        <thead><tr style="font-size:10px;color:#777;text-transform:uppercase;letter-spacing:.04em">
+          <th style="padding:3px 10px;text-align:left">Партстикер</th>
+          <th style="padding:3px 10px;text-align:left">Артикул</th>
+          <th style="padding:3px 10px;text-align:left">Наименование</th>
+          <th style="padding:3px 10px;text-align:right">Кол-во</th>
+        </tr></thead>
+        <tbody>${itemRows || ""}</tbody>
+      </table></td>`;
+      frag.appendChild(sub);
+    });
+    body.appendChild(frag);
+    // Удаление записи из журнала (снимает защиту от дублей — можно забрать заново).
+    body.querySelectorAll("[data-1clog-del]").forEach((btn) => {
+      btn.addEventListener("click", async (ev) => {
+        ev.stopPropagation();
+        const id = btn.getAttribute("data-1clog-del");
+        if (!id) return;
+        try { await api("/api/1c/log/delete", { method: "POST", body: JSON.stringify({ id }) }); } catch { /* ignore */ }
+        onecLogLastSig = null;
+        loadOnecLog();
+      });
+    });
   }
 
   // Наполняет селект «Водитель» в отчёте «Местоположение» (из state.staff).
@@ -3247,13 +3343,11 @@
     const frag = document.createDocumentFragment();
     rows.forEach((r) => {
       const tr = document.createElement("tr");
-      const coords = (r.lat != null && r.lon != null)
-        ? `${Number(r.lat).toFixed(5)}, ${Number(r.lon).toFixed(5)}`
-        : "—";
+      const speedTxt = (r.speed != null) ? `${r.speed} км/ч` : "—";
       tr.innerHTML =
         `<td>${escapeHtml(r.time || "—")}</td>` +
         `<td>${r.address ? escapeHtml(r.address) : "—"}</td>` +
-        `<td>${escapeHtml(coords)}</td>`;
+        `<td>${escapeHtml(speedTxt)}</td>`;
       frag.appendChild(tr);
     });
     body.appendChild(frag);
@@ -3266,93 +3360,52 @@
   let driverMap = null;
   let driverMapScript = null;
   let driverMapTimer = null;
-  // Предзагрузка API Яндекс.Карт: config + обещание загрузки скрипта. Запускаем
-  // заранее (при старте для тех, кому доступна карта), чтобы вкладка «Трекинг»
-  // открывалась сразу, а не ждала скачивания API с серверов Яндекса.
   let yandexPreload = null;
   async function ensureYandexPreloaded() {
     if (yandexPreload && yandexPreload.promise) return;
     let cfg = {};
     try { cfg = await api("/api/maps/config"); } catch { /* конфиг недоступен */ }
     const key = (cfg && cfg.yandexKey) || "";
-    // loadYandexMaps отклоняет промис, если ключа нет — это ловится в loadDriverMap.
     const promise = loadYandexMaps(key);
     yandexPreload = { cfg, promise };
-    // Не допускаем unhandled-rejection на фоне, если предзагрузку никто не ждёт.
     promise.catch(() => {});
   }
   function preloadYandexMaps() { ensureYandexPreloaded().catch(() => {}); }
-  // Показываем/фокусируем камеру на всех точках ТОЛЬКО при первой загрузке.
-  // При последующих автообновлениях не двигаем камеру, чтобы не «сбрасывать»
-  // зум/позицию, которые выбрал пользователь (иначе увеличение откатывается
-  // на мировой масштаб у каждого тика автообновления).
   let driverMapFitted = false;
-  // ---- Инкрементальная отрисовка (для скорости) ----
-  // Метки живых водителей (зелёные) перерисовываются «на лету» — без полного
-  // removeAll() карты, который дорого стоит при множестве точек. Статичный слой
-  // (базы, клиенты, полилинии пройденного пути) строится заново только когда
-  // реально изменился набор/статус маршрутов (сигнатура) или прошёл таймер.
   let driverLiveMarks = {};      // id водителя -> ymaps.Placemark (зелёная метка)
-  let driverRoutesSig = "";      // сигнатура последнего отрисованного набора маршрутов
-  let driverRoutesReady = false; // статичный слой построен хотя бы раз
-  let driverRoutesDueAt = 0;     // когда снова перезагрузить маршруты (для смены статусов)
+  let driverRoutesSig = "";
+  let driverRoutesReady = false;
+  let driverRoutesDueAt = 0;
   let driverRoutesLoading = false;
-  // ---- Слой реального GPS-следа (обновляется редко, отдельно от позиций) ----
   let driverTrackCollection = null;   // GeoObjectCollection следа; создаётся с картой
-  let driverTracksDueAt = 0;          // когда снова перезагрузить треки
-  let driverTracks = {};              // id водителя -> [[lat, lon], ...]
-  let driverTracksSnapped = {};       // id водителя -> true, если трек привязан к дорогам
-
-  // ---- Слой всех клиентов справочника (серые маркеры) ----
-  // Вся география клиентов показывается на карте, чтобы видеть, где они находятся,
-  // даже если клиент не попал в маршрут выбранного дня. Обновляется редко, отдельно
-  // от позиций водителей, по тому же принципу, что маршруты (не чаще раза в 30 с).
+  let driverTracksDueAt = 0;
+  let driverTracks = {};
+  let driverTracksSnapped = {};
   let driverClientMarks = {};         // id клиента -> ymaps.Placemark (серый маркер)
-  let driverClientsDueAt = 0;         // когда снова перезагрузить справочник клиентов
+  let driverClientsDueAt = 0;
   let driverClientsLoading = false;
-  let driverClientSig = "";           // сигнатура набора клиентов (id+координаты)
-  let driverClientClusterer = null;   // ymaps.Clusterer — группирует маркеры клиентов, ускоряя карту
-
-  // Метки на карте трекинга используем простыми встроенными пресетами точек
-  // (~точки того же цвета, что и раньше): они легче и быстрее кастомных PNG —
-  // при многих маркерах карту не «тормозит». Водители — зелёные точки,
-  // клиенты — красные точки.
+  let driverClientSig = "";
+  let driverClientClusterer = null;   // ymaps.Clusterer — группирует маркеры клиентов
 
   function loadYandexMaps(apikey) {
     return new Promise((resolve, reject) => {
-      // Экранируем повторные срабатывания (onload + таймер), чтобы продемонстрировать
-      // только одну причину завершения.
       let settled = false;
       const done = (fn, v) => { if (!settled) { settled = true; fn(v); } };
-
       if (window.ymaps && window.ymaps.Map) { resolve(window.ymaps); return; }
-
       if (driverMapScript) {
-        // Скрипт уже начал грузиться в этом заходе — ждём появления API.
         const t = setInterval(() => {
           if (window.ymaps && window.ymaps.Map) { clearInterval(t); resolve(window.ymaps); }
         }, 250);
         setTimeout(() => { clearInterval(t); done(reject, new Error("Карта не загрузилась за отведённое время")); }, 25000);
         return;
       }
-
-      if (!apikey) {
-        done(reject, new Error("Нет ключа Яндекс.Карт — карта недоступна"));
-        return;
-      }
-
+      if (!apikey) { done(reject, new Error("Нет ключа Яндекс.Карт — карта недоступна")); return; }
       driverMapScript = document.createElement("script");
-      driverMapScript.src = "https://api-maps.yandex.ru/2.1/?apikey=" +
-        encodeURIComponent(apikey) + "&lang=ru_RU";
-      // Скрипт грузится (loader отдаётся 200) даже если ключ не разрешает домен
-      // приложения — при этом window.ymaps появляется, но ymaps.ready не срабатывает,
-      // и карта «вечно загружается». Ловим этот случай явным тайм-аутом и
-      // подсказкой про разрешённые домены ключа.
+      driverMapScript.src = "https://api-maps.yandex.ru/2.1/?apikey=" + encodeURIComponent(apikey) + "&lang=ru_RU";
       driverMapScript.onload = () => {
         if (window.ymaps && window.ymaps.ready) {
           const tm = setTimeout(() => {
-            done(reject, new Error("Яндекс.Карты не инициализировались (похоже, ключ карт не разрешает этот домен: " +
-              window.location.hostname + ")"));
+            done(reject, new Error("Яндекс.Карты не инициализировались (похоже, ключ карт не разрешает этот домен: " + window.location.hostname + ")"));
           }, 25000);
           window.ymaps.ready(() => { clearTimeout(tm); done(resolve, window.ymaps); });
         } else {
@@ -3368,21 +3421,19 @@
     if (!el.driverMap || !el.routesubTracking || el.routesubTracking.hidden) return;
     if (el.driverMapHint) el.driverMapHint.textContent = "Загрузка карты…";
     try {
-      // Дожидаемся предзагруженного API (предзагрузка стартовала ещё при запуске
-      // приложения) либо, если её не было, инициализируемся прямо сейчас. Так
-      // карта показывается, как только API уже скачан, а не после ожидания сети.
       await ensureYandexPreloaded();
       const ymaps = await yandexPreload.promise;
       if (!driverMap) {
+        // Контейнер мог быть нулевой высоты в момент инициализации (вкладка ещё
+        // не дорисовала layout) — тогда Яндекс.Карты не запрашивают тайлы и карта
+        // пустая. Назначаем высоту явно, если она ещё 0.
+        if (el.driverMap && el.driverMap.clientHeight <= 0) el.driverMap.style.height = "460px";
         driverMap = new ymaps.Map(el.driverMap, {
           center: [55.75, 37.62], zoom: 10,
           controls: ["zoomControl", "fullscreenControl"],
         });
-        // Отдельный слой для GPS-следа: рисуется редко, чтобы не тормозить карту.
         driverTrackCollection = new ymaps.GeoObjectCollection();
         driverMap.geoObjects.add(driverTrackCollection);
-        // Кластерер для маркеров клиентов: при большом числе точек группирует их
-        // в кластеры и тем самым ускоряет карту (меньше объектов рендерится).
         driverClientClusterer = new ymaps.Clusterer({
           preset: "islands#invertedGreyClusterIcons",
           clusterDisableClickZoom: false,
@@ -3392,17 +3443,14 @@
         driverMap.geoObjects.add(driverClientClusterer);
         driverTracksDueAt = 0;
       }
-      // Контейнер мог быть нулевого размера в момент создания карты (вкладка
-      // «Трекинг» изначально скрыта). Яндекс.Карты в таком случае запоминают
-      // размер 0×0, не запрашивают тайлы области и показывают серую карту
-      // «Для этого участка местности нет данных». Явно просим карту пересчитать
-      // размер и подгрузить тайлы сейчас, а не ждать следующего таймера.
       try { driverMap.container.fitToViewport(); } catch { /* ignore */ }
       if (el.driverMapHint) el.driverMapHint.textContent = "";
-      await refreshDriverMap(ymaps);
+      try { await refreshDriverMap(ymaps); } catch { /* не роняем приёмку карты у маркеров */ }
       if (!driverMapTimer) {
         driverMapTimer = setInterval(() => {
-          if (el.routesubTracking && !el.routesubTracking.hidden) refreshDriverMap(ymaps);
+          if (el.routesubTracking && !el.routesubTracking.hidden) {
+            try { refreshDriverMap(ymaps); } catch { /* ignore */ }
+          }
         }, 10000);
       }
     } catch (e) {
@@ -3482,8 +3530,8 @@
     if (!driverMapFitted) {
       const pts = [];
       Object.keys(driverLiveMarks).forEach((id) => {
-        const g = driverLiveMarks[id] && driverLiveMarks[id].geometry;
-        if (g) pts.push(g.getCoordinates());
+        const m = driverLiveMarks[id];
+        if (m) { const g = m && m.geometry; if (g) pts.push(g.getCoordinates()); }
       });
       if (routes) {
         routes.forEach((route) => {
@@ -3527,7 +3575,6 @@
       const hint = (c.bundleAddress && c.bundleAddress !== c.address)
         ? `${c.client} · ${c.bundleAddress}`
         : (c.client || "Клиент");
-      // Пояснение (балун) при клике: название клиента + адрес.
       const addr = (c.bundleAddress || c.address || "").trim();
       const balloon = `<b>${escapeHtml(c.client || "Клиент")}</b>${addr ? `<br>${escapeHtml(addr)}` : ""}`;
       const mark = driverClientMarks[id];
@@ -3539,38 +3586,22 @@
         try { mark.properties.set("hintContent", hint); } catch { /* ignore */ }
         try { mark.properties.set("balloonContentBody", balloon); } catch { /* ignore */ }
       } else {
-        const m = new ymaps.Placemark(
-          [c.lat, c.lon],
-          { hintContent: hint, balloonContentBody: balloon },
-          { preset: "islands#redCircleDotIcon" }
+        driverClientMarks[id] = new ymaps.Placemark(
+          [c.lat, c.lon], { hintContent: hint, balloonContentBody: balloon }, { preset: "islands#redCircleDotIcon" }
         );
-        driverClientMarks[id] = m;
       }
     });
     Object.keys(driverClientMarks).forEach((id) => {
-      if (!seen.has(id) && driverClientMarks[id]) {
-        delete driverClientMarks[id];
-      }
+      if (!seen.has(id) && driverClientMarks[id]) { delete driverClientMarks[id]; }
     });
-    // Сам маркеры в карту не добавляем — их держит кластерер. Пересобираем его,
-    // ТОЛЬКО когда набор/позиции клиентов изменились (иначе на каждом 30-секундном
-    // тике пересборка тысячи маркеров впустую тормозила бы раздел).
-    const newSig = Object.keys(driverClientMarks)
-      .sort()
-      .map((id) => {
-        const m = driverClientMarks[id];
-        const g = m && m.geometry ? m.geometry.getCoordinates() : null;
-        return id + ":" + (g ? g[0].toFixed(4) + "," + g[1].toFixed(4) : "");
-      })
-      .join("|");
+    const newSig = Object.keys(driverClientMarks).sort().map((id) => {
+      const m = driverClientMarks[id];
+      const g = m && m.geometry ? m.geometry.getCoordinates() : null;
+      return id + ":" + (g ? g[0].toFixed(4) + "," + g[1].toFixed(4) : "");
+    }).join("|");
     if (newSig !== driverClientSig) {
       driverClientSig = newSig;
-      if (driverClientClusterer) {
-      try {
-        driverClientClusterer.removeAll();
-        driverClientClusterer.add(Object.values(driverClientMarks));
-      } catch { /* ignore */ }
-      }
+      if (driverClientClusterer) { try { driverClientClusterer.removeAll(); driverClientClusterer.add(Object.values(driverClientMarks)); } catch { /* ignore */ } }
     }
   }
 
@@ -3580,23 +3611,17 @@
   function drawDriverRouteLayers(ymaps, routes) {
     if (!driverMap) return;
     driverMap.geoObjects.removeAll();
-    // Возвращаем на карту слой GPS-следа (removeAll снимает и его).
     if (driverTrackCollection) driverMap.geoObjects.add(driverTrackCollection);
-    // Возвращаем на карту живые метки водителей (их мы ведём инкрементально).
     Object.keys(driverLiveMarks).forEach((id) => {
       if (driverLiveMarks[id]) driverMap.geoObjects.add(driverLiveMarks[id]);
     });
-    // Возвращаем на карту кластерер маркеров клиентов (removeAll снимает и его).
     if (driverClientClusterer) driverMap.geoObjects.add(driverClientClusterer);
     routes.forEach((route) => {
       const base = route.progress;
       if (base && Number.isFinite(base.baseLat) && Number.isFinite(base.baseLon)) {
         driverMap.geoObjects.add(new ymaps.Placemark(
           [base.baseLat, base.baseLon],
-          {
-            hintContent: "База · " + (route.driverName || ""),
-            balloonContentBody: `<b>База</b>${route.driverName ? `<br>${escapeHtml(route.driverName)}` : ""}`,
-          },
+          { hintContent: "База · " + (route.driverName || ""), balloonContentBody: `<b>База</b>${route.driverName ? `<br>${escapeHtml(route.driverName)}` : ""}` },
           { preset: "islands#darkBlueDotIcon" }
         ));
       }
@@ -3605,9 +3630,7 @@
           const addr = (c.address || "").trim();
           const balloon = `<b>${escapeHtml(c.client || "Точка")}</b>${addr ? `<br>${escapeHtml(addr)}` : ""}`;
           driverMap.geoObjects.add(new ymaps.Placemark(
-            [c.lat, c.lon],
-            { hintContent: c.client || "Точка", balloonContentBody: balloon },
-            { preset: "islands#blueDotIcon" }
+            [c.lat, c.lon], { hintContent: c.client || "Точка", balloonContentBody: balloon }, { preset: "islands#blueDotIcon" }
           ));
         }
       });
@@ -3623,8 +3646,9 @@
       if (!Number.isFinite(d.lat) || !Number.isFinite(d.lon)) return;
       seen.add(d.id);
       const label = (d.routeId && routeNameById[d.routeId]) ? ` · ${routeNameById[d.routeId]}` : "";
-      const hint = (d.name || "Водитель") + " · на карте" + label;
-      const balloon = `<b>${escapeHtml(d.name || "Водитель")}</b><br>на карте${label ? escapeHtml(label) : ""}`;
+      const spd = (d.speed != null && Number.isFinite(d.speed)) ? ` · ${Number(d.speed).toFixed(0)} км/ч` : "";
+      const hint = (d.name || "Водитель") + " · на карте" + label + spd;
+      const balloon = `<b>${escapeHtml(d.name || "Водитель")}</b><br>на карте${label ? escapeHtml(label) : ""}${escapeHtml(spd)}`;
       let m = driverLiveMarks[d.id];
       if (m) {
         try { m.geometry.setCoordinates([d.lat, d.lon]); } catch { /* ignore */ }
@@ -3683,11 +3707,16 @@
   // GPS-ломанные, так и дорожные) полностью убраны с карты «Трекинг»: карта
   // показывает только живые метки водителей и точки клиентов. Данные треков
   // по-прежнему грузятся (нужны для отчёта о пробеге), но не отрисовываются.
+  // Рисует маршрут водителя ПО ДОРОГАМ (как в навигаторе). Сервер уже возвращает
+  // snapped-трек (map-matching по дорожной сети, /api/drivers/tracks/snapped) —
+  // рисуем именно его, координаты идут по дорогам и дают ровную линию. Если по
+  // какой-то причине snapped отсутствует — рисуем сырые координаты (ломаной).
   function drawDriverTracks(ymaps) {
     if (!driverMap || !driverTrackCollection) return;
     const coll = driverTrackCollection;
     try { coll.removeAll(); } catch { /* ignore */ }
-    // Полилинии не добавляются — см. комментарий выше.
+    // Линии (дорожные «полосы» движения) по запросу больше не рисуем —
+    // коллекцию очищаем, чтобы старые линии не оставались на карте.
   }
 
   // ---- Дашборд движения водителей (подвкладка «Отчёт» маршрутизации) ----
@@ -4892,14 +4921,21 @@
       .filter((it) => String(it.box) === String(box));
     if (!el.boxDetailsList || !el.boxDetailsModal) return;
     if (el.boxDetailsTitle) el.boxDetailsTitle.textContent = "Содержимое бокса · " + waybillBoxNumber(box);
-    el.boxDetailsList.innerHTML = items.length
-      ? items.map((it) => `
+    const head = items.length
+      ? `<div class="waybill-box-detail wbd-head">
+          <span class="wbd-ps">Партстикер</span>
+          <span class="wbd-art">Артикул</span>
+          <span class="wbd-name">Наименование</span>
+          <span class="wbd-qty">Кол-во</span>
+        </div>`
+      : "";
+    el.boxDetailsList.innerHTML = (head + (items.length ? items.map((it) => `
           <div class="waybill-box-detail">
+            <span class="wbd-ps" style="color:#999;font-size:11px;margin-right:8px">${it.partsticker ? escapeHtml(shortPs(it.partsticker)) : "—"}</span>
             <span class="wbd-art">${escapeHtml(it.art)}</span>
             <span class="wbd-name">${escapeHtml(it.name || "")}</span>
             <span class="wbd-qty">${Number(it.scanned) || 0}/${Number(it.qty) || 0}</span>
-          </div>`).join("")
-      : '<div class="empty-hint">В боксе нет деталей</div>';
+          </div>`).join("") : '<div class="empty-hint">В боксе нет деталей</div>'));
     try { el.boxDetailsModal.showModal(); } catch (_) { /* уже открыта */ }
   }
   async function deleteWaybillBox() {
@@ -4989,6 +5025,10 @@
     // Кнопка «Убрать «не найдено»» — только админ/модератор; доступ в накладной.
     if (el.waybillRemoveMissing) {
       el.waybillRemoveMissing.hidden = !(state.isAdmin || state.isModerator === true);
+    }
+    // Кнопка «Удалить не собранные» — только администратор.
+    if (el.waybillCleanBtn) {
+      el.waybillCleanBtn.hidden = !(state.isAdmin === true);
     }
     setWaybillStatus(wb ? `Загружено позиций: ${wb.items.length}` : "Накладная не загружена на этого клиента");
     // Можно добавить ещё одну расходную накладную: она ДОПОЛНИТ единый список
@@ -5100,13 +5140,21 @@
       const mark = miss
         ? `<span class="waybill-mark">не найдено${missQty > 0 ? " " + missQty : ""}</span>`
         : (done ? `<span class="waybill-mark">${it.box ? "бокс " + escapeHtml(String(it.box).slice(0, 18)) : "собрано"}</span>` : "");
-      return `<div class="${cls}" data-waybill-index="${i}" data-waybill-art="${escapeHtml(it.art)}">
-        <span class="waybill-check" data-wb-check="${i}">${sel ? "☑" : "☐"}</span>
-        <div class="waybill-item-art">${escapeHtml(it.art)}</div>
-        <div class="waybill-item-name">${escapeHtml(it.name || "")}</div>
-        <div class="waybill-item-qty" title="Всего: ${qtyN} шт · собрано: ${scanned}${missQty ? " · не найдено: " + missQty : ""}">${scanned} из ${qtyN} шт</div>
-        ${mark}
-      </div>`;
+      // Очистка наименования от ведущего артикула (бывает в данных / из xlsx).
+      const cleanName = (nm, art) => {
+        let n = String(nm || "");
+        const a = String(art || "");
+        if (a && n.toLowerCase().startsWith(a.toLowerCase())) n = n.slice(a.length).replace(/\s+$/, "").trim();
+        return n || String(nm || "");
+      };
+      return `<tr class="${cls}" data-waybill-index="${i}" data-waybill-art="${escapeHtml(it.art)}">
+        <td class="waybill-check" data-wb-check="${i}">${sel ? "☑" : "☐"}</td>
+        <td class="waybill-item-ps">${it.partsticker ? escapeHtml(shortPs(it.partsticker)) : "—"}</td>
+        <td class="waybill-item-art">${escapeHtml(it.art)}</td>
+        <td class="waybill-item-name">${escapeHtml(cleanName(it.name, it.art))}</td>
+        <td class="waybill-item-qty" title="Всего: ${qtyN} шт · собрано: ${scanned}${missQty ? " · не найдено: " + missQty : ""}">${scanned} из ${qtyN} шт</td>
+        <td class="waybill-markcell">${mark}</td>
+      </tr>`;
     };
     // Сортируем для удобства: непринятые (не собранные) детали сверху, принятые снизу.
     // Порядок внутри групп сохраняется; data-waybill-index остаётся исходным индексом,
@@ -5124,6 +5172,16 @@
       };
       return g1(a.it) - g1(b.it);
     });
+    // Настоящая таблица: каждая колонка — отдельная ячейка.
+    const listHeader = `<table class="waybill-table"><thead><tr>
+      <th class="th-check"></th>
+      <th class="th-ps">Партстикер</th>
+      <th class="th-art">Артикул</th>
+      <th class="th-name">Наименование</th>
+      <th class="th-qty">Кол-во</th>
+      <th class="th-mark"></th>
+    </tr></thead><tbody>`;
+    const listFooter = `</tbody></table>`;
     if (waybillTcd) {
       // На ТСД вместо прокручиваемого списка — кнопка, открывающая модалку со списком.
       const doneCount = wb.items.filter((x) => ((Number(x.scanned) || 0) + (Number(x.missingQty) || 0)) >= (Number(x.qty) || 0)).length;
@@ -5134,11 +5192,11 @@
       // его содержимое реально изменилось — не тратим ресурсы ТСД на перерисовку
       // каждого такта, когда окно закрыто или данные те же.
       if (el.waybillListModal && el.waybillListModal.open && el.waybillListModalBody) {
-        const html = rows.map((r) => itemHtml(r.it, r.i)).join("");
+        const html = listHeader + rows.map((r) => itemHtml(r.it, r.i)).join("") + listFooter;
         if (html !== waybillListModalHtml) { waybillListModalHtml = html; el.waybillListModalBody.innerHTML = html; }
       }
     } else {
-      el.waybillList.innerHTML = rows.map((r) => itemHtml(r.it, r.i)).join("");
+      el.waybillList.innerHTML = listHeader + rows.map((r) => itemHtml(r.it, r.i)).join("") + listFooter;
       if (el.waybillListModalBody) el.waybillListModalBody.innerHTML = "";
     }
   }
@@ -5314,6 +5372,28 @@
         artRows = (waybillLocal.items || []).filter((it) => waybillNormArt(it.art) === waybillNormArt(res));
       }
     }
+    // Комбинированная сборка: если сканированный код — партстикер (id_partstiker),
+    // принимаем сразу «зашитое» в него количество (partQty), без ввода количества.
+    let partScanQty = null;
+    if (!partScanQty) {
+      // «Числовое ядро» партисткера: убираем мусор сканера (пробелы, переводы строк,
+      // лишние символы) и ведущие нули — 000000000020217/1 и 20217/1 совпадают.
+      const psCore = (s) => {
+        const p = String(s == null ? "" : s).replace(/[^\d\/]/g, "");
+        const i = p.indexOf("/");
+        const head = (i > 0 ? p.slice(0, i) : p).replace(/^0+/, "");
+        return (i > 0 ? head + "/" + p.slice(i + 1) : head);
+      };
+      const psRows = (waybillLocal.items || []).filter(
+        (it) => it.partsticker && psCore(it.partsticker) === psCore(val)
+      );
+      if (psRows.length) {
+        artRows = psRows;
+        usedArt = String(psRows[0].partsticker || val); // канонический код — сервер найдёт точно
+        const pq = Number(psRows[0].partQty);
+        partScanQty = pq > 0 ? pq : null;
+      }
+    }
     if (!artRows.length) {
       setWaybillStatus("ПЛОХО · деталь " + val + " не найдена в накладной");
       playScanFeedback(false, "Не найдено");
@@ -5325,11 +5405,54 @@
     let it0 = artRows.find((it) => (Number(it.scanned) || 0) < (Number(it.qty) || 0) && !it.missing);
     if (!it0) it0 = artRows.find((it) => (Number(it.scanned) || 0) < (Number(it.qty) || 0));
     if (!it0) {
+      // Деталь УЖЕ собрана (например, привязана к Боксу А). Если выбран активный
+      // бокс (сканировали Бокс Б, голос «Бокс выбран») — перепривязываем деталь
+      // в новый бокс: серверная rebound-ветка перезаписывает it.box. Голос
+      // «Деталь перемещена». Без активного бокса — прежнее «Уже отсканировано».
+      if (artRows.length && waybillBox) {
+        const targetArt = String(artRows[0].art || val);
+        try {
+          const r = await api("/api/routes/" + encodeURIComponent(waybillRouteId) + "/waybill/scan", {
+            method: "POST",
+            body: JSON.stringify({ clientIndex: waybillClientIdx, art: targetArt, qty: 0, box: waybillBox }),
+          });
+          if (r && r.ok && r.rebound) {
+            const newBox = String((r.item && r.item.box) || waybillBox);
+            artRows.forEach((x) => { x.box = newBox; });
+            logBarcodeScan("detail", val, true, "перемещена");
+            setWaybillStatus(`Перемещена · ${usedArt || targetArt} · в ${waybillBoxName(newBox)}`);
+            playScanFeedback(true, "Деталь перемещена");
+            renderWaybill();
+            focusWaybillScan();
+            refreshWaybillFromServer();
+            return;
+          }
+        } catch (e) { /* сервер не ответил — ниже сообщение «уже отсканировано» */ }
+      }
       setWaybillStatus("Уже отсканировано · " + val);
       playScanFeedback(false, "Уже отсканировано");
       return;
     }
     const remBefore = it0 ? Math.max(0, (Number(it0.qty) || 0) - (Number(it0.scanned) || 0)) : 0;
+    // Партстикер: подтверждаем количество (предзаполнен «зашитый» volume) — оператор
+    // может поправить, если по факту деталей меньше/больше. У разных партстикеров
+    // одного артикула — своё количество (каждому своя строка со своим partQty).
+    if (partScanQty && !qtyOverride) {
+      const defTake = Math.min(Number(partScanQty) || 1, remBefore);
+      if (remBefore > 1) {
+        const take = await askWaybillQty(remBefore, defTake);
+        if (take == null) {
+          setWaybillStatus("Отменено");
+          playScanFeedback(false, "Отменено");
+          focusWaybillScan();
+          renderWaybill();
+          return;
+        }
+        partScanQty = Math.max(1, take);
+      } else {
+        partScanQty = Math.max(1, defTake);
+      }
+    }
     // Без активного бокса деталь НЕ засчитываем: оператор должен сначала отсканировать
     // бокс (голосом «Бокс выбран»), затем деталь. Если бокс не выбран или «слетел» —
     // жёстко не считаем сканирование и просим пересканировать бокс.
@@ -5348,9 +5471,11 @@
     // Количественная деталь (осталось больше 1 единицы): голосом просим «Введите
     // количество» и открываем быструю модалку ввода. Если кол-во передано явно
     // (кнопка «Собрать», повторный ввод) — спрашивать не нужно.
-    let scanQty = qtyOverride && Number(qtyOverride) > 0
-      ? Math.max(1, Number(qtyOverride))
-      : Math.max(1, Number(el.waybillQtyInput && el.waybillQtyInput.value) || 1);
+    let scanQty = partScanQty && Number(partScanQty) > 0
+      ? Math.max(1, Number(partScanQty))
+      : (qtyOverride && Number(qtyOverride) > 0
+        ? Math.max(1, Number(qtyOverride))
+        : Math.max(1, Number(el.waybillQtyInput && el.waybillQtyInput.value) || 1));
     // Если засчитываемое количество больше остатка к приёмке — не засчитываем:
     // голосом «Фиаско», строка не зеленеет до ввода верного количества.
     if (scanQty > remBefore) {
@@ -5364,7 +5489,7 @@
     // (многоштучная деталь, осталось > 1): иначе введённое N превращалось бы в N+1 /
     // «остаток N-1 → Фиаско». При запросе количества сервер засчитает ровно введённое
     // число (qtyresolve), поэтому локально `scanned` не трогаем.
-    const willAskQty = !qtyOverride && remBefore > 1;
+    const willAskQty = !qtyOverride && !partScanQty && remBefore > 1;
     if (it0 && !willAskQty) it0.scanned = Math.min(Number(it0.scanned || 0) + scanQty, Number(it0.qty) || 1);
     const clamped = remBefore > 0 && scanQty > remBefore;
     if (it0 && activeBox) it0.box = activeBox;
@@ -5377,7 +5502,7 @@
       try {
         const rr = await api("/api/routes/" + encodeURIComponent(waybillRouteId) + "/waybill/qtyrequest", {
           method: "POST",
-          body: JSON.stringify({ clientIndex: waybillClientIdx, art: usedArt }),
+          body: JSON.stringify({ clientIndex: waybillClientIdx, art: usedArt, box: activeBox || "" }),
         });
         // Сразу кладём подтверждённый запрос в локальное состояние и открываем общую
         // модалку ввода количества — БЕЗ ожидания следующего опроса/SSE (раньше на
@@ -5418,21 +5543,25 @@
           ? ` · оставалось ${remBefore} — засчитано ${remBefore}`
           : ` · осталось ${r.left} · готово ${done}/${waybillLocal.items.length}`;
         setWaybillStatus(`ХОРОШО · ${val}${tail}`);
-        logBarcodeScan("detail", val, true, clamped ? "засчитано полностью" : "успешно");
+        logBarcodeScan("detail", val, true, clamped ? "засчитано полностью" : "успешно", it0 && it0.partsticker);
         renderWaybill();
         loadShipments();
+        // Перечитываем накладную с сервера — чтобы при нескольких строках одного
+        // артикула локальный остаток и выбор следующей (недособранной) строки были
+        // всегда точными, а не считались по устаревшей копии первой строки.
+        refreshWaybillFromServer();
       } else {
         if (it0) it0.scanned = Math.max(0, Number(it0.scanned || 0) - scanQty);
         setWaybillStatus("ПЛОХО · " + ((r && r.error) || "Деталь не принята"));
         playScanFeedback(false, "Плохо");
-        logBarcodeScan("detail", val, false, (r && r.error) ? String(r.error) : "деталь не принята");
+        logBarcodeScan("detail", val, false, (r && r.error) ? String(r.error) : "деталь не принята", it0 && it0.partsticker);
         renderWaybill();
       }
     } catch (e) {
       if (it0) it0.scanned = Math.max(0, Number(it0.scanned || 0) - scanQty);
       setWaybillStatus("ПЛОХО · " + ((e && e.message) || "Ошибка приёмки детали"));
       playScanFeedback(false, "Плохо");
-      logBarcodeScan("detail", val, false, (e && e.message) ? String(e.message) : "ошибка приёмки детали");
+      logBarcodeScan("detail", val, false, (e && e.message) ? String(e.message) : "ошибка приёмки детали", it0 && it0.partsticker);
       renderWaybill();
     }
   }
@@ -5481,6 +5610,13 @@
     const tr = t.replace(/[АаВвСсЕеКкМмНнОоРрТтУуХхІі]/g, (c) => RU_LOOK[c] || c);
     return tr.replace(/[\s_.\-,:/;\\]/g, "");
   }
+  // Сокращённая форма партстикера/артикула: 000000000020217/4 -> 20217/4.
+  function shortPs(s) {
+    const p = String(s == null ? "" : s);
+    const i = p.indexOf("/");
+    const head = (i > 0 ? p.slice(0, i) : p).replace(/^0+/, "");
+    return (i > 0 ? head + p.slice(i) : head);
+  }
   // Возвращает артикул накладной, который содержится в очищенном стикере КАК ЕДИНАЯ
   // строка (артикул не разбиваем — ищем его целиком, а мусор вокруг отбрасываем).
   // Пример: стикер «12345AG» содержит артикул «12345» → возвращаем «12345».
@@ -5507,7 +5643,7 @@
   // Голосом озвучивает «Введите количество», открывает окно, возвращает Promise
   // с введённым числом (или null при отмене). Максимум — оставшееся количество.
   let waybillQtyAskResolve = null;
-  function askWaybillQty(maxQty) {
+  function askWaybillQty(maxQty, defVal) {
     return new Promise((resolve) => {
       if (!el.waybillQtyAskModal || !el.waybillQtyAsk) { resolve(null); return; }
       waybillQtyAskResolve = resolve;
@@ -5517,7 +5653,9 @@
       // ввода количества прыгало перед каждым единичным остатком).
       if (safeMax <= 1) { resolve(1); return; }
       el.waybillQtyAsk.max = String(safeMax);
-      el.waybillQtyAsk.value = String(safeMax);
+      // По умолчанию предлагаем «зашитое» значение (для партстикера) или максимум.
+      const init = defVal != null ? Math.max(1, Number(defVal)) : safeMax;
+      el.waybillQtyAsk.value = String(Math.min(init, safeMax));
       setWaybillStatus(`Введите количество (макс ${safeMax})`);
       playScanFeedback(true, "Введите количество");
       try { el.waybillQtyAskModal.showModal(); } catch { /* уже открыта */ }
@@ -7836,6 +7974,9 @@
     for (const id of routeOrderIds) {
       const c = driverClientsCache.find((x) => String(x.id) === String(id));
       if (!c) continue;
+      // Накладную храним ПО КЛИЕНТУ (id), а не по адресу: у объединённых клиентов
+      // на одном адресе каждая накладная идёт своему клиенту, иначе накладные
+      // дублировались бы в каждую точку (позиций ×N на число клиентов адреса).
       stops.push({ key: String(c.id), label: (c.client || c.bundleName || c.bundleAddress || c.address || "Клиент") });
     }
     const rows = stops.map((s) => {
@@ -7848,7 +7989,7 @@
         <span class="route-waybill-label">${escapeHtml(s.label)}</span>
         <span class="route-waybill-state">${st ? `загружено: ${st.count} поз.` : "не загружено"}</span>
         ${delBtn}
-        <label class="ctrl ctrl-soft route-waybill-upload"> Загрузить .xlsx
+        <label class="ctrl ctrl-soft route-waybill-upload"> ${st ? "Добавить .xlsx" : "Загрузить .xlsx"}
           <input type="file" accept=".xlsx" data-waybill-key="${escapeHtml(s.key)}" hidden />
         </label>
       </div>`;
@@ -8297,6 +8438,7 @@
     const client = (el.driverClientName.value || "").trim();
     const address = (el.driverClientAddress.value || "").trim();
     const inn = (el.driverClientInn ? el.driverClientInn.value : "").trim().replace(/\s+/g, "");
+    const login = (el.driverClientLogin ? el.driverClientLogin.value : "").trim();
     if (!client || !address) {
       toast("Укажите и клиента, и адрес");
       return;
@@ -8304,12 +8446,13 @@
     try {
       const r = await api("/api/drivers/clients", {
         method: "POST",
-        body: JSON.stringify({ client, address, inn }),
+        body: JSON.stringify({ client, address, inn, login }),
       });
       if (r && Array.isArray(r.clients)) renderDriverClients(r.clients);
       if (el.driverClientName) el.driverClientName.value = "";
       if (el.driverClientAddress) el.driverClientAddress.value = "";
       if (el.driverClientInn) el.driverClientInn.value = "";
+      if (el.driverClientLogin) el.driverClientLogin.value = "";
       toast("Клиент добавлен");
     } catch (e) {
       toast(e.message);
@@ -8328,6 +8471,7 @@
         <input class="text-input" id="editClientName-${escapeHtml(id)}" value="${escapeHtml(c.client)}" />
         <input class="text-input" id="editClientAddr-${escapeHtml(id)}" value="${escapeHtml(c.address)}" />
         <input class="text-input" id="editClientInn-${escapeHtml(id)}" value="${escapeHtml(c.inn || "")}" placeholder="ИНН" autocomplete="off" />
+        <input class="text-input" id="editClientLogin-${escapeHtml(id)}" value="${escapeHtml(c.login || "")}" placeholder="Логин (буквенный)" autocomplete="off" />
         <div class="driver-edit-actions">
           <button type="button" class="drv-mini-btn drv-mini-primary" id="saveEdit-${escapeHtml(id)}">Сохранить</button>
           <button type="button" class="drv-mini-btn" id="cancelEdit-${escapeHtml(id)}">Отмена</button>
@@ -8338,11 +8482,12 @@
       const client = document.getElementById(`editClientName-${id}`).value.trim();
       const address = document.getElementById(`editClientAddr-${id}`).value.trim();
       const inn = document.getElementById(`editClientInn-${id}`).value.trim().replace(/\s+/g, "");
+      const login = document.getElementById(`editClientLogin-${id}`).value.trim();
       if (!client || !address) { toast("Укажите имя и адрес"); return; }
       try {
         const r = await api("/api/drivers/clients", {
           method: "POST",
-          body: JSON.stringify({ action: "update", id, client, address, inn }),
+          body: JSON.stringify({ action: "update", id, client, address, inn, login }),
         });
         if (r && Array.isArray(r.clients)) renderDriverClients(r.clients);
         toast("Клиент обновлён");
@@ -8708,19 +8853,29 @@
     const waybillOn2 = !!state.params.allowWaybill;
     const waybills = [];
     if (waybillOn2) {
-      for (let i = 0; i < chosen.length; i++) {
-        const s = chosen[i];
-        // Накладные каждого клиента связки (одного адреса) складываем в одну.
-        const key = String((s.address || s.bundleName || s.client) || "").trim().toLowerCase();
+      // Накладные собираем по КЛИЕНТАМ каждой остановки, а не по адресу: у
+      // объединённых клиентов на одном адресе каждая накладная идёт только своему
+      // клиенту, а в остановку попадают накладные лишь её клиентов. Иначе накладные
+      // дублировались бы в каждую точку (позиций ×N = число клиентов адреса).
+      const dedupeItems = (arr) => {
+        const seen = new Set();
+        const out = [];
+        for (const it of arr) {
+          const k = String((it && it.art) || "") + "|" + String((it && it.partsticker) || "") + "|" + String((it && it.qty) || "");
+          if (seen.has(k)) continue;
+          seen.add(k);
+          out.push(it);
+        }
+        return out;
+      };
+      for (let i = 0; i < stopGroups.length; i++) {
+        const g = stopGroups[i];
         const items = [];
-        for (const id of routeOrderIds) {
-          const c = driverClientsCache.find((x) => String(x.id) === String(id));
-          if (!c) continue;
-          if (stopKeyOf2(c) !== key) continue;
+        for (const c of g.items) {
           const e = routeWaybills.get(String(c.id));
           if (e && Array.isArray(e.items) && e.items.length) items.push(...e.items);
         }
-        if (items.length) waybills.push({ clientIndex: i, items });
+        if (items.length) waybills.push({ clientIndex: i, items: dedupeItems(items) });
       }
     }
     try {
@@ -8954,7 +9109,9 @@
       if (!wb || !Array.isArray(wb.items) || !wb.items.length) return;
       const cid = routeOrderIds[i];
       const c = driverClientsCache.find((x) => String(x.id) === String(cid));
-      const key = c ? (stopKeyOf2(c) || "id:" + String(cid)) : "id:" + String(cid);
+      // Ключ — по id КЛИЕНТА (единообразно с сохранением/загрузкой). Раньше брали
+      // адрес (stopKeyOf2) — при сохранении накладные не находились, сборка пуста.
+      const key = c ? String(c.id) : "id:" + String(cid);
       routeWaybills.set(key, {
         items: wb.items.map((x) => Object.assign({}, x)),
         buyer: String((wb && wb.buyer) || ""),
@@ -9676,7 +9833,7 @@
       const rows = (r && r.rows) || [];
       if (!rows.length) {
         renderScansSummary(0, 0, 0);
-        list.innerHTML = `<tr><td colspan="8" class="num" style="color:var(--ink-faint)">${
+        list.innerHTML = `<tr><td colspan="9" class="num" style="color:var(--ink-faint)">${
           onlyFailed ? "Неуспешных сканов нет" : "Сканов нет"
         }</td></tr>`;
         return;
@@ -9688,6 +9845,7 @@
           <td>${escapeHtml(x.ts ? fmtDateTimeSec(x.ts) : "")}</td>
           <td>${escapeHtml(x.userName || "—")}</td>
           <td>${escapeHtml(x.client || "—")}</td>
+          <td>${x.partsticker ? escapeHtml(shortPs(x.partsticker)) : "—"}</td>
           <td><span class="scan-code">${escapeHtml(x.code || "—")}</span></td>
           <td>${escapeHtml(x.box ? waybillBoxName(x.box) : "—")}</td>
           <td>${x.ok === true ? "Да" : "Нет"}</td>
@@ -9696,7 +9854,7 @@
         </tr>`;
       }).join("");
     } catch (e) {
-      list.innerHTML = `<tr><td colspan="8" class="num">Ошибка загрузки: ${escapeHtml((e && e.message) || String(e))}</td></tr>`;
+      list.innerHTML = `<tr><td colspan="9" class="num">Ошибка загрузки: ${escapeHtml((e && e.message) || String(e))}</td></tr>`;
     }
   }
   function renderScansSummary(total, okN, failN) {
@@ -10551,6 +10709,66 @@
   if (el.saveDriverRouteBtn) {
     el.saveDriverRouteBtn.addEventListener("click", saveDriverRoute);
   }
+  // Заполнить расходные накладные из 1С для ВСЕХ выбранных на форме клиентов —
+  // ДО сохранения маршрута. Накладные складываются в routeWaybills и уедут
+  // вместе с маршрутом при «Сохранить маршрут».
+  if (el.fillFrom1CBtn) {
+    el.fillFrom1CBtn.addEventListener("click", async () => {
+      const ids = routeOrderIds.length ? routeOrderIds.slice() : [...selectedRouteClientIds];
+      const chosen = ids.map((id) => driverClientsCache.find((x) => String(x.id) === String(id))).filter(Boolean);
+      if (!chosen.length) { toast("Сначала выберите клиентов"); return; }
+      const payload = chosen.map((c) => ({ inn: (c && c.inn) || "", login: (c && c.login) || "" }));
+      try {
+        const r = await api("/api/waybills/from-1c", {
+          method: "POST",
+          body: JSON.stringify({ clients: payload }),
+        });
+        const rr = r && r.waybills;
+        if (!Array.isArray(rr)) {
+          toast((r && r.error) || "Ошибка заполнения из 1С");
+          return;
+        }
+        let filled = 0, totalItems = 0, totalQty = 0;
+        rr.forEach((res, i) => {
+          const c = chosen[i];
+          if (!c) return;
+          if (res && res.ok && Array.isArray(res.items) && res.items.length) {
+            // Ключ — по id КЛИЕНТА (единообразно с загрузкой .xlsx и с чтением при
+            // сохранении). Иначе (по адресу) накладные из «Заполнить из 1С» терялись
+            // бы при сохранении — в сборке оставалось пусто.
+            routeWaybills.set(String(c.id), { items: res.items, buyer: (res.buyer || "") });
+            filled++;
+            totalItems += res.items.length;
+            res.items.forEach((it) => { totalQty += (Number(it && it.qty) || 0); });
+          }
+        });
+        renderRouteWaybillsBlock();
+        let msg = filled
+          ? ("Успешно добавлено: " + totalItems + " поз. / " + totalQty + " шт")
+          : "Не удалось получить накладные";
+        if (r && r.noInn) msg += " · без ИНН/логина: " + r.noInn;
+        toast(msg);
+        // Для уже существующего маршрута сразу сохраняем накладные на сервер
+        // в route.waybills — тогда партисткеры и позиции сразу видны в сборке,
+        // а не только после «Сохранить маршрут».
+        if (editingRouteId) {
+          try {
+            await api("/api/routes/" + encodeURIComponent(editingRouteId) + "/fill-from-1c", { method: "POST" });
+          } catch { /* ignore */ }
+          try { loadDriverRoutes(); } catch { /* ignore */ }
+          try { refreshWaybillFromServer(); } catch { /* ignore */ }
+        }
+      } catch (e) {
+        toast((e && e.message) || "Ошибка заполнения из 1С");
+      }
+    });
+  }
+  // Поправка времени устройства: сохраняем при изменении.
+  if (el.acctTzOffset) {
+    el.acctTzOffset.addEventListener("change", () => {
+      try { localStorage.setItem("biotime_time_offset_min", String(el.acctTzOffset.value || "0")); } catch { /* ignore */ }
+    });
+  }
   // Черновик «Маршрут на день»: сохраняем при любом изменении полей/выбора.
   ["driverRouteDate", "driverRouteDriver", "driverRouteName"].forEach((ref) => {
     const n = el[ref];
@@ -10575,6 +10793,7 @@
   bindSubtab(el.subtabRoutes, "routes");
   bindSubtab(el.subtabReport, "report");
   bindSubtab(el.subtabLocation, "location");
+  bindSubtab(el.subtab1cLog, "1clog");
   bindSubtab(el.subtabTracking, "tracking");
   // Подвкладки раздела «Отгрузка»: «В работе» и «Завершённые отгрузки».
   const setShipmentSubtab = (tab) => {
@@ -10921,6 +11140,36 @@
     el.locationInterval.addEventListener("change", () => {
       try { localStorage.setItem("biotime_location_interval", String(el.locationInterval.value)); } catch { /* ignore */ }
       loadLocationReport();
+    });
+  }
+  // Диагностика связи с 1С (только админ): стучится в 1С с IP приложения.
+  if (el.onecPingBtn) {
+    el.onecPingBtn.addEventListener("click", async () => {
+      if (!el.onecPingRes) return;
+      el.onecPingRes.textContent = "Проверка…";
+      try {
+        const resp = await fetch("/api/1c/ping", {
+          headers: { "Accept": "application/json" },
+          cache: "no-store",
+        });
+        let body = null;
+        try { body = await resp.json(); } catch (_) { /* не JSON */ }
+        if (resp.status === 401 || resp.status === 403) {
+          el.onecPingRes.textContent = "Отказ: HTTP " + resp.status + " (сервер не видит админа)";
+        } else if (!resp.ok) {
+          el.onecPingRes.textContent = "HTTP " + resp.status + ((body && body.error) ? " · " + body.error : "");
+        } else if (body && body.error) {
+          el.onecPingRes.textContent = "Ошибка: " + body.error;
+        } else if (body && body.summary) {
+          const s = String(body.summary).replace(/\s+/g, " ");
+          el.onecPingRes.textContent = s.length > 600 ? s.slice(0, 600) + "…" : s;
+        } else {
+          el.onecPingRes.textContent = "HTTP " + (body ? body.http : "?")
+            + ((body && body.snippet) ? " · " + body.snippet : "");
+        }
+      } catch (e) {
+        el.onecPingRes.textContent = "Сбой запроса: " + e.message;
+      }
     });
   }
   // Доставка: смена даты перезагружает данные (автообновление — периодический
@@ -11306,6 +11555,31 @@
         } catch { bad += 1; }
       }
       toast(bad ? `Убрано ${okN}, ошибок ${bad}` : `Убрано «не найдено»: ${okN}`);
+      refreshWaybillFromServer();
+      renderWaybill();
+    });
+  }
+  if (el.waybillCleanBtn) {
+    el.waybillCleanBtn.addEventListener("click", async () => {
+      const wbL = waybillLocal;
+      const arr = wbL && Array.isArray(wbL.items) ? wbL.items : [];
+      const unscanned = arr.filter((it) => (Number(it && it.scanned) || 0) === 0).length;
+      if (!unscanned) { toast("Не собранных позиций нет"); return; }
+      const who = waybillClientName || (`Клиент ${waybillClientIdx + 1}`);
+      if (!confirm(`Удалить из накладной «${who}» ${unscanned} не собранных позиций (собрано 0 шт: дубли и «не найдено»)?`)) return;
+      try {
+        const r = await api(`/api/routes/${encodeURIComponent(waybillRouteId)}/waybill/delete-unscanned`, {
+          method: "POST",
+          body: JSON.stringify({ clientIndex: waybillClientIdx }),
+        });
+        if (r && r.ok) {
+          toast(`Удалено не собранных: ${r.removed}, осталось позиций: ${r.total}`);
+        } else {
+          toast((r && r.error) || "Ошибка удаления");
+        }
+      } catch (e) {
+        toast((e && e.message) || "Ошибка удаления");
+      }
       refreshWaybillFromServer();
       renderWaybill();
     });
@@ -11843,6 +12117,15 @@
     // Технические данные (IP-адрес, адрес приложения) показываем только админу.
     if (el.acctIpRow) el.acctIpRow.hidden = !d.isAdmin;
     if (el.acctHostRow) el.acctHostRow.hidden = !d.isAdmin;
+    // Кнопка диагностики связи с 1С — только админу.
+    if (el.onecPingRow) el.onecPingRow.hidden = !d.isAdmin;
+    // Поправка времени устройства (компенсация рассинхрона часов ТСД/сканера).
+    if (el.acctTzRow && el.acctTzOffset) {
+      el.acctTzRow.hidden = !d.isAdmin;
+      try { el.acctTzOffset.value = localStorage.getItem("biotime_time_offset_min") || "0"; } catch { /* ignore */ }
+    }
+    // Диагностические «Логи» — только админу.
+    if (el.accountLogBtn) el.accountLogBtn.hidden = !d.isAdmin;
     if (el.acctVersion) {
       // Показываем актуальную версию приложения (единый источник — version.json,
       // отдаёт /api/app/update-info). Если ещё не получена — дозапрашиваем.
@@ -11870,7 +12153,9 @@
         })
         .catch(() => { /* IP недоступен — остаётся адрес приложения */ });
     }
-    if (d.reason) {
+    // Строку «Роль не совпала с администратором портала» и прочие причины фильтрации
+    // тоже показывает только админ — обычному пользователю она не нужна.
+    if (d.reason && d.isAdmin) {
       el.acctReason.hidden = false;
       el.acctReason.textContent = d.reason;
     } else {
@@ -12011,6 +12296,8 @@
   }
 
   // ---- Отчёт по «не найдено»: детали сборки с изменяемым статусом/комментарием ----
+  // Выбранные (галочками) записи «Проблемы склада» для массового удаления (админ).
+  let nfSelected = new Set();
   async function renderNotfound() {
     const wrap = el.notfoundTable;
     if (!wrap) return;
@@ -12082,9 +12369,12 @@
       }
       return null;
     };
+    const canDel = state.isAdmin === true;
     const body = rows.map((r) => {
       const st = nfLabel(r.status);
+      const checked = nfSelected.has(r.key) ? " checked" : "";
       return `<tr data-nf-key="${escapeHtml(r.key)}" class="nf-row-click" title="Открыть детали позиции">
+        ${canDel ? `<td class="nf-cell-sm nf-check-cell"><input type="checkbox" class="nf-check" data-nf-check="${escapeHtml(r.key)}"${checked} name="nfchk" /></td>` : ""}
         <td class="nf-cell-sm">${escapeHtml(r.date ? fmtDateTimeSec(r.date) : "")}</td>
         <td>${escapeHtml(r.client)}</td>
         <td class="nf-cell-sm"><span class="nf-art">${escapeHtml(r.art)}</span></td>
@@ -12093,7 +12383,7 @@
       </tr>`;
     }).join("");
     wrap.innerHTML = `<table class="nf-table"><thead><tr>
-      <th>Дата</th><th>Клиент</th><th>Артикул</th><th>Кол-во</th><th>Статус</th>
+      ${canDel ? `<th class="nf-check-cell"></th>` : ""}<th>Дата</th><th>Клиент</th><th>Артикул</th><th>Кол-во</th><th>Статус</th>
       </tr></thead><tbody>${body}</tbody></table>`;
     // Клик по строке → модалка с деталями позиции и кнопкой-состоянием.
     wrap.querySelectorAll("tr[data-nf-key]").forEach((row) => {
@@ -12175,6 +12465,21 @@
         try { el.nfdModal.showModal(); } catch { /* уже открыта */ }
       });
     });
+    // Чекбоксы выделения (админ) — вместо кнопки удаления в строке.
+    wrap.querySelectorAll("[data-nf-check]").forEach((cb) => {
+      cb.addEventListener("click", (ev) => ev.stopPropagation()); // не открывать модалку строки
+      cb.addEventListener("change", () => {
+        const key = cb.getAttribute("data-nf-check");
+        if (!key) return;
+        if (cb.checked) nfSelected.add(key); else nfSelected.delete(key);
+        if (el.nfDeleteSelected) el.nfDeleteSelected.disabled = nfSelected.size === 0;
+      });
+    });
+    // Кнопка «Удалить выбранные» в шапке — закреплена, видна админу.
+    if (el.nfDeleteSelected) {
+      el.nfDeleteSelected.hidden = !canDel;
+      el.nfDeleteSelected.disabled = nfSelected.size === 0;
+    }
   }
   async function saveNotFound(key, data) {
     try { await api("/api/notfound", { method: "POST", body: JSON.stringify(Object.assign({ key }, data)) }); toast("Сохранено"); }
@@ -12182,13 +12487,14 @@
   }
   // Логи скана деталей при сборке (вкладка «Логи» у админа): шлём НЕУСПЕШНЫЕ сканы
   // (ok:false), чтобы диспетчер видел, какие коды не находились/не принимались.
-  function logBarcodeScan(kind, code, ok, reason) {
+  function logBarcodeScan(kind, code, ok, reason, partsticker) {
     try {
       api("/api/logs/barcode", { method: "POST", body: JSON.stringify({
         kind: String(kind || "detail"),
         code: String(code || ""),
         ok: !!ok,
         reason: String(reason || ""),
+        partsticker: String(partsticker || ""),
         client: String(waybillClientName || ""),
         box: String(waybillBox || ""),
         routeId: String(waybillRouteId || ""),
@@ -12197,6 +12503,22 @@
     } catch { /* ignore */ }
   }
   if (el.nfRefresh) el.nfRefresh.addEventListener("click", renderNotfound);
+  // Кнопка «Удалить выбранные» в шапке «Проблем» — админ, удаляет выделенные галочками.
+  if (el.nfDeleteSelected) {
+    el.nfDeleteSelected.addEventListener("click", async () => {
+      if (nfSelected.size === 0) return;
+      if (!confirm(`Удалить выбранные записи «Проблемы склада» (${nfSelected.size}) из отчёта?`)) return;
+      const keys = [...nfSelected];
+      let okN = 0, bad = 0;
+      for (const key of keys) {
+        try { await api("/api/notfound", { method: "POST", body: JSON.stringify({ action: "delete", key }) }); okN += 1; }
+        catch { bad += 1; }
+      }
+      nfSelected.clear();
+      toast(bad ? `Удалено ${okN}, ошибок ${bad}` : `Удалено: ${okN}`);
+      renderNotfound();
+    });
+  }
   if (el.nfSearch) el.nfSearch.addEventListener("input", renderNotfound);
   if (el.nfdModalClose && el.nfdModal) {
     el.nfdModalClose.addEventListener("click", () => { try { el.nfdModal.close(); } catch { /* ignore */ } });
@@ -12273,18 +12595,10 @@
       // [data-wlc], но вне заголовка [data-wlb], и клик по ним «всплывал» к клиенту,
       // схлопывая весь блок (и развёрнутый бокс) — казалось, что «сам сворачивается».
       if (ev.target && ev.target.closest && ev.target.closest(".wb-log-details")) return;
-      const wlc = ev.target.closest && ev.target.closest("[data-wlc]");
-      if (wlc) {
-        const next = document.getElementById("wbox-" + wlc.getAttribute("data-wlc"));
-        if (next) {
-          next.hidden = !next.hidden;
-          wlc.querySelector(".wbl-arrow").textContent = next.hidden ? "▸" : "▾";
-          const client = wlc.getAttribute("data-wlc-key") || "";
-          _wblogState.clients[client] = !next.hidden;
-          try { localStorage.setItem("biotime_wblog_open", JSON.stringify(_wblogState)); } catch { /* ignore */ }
-        }
-        return;
-      }
+      // Бокс проверяем РАНЬШЕ клиента: строка бокса [data-wlb] вложена в клиента
+      // [data-wlc], и если проверять клиента первым, closest() находит клиента и
+      // клик по боксу сворачивал бы ВЕСЬ блок клиента (дерево: клиент → боксы →
+      // детали). От этого боксы «сами сворачивались» при попытке их раскрыть.
       const wlb = ev.target.closest && ev.target.closest("[data-wlb]");
       if (wlb) {
         const next = document.getElementById("wdet-" + wlb.getAttribute("data-wlb"));
@@ -12299,6 +12613,19 @@
           _wblogState.boxes[client + "::" + box] = !next.hidden;
           try { localStorage.setItem("biotime_wblog_open", JSON.stringify(_wblogState)); } catch { /* ignore */ }
         }
+        return;
+      }
+      const wlc = ev.target.closest && ev.target.closest("[data-wlc]");
+      if (wlc) {
+        const next = document.getElementById("wbox-" + wlc.getAttribute("data-wlc"));
+        if (next) {
+          next.hidden = !next.hidden;
+          wlc.querySelector(".wbl-arrow").textContent = next.hidden ? "▸" : "▾";
+          const client = wlc.getAttribute("data-wlc-key") || "";
+          _wblogState.clients[client] = !next.hidden;
+          try { localStorage.setItem("biotime_wblog_open", JSON.stringify(_wblogState)); } catch { /* ignore */ }
+        }
+        return;
       }
     });
   }
@@ -12618,6 +12945,8 @@
       // «Местоположение водителя» — подвкладка маршрутизации: автообновление,
       // чтобы новые точки GPS подтягивались без клика «Показать»/F5.
       if (!el.pageDrivers.hidden && el.routesubLocation && !el.routesubLocation.hidden) loadLocationReport();
+      // «Логи 1С» — подвкладка маршрутизации: живое обновление заборов.
+      if (!el.pageDrivers.hidden && el.routesub1cLog && !el.routesub1cLog.hidden) loadOnecLog();
     }, 10000);
 
     // Live ticking counter for the "Таймер" page. The worked/overtime figures are
@@ -12821,6 +13150,37 @@
         location.reload();
       });
     }
+    // Автоперезагрузка после деплоя: сервер отдаёт версию сборки, которая меняется
+    // при каждом обновлении. Если версия сменилась — обновляем Service Worker и
+    // перезагружаем страницу сами, без нажатий (браузер / мобильный / Electron).
+    let deployBaseline = null;
+    async function pollDeployVersion() {
+      let r = null;
+      // Тихий опрос (без баннера «Нет связи»): фоновая проверка не должна шуметь.
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 6000);
+        try {
+          const resp = await fetch("/api/version", { headers: { "Content-Type": "application/json" }, signal: ctrl.signal });
+          if (resp.ok) r = await resp.json();
+        } finally { clearTimeout(t); }
+      } catch (e) { return; }
+      const v = r && r.v;
+      if (!v) return;
+      if (deployBaseline === null) { deployBaseline = String(v); return; }
+      if (String(v) !== deployBaseline) {
+        deployBaseline = String(v);
+        try {
+          if (navigator.serviceWorker) {
+            const reg = await navigator.serviceWorker.getRegistration();
+            if (reg) await reg.update();
+          }
+        } catch (e) { /* если SW недоступен — всё равно перезагружаем */ }
+        location.reload();
+      }
+    }
+    setTimeout(pollDeployVersion, 4000);   // первый опрос после открытия страницы
+    setInterval(pollDeployVersion, 20000); // затем каждые 20 секунд
   });
 
   // Новый SW активировался и взял контроль. Второй и последующие заходы —

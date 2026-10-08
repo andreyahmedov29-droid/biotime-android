@@ -8,6 +8,7 @@ module.exports = function createNotfoundHandler({
   canSeeNotfound,
   alignWaybillsToClients,
   persistNotFoundStatuses,
+  isAdmin,
 } = {}) {
   return async function handleNotfoundRoutes(req, res, urlPath, method, user) {
     const db = getDb ? getDb() : {};
@@ -34,6 +35,8 @@ module.exports = function createNotfoundHandler({
       };
       const byKey = new Map();
       const artClientMap = new Map();
+      // Артикулы, которые СЕЙЧАС собраны/размещены (не «не найдено») в накладных.
+      const notMissingArts = new Set();
       for (const r0 of (Array.isArray(db.driverRoutes) ? db.driverRoutes : [])) {
         alignWaybillsToClients(r0);
         const cl0 = Array.isArray(r0.clients) ? r0.clients : [];
@@ -44,18 +47,36 @@ module.exports = function createNotfoundHandler({
           if (!cname) return;
           its.forEach((it) => {
             const mq = Number(it.missingQty) || 0;
-            if (!it.missing && mq <= 0) return;
             const a = String(it.art || "");
+            const isMiss = !!it.missing || mq > 0;
+            if (!isMiss) { if (a && nfNorm(a)) notMissingArts.add(nfNorm(a)); return; }
             if (a && !artClientMap.has(a)) artClientMap.set(a, cname);
           });
         });
       }
       const currentArts = new Set(artClientMap.keys());
       const log = Array.isArray(db.scanLog) ? db.scanLog : [];
+      // Максимальный ts УСПЕШНОГО скана по каждому коду. Если деталь сначала
+      // пометили «не найдено», а потом приняли (засчитали), старая missing-запись
+      // остаётся в scanLog навсегда. Такая запись — НЕ проблема: показываем её в
+      // отчёте только если после пометки не было успешного приёма этого кода.
+      const acceptMax = new Map();
+      for (const e2 of log) {
+        if (e2.action !== "waybill" || e2.missing || !e2.ts) continue;
+        const k = nfNorm(String(e2.code || ""));
+        if (k && (!acceptMax.has(k) || e2.ts > acceptMax.get(k))) acceptMax.set(k, e2.ts);
+      }
       for (const e of log) {
         if (e.action !== "waybill" || !e.missing) continue;
+        // Артикул сейчас собран/размещён в накладной (не «не найдено») — старая
+        // запись «не найдено» по нему не актуальна, в «Проблемы склада» не идёт.
+        const nmN = nfNorm(String(e.code || ""));
+        if (nmN && notMissingArts.has(nmN)) continue;
         if (e.ts && dk(e.ts) < START_DATE) continue;
         if (currentArts.has(String(e.code || ""))) continue;
+        const cnorm = nfNorm(String(e.code || ""));
+        const acc = cnorm ? acceptMax.get(cnorm) : undefined;
+        if (acc !== undefined && acc >= (e.ts || 0)) continue; // после пометки деталь приняли
         const disp = artClientMap.get(String(e.code || "")) || nfClientDisplay(e);
         const key = nfKey(disp, e.code);
         if (!byKey.has(key)) {
@@ -78,6 +99,9 @@ module.exports = function createNotfoundHandler({
           for (const it of items) {
             const mq = Number(it.missingQty) || 0;
             if (!it.missing && mq <= 0) continue;
+            // Актуализация «Проблем склада»: позиция, уже размещённая в бокс или
+            // принятая (перемещена), больше не проблема — не показываем её здесь.
+            if (String(it.box || "") || (Number(it.scanned) || 0) > 0) continue;
             const cname = nfClientDisplay(rc);
             const key = nfKey(cname, it.art);
             if (!byKey.has(key)) {
@@ -111,6 +135,21 @@ module.exports = function createNotfoundHandler({
       const body = await readBody(req);
       const key = String(body.key || "");
       if (!key) return sendJson(res, 422, { error: "bad key" });
+      // Удалить запись «Проблемы склада» целиком (админ-действие): сбрасываем статус
+      // и, если это артикул, убираем связанную запись «не найдено» из scanLog, чтобы
+      // строка перестала пересчитываться в отчёте.
+      if (body.action === "delete") {
+        if (!(isAdmin && isAdmin(user, db))) return sendJson(res, 403, { ok: false, error: "forbidden" });
+        if (db.notFound) delete db.notFound[key];
+        const art = String(key.split("|").pop() || "").trim().toLowerCase();
+        if (art && Array.isArray(db.scanLog)) {
+          db.scanLog = db.scanLog.filter((e) => !(e && e.action === "waybill" && e.missing
+            && String(e.code || "").trim().toLowerCase() === art));
+        }
+        await persistDb();
+        void persistNotFoundStatuses().catch(() => {});
+        return sendJson(res, 200, { ok: true });
+      }
       if (!db.notFound) db.notFound = {};
       const cur = db.notFound[key] || {};
       const comments = Array.isArray(cur.comments) ? cur.comments.slice() : [];

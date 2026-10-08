@@ -11,6 +11,14 @@ module.exports = function createLocationHandler({
   scheduleTracksSave,
   reverseGeocode,
 } = {}) {
+  // Расстояние по гаверсинусу (км).
+  const haversineKm = (aLat, aLon, bLat, bLon) => {
+    const R = 6371, toRad = (x) => x * Math.PI / 180;
+    const dLat = toRad(bLat - aLat), dLon = toRad(bLon - aLon);
+    const a = Math.sin(dLat / 2) ** 2
+      + Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLon / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(a));
+  };
   return async function handleLocationRoutes(req, res, urlPath, method, user, admin) {
     const db = getDb ? getDb() : {};
 
@@ -63,6 +71,7 @@ module.exports = function createLocationHandler({
         const MAX_GAP = Math.max(intervalMin * 60000, 10 * 60000);
         const rows = [];
         const slots = Math.floor((24 * 60) / intervalMin);
+        let prev = null;
         for (let i = 0; i < slots; i++) {
           const slotTs = dayStart + i * SLOT;
           let best = null;
@@ -74,13 +83,31 @@ module.exports = function createLocationHandler({
           const p = best.p;
           const addr = reverseGeocode ? await reverseGeocode(p.lat, p.lon) : null;
           const dt = new Date(slotTs + 3 * 3600000); // переводим метку в МСК (UTC+3)
+          // Реальная скорость от приложения (5-й элемент точки), если она передана:
+          // иначе используем расчётную (distance/time) с отсечкой выбросов.
+          const realSpeed = (Array.isArray(p) && p.length >= 5 && Number.isFinite(Number(p[4])))
+            ? Math.round(Number(p[4]) * 10) / 10
+            : null;
+          // Скорость на участке между соседними точками снятия (средняя, км/ч).
+          let speedKmh = null;
+          if (prev && (p.t - prev.t) > 20e3) {
+            const dKm = haversineKm(prev.lat, prev.lon, p.lat, p.lon);
+            const dtH = (p.t - prev.t) / 3600000;
+            if (dtH > 0) speedKmh = Math.round((dKm / dtH) * 10) / 10;
+            // GPS-скачок: одна точка «прыгнула» далеко от предыдущей за короткое
+            // время — расчётная скорость нереальна (170–340 км/ч в городе). Это
+            // выброс координат, а не движение: не показываем его как скорость.
+            if (speedKmh != null && speedKmh > 130) speedKmh = null;
+          }
           rows.push({
             time: String(dt.getUTCHours()).padStart(2, "0") + ":" + String(dt.getUTCMinutes()).padStart(2, "0"),
             lat: Number(Number(p.lat).toFixed(6)),
             lon: Number(Number(p.lon).toFixed(6)),
+            speed: realSpeed != null ? realSpeed : speedKmh,
             address: addr || null,
             actualTs: p.t,
           });
+          prev = p;
         }
         return sendJson(res, 200, { ok: true, date, driverId, rows });
       } catch (e) {
@@ -109,6 +136,7 @@ module.exports = function createLocationHandler({
           lat, lon, at: atNow,
           name: user.name || "",
           routeId: p.routeId != null ? String(p.routeId) : "",
+          speed: Number(p.speed) || null,
         };
         const tr = db.tracks[uid] || (db.tracks[uid] = []);
         const last = tr[tr.length - 1];
@@ -122,10 +150,11 @@ module.exports = function createLocationHandler({
           ((tracksByDay[dayK][uid] = []));
         const dLast = dTrack[dTrack.length - 1];
         if (!dLast || (atNow - dLast[2]) >= 20000 || Math.abs(dLast[0] - lat) > 5e-4 || Math.abs(dLast[1] - lon) > 5e-4) {
-          // У точки с реальным (клиентским) временем храним ещё и серверное время
-          // приёма [lat, lon, clientTs, serverNow] — по нему в отчёте вычисляется
-          // дрейф серверных часов и им корректируются старые точки (без маркера).
-          dTrack.push(useClient ? [lat, lon, atNow, serverNow] : [lat, lon, atNow]);
+          // Единый формат точки [lat, lon, t, serverNow, speed]: t — реальное время,
+          // serverNow — серверное при приёме (для дрейфа часов), speed — реальная
+          // GPS-скорость от приложения (если передана). По числу элементов (>=4)
+          // отчёт понимает, что точка несёт полную информацию.
+          dTrack.push([lat, lon, atNow, serverNow, Number(p.speed) || null]);
           if (dTrack.length > 4000) dTrack.splice(0, dTrack.length - 4000);
           const cutoff = motionDayKey(atNow - 60 * 24 * 3600000);
           Object.keys(tracksByDay).forEach((k) => { if (k < cutoff) delete tracksByDay[k]; });
@@ -150,7 +179,7 @@ module.exports = function createLocationHandler({
         }
         if (!loc || !Number.isFinite(loc.lat) || !Number.isFinite(loc.lon)) continue;
         if (now - loc.at > freshWindow) continue;
-        rows.push({ id, name: loc.name || "", lat: loc.lat, lon: loc.lon, at: loc.at, routeId: loc.routeId || "" });
+        rows.push({ id, name: loc.name || "", lat: loc.lat, lon: loc.lon, at: loc.at, routeId: loc.routeId || "", speed: loc.speed != null ? loc.speed : null });
       }
       return sendJson(res, 200, { ok: true, rows });
     }

@@ -335,12 +335,13 @@
           <span class="route-total-pill" id="routeTotalPill"><span class="route-total-dot"></span> планировщик</span>
         </div>
         <div class="drv-subtabs" role="tablist" aria-label="Разделы маршрутизации">
-          <button type="button" class="drv-subtab active" data-sub="contr" role="tab" id="subtab-contr">Контрагенты</button>
-          <button type="button" class="drv-subtab" data-sub="route" role="tab" id="subtab-route">Маршрут на день</button>
-          <button type="button" class="drv-subtab" data-sub="routes" role="tab" id="subtab-routes">Маршруты</button>
-          <button type="button" class="drv-subtab" data-sub="report" role="tab" id="subtab-report">Отчёт</button>
-          <button type="button" class="drv-subtab" data-sub="location" role="tab" id="subtab-location">Местоположение</button>
-          <button type="button" class="drv-subtab tracking-only" data-sub="tracking" role="tab" id="subtab-tracking">Трекинг</button>
+          <button type="button" class="drv-subtab active" data-sub="contr" role="tab" id="subtab-contr"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg><span>Контрагенты</span></button>
+          <button type="button" class="drv-subtab" data-sub="route" role="tab" id="subtab-route"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/></svg><span>Маршрут на день</span></button>
+          <button type="button" class="drv-subtab" data-sub="routes" role="tab" id="subtab-routes"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4" cy="6" r="1.4"/><circle cx="4" cy="12" r="1.4"/><circle cx="4" cy="18" r="1.4"/></svg><span>Маршруты</span></button>
+          <button type="button" class="drv-subtab" data-sub="report" role="tab" id="subtab-report"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 3v18h18"/><path d="M7 15l3-4 3 3 4-6"/></svg><span>Отчёт</span></button>
+          <button type="button" class="drv-subtab" data-sub="location" role="tab" id="subtab-location"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 21s7-5.3 7-11a7 7 0 1 0-14 0c0 5.7 7 11 7 11z"/><circle cx="12" cy="10" r="2.6"/></svg><span>Местоположение</span></button>
+          <button type="button" class="drv-subtab" data-sub="1clog" role="tab" id="subtab-1clog"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M8 9h8M8 13h5"/></svg><span>Логи 1С</span></button>
+          <button type="button" class="drv-subtab tracking-only" data-sub="tracking" role="tab" id="subtab-tracking"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3a9 9 0 0 1 9 9c0 5-4 9-9 9s-9-4-9-9a9 9 0 0 1 9-9z"/><path d="M3.6 9h16.8M9 3.2C11 7 11 17 9 20.8M15 3.2c-2 3.8-2 13.8 0 17.6"/></svg><span>Трекинг</span></button>
         </div>
 
         <!-- Вкладка: Контрагенты -->
@@ -368,6 +369,10 @@
               <div class="drv-field">
                 <label class="drv-field-label" for="driverClientInn">ИНН</label>
                 <input id="driverClientInn" class="text-input" type="text" placeholder="ИНН (для 1С), напр. 7701234567" autocomplete="off" />
+              </div>
+              <div class="drv-field">
+                <label class="drv-field-label" for="driverClientLogin">Логин (буквенный)</label>
+                <input id="driverClientLogin" class="text-input" type="text" placeholder="Символьный логин контрагента в 1С" autocomplete="off" />
               </div>
               <button type="button" class="drv-add-btn" id="addDriverClientBtn">
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
@@ -493,6 +498,9 @@
               <div class="rms-auto-route-status" id="autoRouteStatus" hidden></div>
             </div>
 
+            <button type="button" class="drv-save-btn drv-soft" id="fillFrom1CBtn" title="Заполнить расходные накладные из 1С (по ИНН+логину клиентов)">
+              <span>Заполнить из 1С</span>
+            </button>
             <button type="button" class="drv-save-btn" id="saveDriverRouteBtn">
               <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>
               <span>Сохранить маршрут</span>
@@ -610,7 +618,7 @@
                   <tr>
                     <th>Время</th>
                     <th>Адрес</th>
-                    <th>Координаты</th>
+                    <th>Скорость</th>
                   </tr>
                 </thead>
                 <tbody id="locationBody"></tbody>
@@ -618,6 +626,32 @@
             </div>
             <div class="drv-report-stub" id="locationStub" style="display:none">
               <div class="empty-hint">За выбранную дату и водителя данных о местоположении нет.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Вкладка: Логи 1С — что забираем из 1С при заполнении накладных -->
+        <div class="drv-subpanel" id="routesub-1clog" role="tabpanel" hidden>
+          <div class="drv-panel">
+            <div class="drv-panel-head">
+              <div class="drv-panel-title">
+                <span class="drv-panel-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h5"/></svg>
+                </span>
+                Логи 1С
+              </div>
+            </div>
+            <div class="drv-report-sub">Что именно забираем из 1С при заполнении накладных (последние операции)</div>
+            <div class="report-table-wrap">
+              <table class="report-table">
+                <thead>
+                  <tr><th>Время</th><th>ИНН</th><th>Логин</th><th>Отгрузка</th><th>Позиций</th><th>Результат</th><th style="width:38px;text-align:center"></th></tr>
+                </thead>
+                <tbody id="oneclogBody"></tbody>
+              </table>
+            </div>
+            <div class="drv-report-stub" id="oneclogStub" style="display:none">
+              <div class="empty-hint">Операций с 1С пока не было.</div>
             </div>
           </div>
         </div>
@@ -748,6 +782,7 @@
         <div class="nf-toolbar">
           <input id="nfSearch" class="text-input" type="text" placeholder="Поиск: клиент / артикул" autocomplete="off" />
           <button type="button" id="nfRefresh" class="mini-btn">Обновить</button>
+          <button type="button" id="nfDeleteSelected" class="mini-btn nfd-btn-danger" hidden>Удалить выбранные</button>
         </div>
         <nav class="nf-tabs" id="nfTabs">
           <button type="button" class="nf-tab active" data-nf-view="problems">Проблемы</button>
@@ -797,7 +832,7 @@
         <div class="notfound-wrap">
           <table class="admin-table">
             <thead><tr>
-              <th>Время</th><th>Сотрудник</th><th>Клиент</th><th>Код</th><th>Бокс</th><th>Артикул в накладной</th><th>Статус</th><th>Причина / деталь</th>
+              <th>Время</th><th>Сотрудник</th><th>Клиент</th><th>Партстикер</th><th>Код</th><th>Бокс</th><th>Артикул в накладной</th><th>Статус</th><th>Причина / деталь</th>
             </tr></thead>
             <tbody id="scansLogList"></tbody>
           </table>
@@ -1334,6 +1369,14 @@
         <div class="account-row"><span class="account-label">Версия</span><span class="account-value" id="acctVersion">—</span></div>
         <div class="account-row" id="acctIpRow" hidden><span class="account-label">IP-адрес</span><span class="account-value" id="acctIp">—</span></div>
         <div class="account-row" id="acctHostRow" hidden><span class="account-label">Адрес приложения</span><span class="account-value" id="acctHost">—</span></div>
+        <div class="account-row" id="onecPingRow" hidden>
+          <button type="button" class="drv-mini-btn drv-mini-primary" id="onecPingBtn">Пинг 1С</button>
+          <span class="account-value" id="onecPingRes">—</span>
+        </div>
+        <div class="account-row" id="acctTzRow" hidden>
+          <span class="account-label">Поправка времени (мин)</span>
+          <input id="acctTzOffset" class="text-input routes-date-filter" type="number" step="1" title="Если часы устройства уходят вперёд/назад — укажите поправку в минутах (напр. +5 или -3)" />
+        </div>
         <script>
           // Проставляет адрес приложения/IP сразу при загрузке страницы (не дожидаясь
           // app.js из Service Worker-кэша). Host всегда доступен; числовой IP сервера
@@ -1513,6 +1556,7 @@
       <div class="modal-head">
         <h3 id="waybillTitle">Расходная накладная</h3>
         <button type="button" class="nfd-action-btn nfd-btn-danger waybill-remove-missing" id="waybillRemoveMissing" hidden>Убрать «не найдено»</button>
+        <button type="button" class="nfd-action-btn nfd-btn-danger waybill-remove-missing" id="waybillCleanBtn" hidden>Удалить не собранные</button>
         <button class="icon-btn modal-close" id="waybillClose" aria-label="Закрыть">&times;</button>
       </div>
       <div class="waybill-body">
