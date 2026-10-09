@@ -215,15 +215,15 @@ module.exports = function createAppHandler({
           return { ok: false, reason: "err" };
         }
       };
-      // Ограничиваем параллельность (по 3 за раз): тяжёлые ответы 1С по всем клиентам
-      // одновременно могли съедать память контейнера и ронять его (OOM → рестарт →
-      // экран «Приложение запускается»). Достаточно быстро, но безопасно для памяти.
-      const CONCURRENT = 3;
+      // Обработка ПОСЛЕДОВАТЕЛЬНО, по одному клиенту за раз: берём клиента, его
+      // ИНН/логин, ищем в 1С и записываем результат — затем следующий. Это
+      // исключает гонки при дедупликации накладных по номеру (alreadyLog) и
+      // предсказуемо: каждая накладная попадает ровно своему клиенту. Плюс не
+      // нагружает 1С и контейнер одновременными тяжёлыми запросами (защита от
+      // OOM, как и раньше).
       const out = [];
-      for (let i = 0; i < clients.length; i += CONCURRENT) {
-        const chunk = clients.slice(i, i + CONCURRENT);
-        const res = await Promise.all(chunk.map(fetchOne));
-        out.push(...res);
+      for (let i = 0; i < clients.length; i++) {
+        out.push(await fetchOne(clients[i]));
       }
       const filled = out.filter((o) => o.ok).length;
       const noInn = out.filter((o) => o.reason === "no_inn").length;
