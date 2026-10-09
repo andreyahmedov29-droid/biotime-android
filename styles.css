@@ -5797,6 +5797,7 @@ dialog.admin-modal[open] {
 .rs-checks { display: flex; flex-wrap: wrap; gap: 4px 8px; }
 .rs-check { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; cursor: pointer; }
 .rs-check input { cursor: pointer; }
+.rs-inline { padding-left: 24px; }
 .group-collapse summary { cursor: pointer; font-weight: 700; font-size: 13.5px; list-style: none; display: flex; align-items: center; gap: 8px; }
 .group-collapse summary::before { content: "▸"; transition: transform .2s var(--ease); color: var(--amber); }
 .group-collapse[open] summary::before { transform: rotate(90deg); }
