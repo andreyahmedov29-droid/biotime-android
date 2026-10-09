@@ -10503,7 +10503,9 @@
         document.body.appendChild(a);
         a.click();
         a.remove();
-        URL.revokeObjectURL(url);
+        // Отзываем ссылку не сразу: сразу после click() браузер может ещё не начать
+        // запись файла, и revoke отменяет скачивание «без ничего». Даём запас.
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
         if (el.backupStatus) {
           el.backupStatus.textContent = "Бэкап скачан. Храните файл в надёжном месте — он содержит все данные приложения.";
           el.backupStatus.className = "backup-status ok";
@@ -10559,17 +10561,61 @@
         return;
       }
       try {
-        const text = await file.text();
+        // file.text() отсутствует в части WebView/встроенных браузеров и молча
+        // ронял восстановление («нажимаю Да — ничего не происходит»). Читаем
+        // через FileReader — тот же паттерн, что уже работает в app.js для
+        // накладных, и он доступен везде.
+        const text = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ""));
+          reader.onerror = () => reject(new Error("Не удалось прочитать файл"));
+          try {
+            reader.readAsText(file, "utf-8");
+          } catch (e) {
+            reject(new Error("Файл не читается в этом браузере"));
+          }
+        });
         let parsed;
         try { parsed = JSON.parse(text); } catch { throw new Error("Файл не является корректным JSON-бэкапом"); }
-        const res = await fetch("/api/admin/backup/restore", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(parsed),
-        });
+        // Standalone Black Hole обрезает тело запроса (лимит шлюза), поэтому
+        // большой бэкап не уходит одним POST («Ошибка сервера: bad json»).
+        // Отправляем JSON кусками по ~500 тыс. символов (~0.6 МБ в utf-8) —
+        // каждая часть проходит даже лимит 1 МиБ, — и собираем на сервере
+        // вызовом /restore-complete.
+        const CHUNK_CHARS = 500000;
+        const token = "b" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+        const bodyStr = JSON.stringify(parsed);
+        const total = Math.max(1, Math.ceil(bodyStr.length / CHUNK_CHARS));
+        let restoreRes;
+        if (total === 1) {
+          restoreRes = await fetch("/api/admin/backup/restore", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: bodyStr,
+          });
+        } else {
+          for (let i = 0; i < total; i++) {
+            const chunk = bodyStr.slice(i * CHUNK_CHARS, (i + 1) * CHUNK_CHARS);
+            const pr = await fetch("/api/admin/backup/restore-part", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ token, index: i, total, data: chunk }),
+            });
+            const pj = await pr.json().catch(() => ({}));
+            if (!pr.ok) throw new Error((pj && pj.error) || `Не удалось загрузить часть ${i + 1}/${total}`);
+          }
+          restoreRes = await fetch("/api/admin/backup/restore-complete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token, total }),
+          });
+        }
+        const res = restoreRes;
         const j = await res.json().catch(() => ({}));
         if (!res.ok) {
-          toast((j && j.error) || `Не удалось восстановить базу (HTTP ${res.status})`);
+          const msg = (j && j.error) || `Не удалось восстановить базу (HTTP ${res.status})`;
+          toast(msg);
+          if (el.backupStatus) { el.backupStatus.textContent = msg; el.backupStatus.className = "backup-status err"; }
           return;
         }
         if (el.backupStatus) {
@@ -10580,7 +10626,9 @@
         toast("База восстановлена");
         setTimeout(() => location.reload(), 1200);
       } catch (e) {
-        toast(e.message || "Не удалось восстановить базу");
+        const msg = (e && e.message) || "Не удалось восстановить базу";
+        toast(msg);
+        if (el.backupStatus) { el.backupStatus.textContent = msg; el.backupStatus.className = "backup-status err"; }
       } finally {
         el.backupImportFile.value = "";
       }

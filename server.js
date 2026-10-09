@@ -8,6 +8,17 @@ const crypto = require("node:crypto");
 const PORT = process.env.PORT || 3000;
 const ROOT = __dirname;
 
+// Защита процесса: не даём приложению упасть (чего ждёт платформа и возвращает
+// «BH_APP_STARTING» при перезапуске контейнера) из-за необработанного отказа промиса
+// или исключения — например, при неудачном/зависшем обращении к 1С. Логируем и
+// продолжаем работать, чтобы сервер оставался живым.
+process.on("unhandledRejection", (err) => {
+  try { console.error("[unhandledRejection]", (err && err.stack) || String(err)); } catch (_) { /* ignore */ }
+});
+process.on("uncaughtException", (err) => {
+  try { console.error("[uncaughtException]", (err && err.stack) || String(err)); } catch (_) { /* ignore */ }
+});
+
 // ---- Единый источник версии (сервер / APK / desktop) ----
 // Файл version.json в корне проекта задаёт актуальную версию приложения.
 // APK-воркфлоу и сервер читают этот же файл: человек поднимает версию один раз
@@ -1066,7 +1077,10 @@ function readBody(req) {
     let raw = "";
     req.on("data", (c) => {
       raw += c;
-      if (raw.length > 2_000_000) { req.destroy(); reject(new Error("body too large")); }
+      // Лимит 20 МБ: обычные запросы — килобайты, но резервная копия (бэкап) может
+      // весить несколько мегабайт; при старом лимите 2 МБ восстановление из бэкапа
+      // молча рвалось ещё на чтении тела («ничего не происходит»).
+      if (raw.length > 20_000_000) { req.destroy(); reject(new Error("body too large")); }
     });
     req.on("end", () => {
       try { resolve(raw ? JSON.parse(raw) : {}); }
@@ -4033,7 +4047,10 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
+// Явно слушаем на 0.0.0.0 (все IPv4), чтобы health-проверка платформы на
+// 127.0.0.1:<PORT> гарантированно достучалась: без хоста Node на части систем
+// биндится только на :: (IPv6) и отвечает «did not answer … 000».
+server.listen(PORT, "0.0.0.0", () => {
   console.log(`Табель server running on http://localhost:${PORT}`);
   console.log(`  data dir: ${DATA_DIR}`);
   // Warm the portal directory in the background so an admin's first open is already current.

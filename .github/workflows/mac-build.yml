@@ -1,4 +1,4 @@
-name: Build macOS
+﻿name: Build macOS
 
 # Собирает macOS-версию BIOTIME (.app/.dmg/.zip) на бесплатном macOS-раннере
 # GitHub Actions. Запускается по кнопке (workflow_dispatch) и при пуше в
@@ -119,7 +119,7 @@ jobs:
       # версию в db.params/version.json сервера для GET /api/app/update-info.
       # Чтобы включить — задайте на GitHub два секрета (Settings ▸ Secrets ▸ Actions):
       #   SERVER_UPDATE_URL   — адрес POST /api/app/update сервера BIOTIME, например:
-      #     https://app-0191dabf28dc.vibecode.bitrix24.tech/api/app/update
+      #     https://app-d54dcfb4082e.vibecode.bitrix24.tech/api/app/update
       #   SERVER_UPDATE_TOKEN — произвольный токен/секрет (передаётся заголовком
       #     X-Update-Token; должен совпадать с SERVER_UPDATE_TOKEN на сервере).
       # Если секреты не заданы — шаг БЕЗОПАСНО пропускается (сборка/публикация релиза уже прошли).

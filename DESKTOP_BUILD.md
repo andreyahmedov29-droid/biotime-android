@@ -7,7 +7,7 @@
 
 ## Схема работы (режим A — по умолчанию)
 
-- Адрес веб-версии: `https://app-0191dabf28dc.vibecode.bitrix24.tech`.
+- Адрес веб-версии: `https://app-d54dcfb4082e.vibecode.bitrix24.tech`.
 - Десктоп открывает этот адрес в своём окне. По умолчанию **никакой общий токен
   не подставляется**: окно ведёт себя как обычный браузер, шлюз проводит
   **личный вход каждого пользователя** под его собственной учёткой, и его сессия
@@ -83,14 +83,14 @@ npm run desktop
 
 ```json
 {
-  "appUrl": "https://app-0191dabf28dc.vibecode.bitrix24.tech",
+  "appUrl": "https://app-d54dcfb4082e.vibecode.bitrix24.tech",
   "accessToken": "vibe_app_local_<ВЫДАННЫЙ_ПЛАТФОРМОЙ_ТОКЕН>"
 }
 ```
 
 **2. Переменные окружения (для проверки).**
 ```powershell
-$env:BIOTIME_APP_URL = "https://app-0191dabf28dc.vibecode.bitrix24.tech"
+$env:BIOTIME_APP_URL = "https://app-d54dcfb4082e.vibecode.bitrix24.tech"
 $env:BIOTIME_ACCESS_TOKEN = "<ВЫДАННЫЙ_ПЛАТФОРМОЙ_ТОКЕН>"
 npm run desktop
 ```
@@ -102,7 +102,7 @@ npm run desktop
 ## Миграция на новый адрес инстанса (чек-лист для раздачи водителям)
 
 После переноса веб-версии на новый адрес
-`https://app-0191dabf28dc.vibecode.bitrix24.tech` проверьте следующее:
+`https://app-d54dcfb4082e.vibecode.bitrix24.tech` проверьте следующее:
 
 1. **Код сборки** — новые адреса уже прописаны в `electron/main.js` (fallback),
    `MainActivity.kt` (Android) и Swift-обёртках (iOS). Собирайте новую версию из
@@ -112,7 +112,7 @@ npm run desktop
    который перекроет новый fallback в коде. На каждой такой машине:
    - либо удалите поле `"appUrl"` из файла (тогда применится новый адрес из кода);
    - либо замените значение на актуальное:
-     `"appUrl": "https://app-0191dabf28dc.vibecode.bitrix24.tech"`,
+     `"appUrl": "https://app-d54dcfb4082e.vibecode.bitrix24.tech"`,
    и перезапустите приложение.
 3. **Режим входа** — при переходе на личный вход без общего токена водителю
    достаточно один раз войти в свою учётку в окне приложения. Если для части

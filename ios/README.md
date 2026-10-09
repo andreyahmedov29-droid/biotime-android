@@ -1,4 +1,4 @@
-# BioTime — iOS-версия (WebView)
+﻿# BioTime — iOS-версия (WebView)
 
 Нативная iOS-обёртка вокруг веб-приложения BioTime — прямой аналог Android-WebView
 обёртки. Приложение открывает адрес вашего сайта в полноэкранном `WKWebView`
@@ -79,7 +79,7 @@ iPhone. Чтобы выпустить для команды:
   фоновый режим (`UIBackgroundModes: location`); `AppDelegate` запускает трекер
   при старте.
 - Адрес (в `ViewController.swift` и `LocationTracker.swift`) — реальный
-`app-0191dabf28dc.vibecode.bitrix24.tech`; держите их синхронно.
+`app-d54dcfb4082e.vibecode.bitrix24.tech`; держите их синхронно.
 
 Что проверить при первом запуске:
 1. iOS спросит доступ к местоположению — выбрать **«Разрешить всегда»**

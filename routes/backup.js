@@ -152,6 +152,117 @@ module.exports = function createBackupHandler({
       }
     }
 
+    // ---------------------------------------------------------------
+    // Восстановление ПО ЧАСТЯМ (обход лимита размера тела запроса на
+    // standalone Black Hole ~4 МиБ): клиент шлёт бэкап кусками по
+    // /restore-part, затем собирает их на сервере вызовом /restore-complete.
+    // Части лежат в /data/_staging, переживают перезапуск и удаляются после.
+    // ---------------------------------------------------------------
+    const STAGING_DIR = path.join(DATA_DIR, "_staging");
+    const bulkToken = (t) => String(t || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64);
+    const bulkCleanup = (token, total) => {
+      try {
+        for (let i = 0; i < total; i++) {
+          const p = path.join(STAGING_DIR, `${token}-${i}.part`);
+          if (fs.existsSync(p)) fs.unlinkSync(p);
+        }
+      } catch { /* ок */ }
+    };
+
+    if (urlPath === "/api/admin/backup/restore-part" && method === "POST") {
+      if (!admin) return sendJson(res, 403, { error: "forbidden" });
+      const body = await readBody(req);
+      const token = bulkToken(body && body.token);
+      const index = Number(body && body.index);
+      const total = Number(body && body.total);
+      const part = typeof (body && body.data) === "string" ? body.data : "";
+      if (!token || !Number.isInteger(index) || index < 0 || !Number.isInteger(total) || total < 1 || index >= total) {
+        return sendJson(res, 422, { error: "invalid part" });
+      }
+      // Часть — строка; экранированные utf-8 байты в части не могут быть больше
+      // ~8кратной длины строки, но реальный потолок тела задаёт шлюз, поэтому
+      // дополнительно режем по длине строки, чтобы часть гарантированно
+      // прошла. 5 000 000 символов utf-8 далеко в безопасной зоне.
+      if (part.length > 5_000_000) return sendJson(res, 422, { error: "part too large" });
+      try {
+        if (!fs.existsSync(STAGING_DIR)) fs.mkdirSync(STAGING_DIR, { recursive: true });
+        fs.writeFileSync(path.join(STAGING_DIR, `${token}-${index}.part`), part, "utf8");
+        return sendJson(res, 200, { ok: true, index, total });
+      } catch (e) {
+        console.error("restore part failed:", e);
+        return sendJson(res, 500, { error: "Ошибка приёма части: " + (e && e.message ? e.message : String(e)) });
+      }
+    }
+
+    if (urlPath === "/api/admin/backup/restore-complete" && method === "POST") {
+      if (!admin) return sendJson(res, 403, { error: "forbidden" });
+      const body = await readBody(req);
+      const token = bulkToken(body && body.token);
+      const total = Number(body && body.total);
+      if (!token || !Number.isInteger(total) || total < 1 || total > 1000) {
+        return sendJson(res, 422, { error: "invalid complete" });
+      }
+      let raw = "";
+      try {
+        for (let i = 0; i < total; i++) {
+          const p = path.join(STAGING_DIR, `${token}-${i}.part`);
+          if (!fs.existsSync(p)) return sendJson(res, 422, { error: `Часть ${i + 1} из ${total} не найдена — повторите загрузку` });
+          raw += fs.readFileSync(p, "utf8");
+        }
+      } catch (e) {
+        return sendJson(res, 500, { error: "Ошибка чтения частей: " + (e && e.message ? e.message : String(e)) });
+      }
+      try {
+        bulkCleanup(token, total);
+      } catch { /* ок */ }
+      let parsed;
+      try { parsed = JSON.parse(raw); } catch { return sendJson(res, 422, { error: "Собранный бэкап повреждён — повторите загрузку" }); }
+      const incoming = parsed && parsed.data && typeof parsed.data === "object" ? parsed.data : parsed;
+      const looksLikeDb =
+        Array.isArray(incoming.staff) ||
+        Array.isArray(incoming.groups) ||
+        (incoming.days && typeof incoming.days === "object");
+      if (!looksLikeDb) return sendJson(res, 422, { error: "not a biotime backup" });
+
+      const prev = db;
+      const next = {
+        staff: Array.isArray(incoming.staff) ? incoming.staff : [],
+        admins: Array.isArray(incoming.admins) ? incoming.admins : (prev ? prev.admins : []),
+        blocked: Array.isArray(incoming.blocked) ? incoming.blocked : (prev ? prev.blocked : []),
+        groups: Array.isArray(incoming.groups) ? incoming.groups : (prev ? prev.groups : []),
+        days: incoming.days && typeof incoming.days === "object" ? incoming.days : {},
+        log: Array.isArray(incoming.log) ? incoming.log : [],
+        driverClients: Array.isArray(incoming.driverClients) ? incoming.driverClients : [],
+        driverRoutes: Array.isArray(incoming.driverRoutes) ? incoming.driverRoutes : [],
+        labels: Array.isArray(incoming.labels) ? incoming.labels : [],
+        lastSeen: {},
+        liveLocations: {},
+        tracks: {},
+        params: incoming.params && typeof incoming.params === "object" ? incoming.params : (prev ? prev.params : {}),
+        norm: Number.isFinite(incoming.norm) ? incoming.norm : (prev && Number.isFinite(prev.norm) ? prev.norm : 9),
+      };
+      if (setDb) setDb(next);
+      try {
+        migrateDays(next);
+        next.groups = next.groups.map((g) => normalizeGroup(g, next.staff));
+        await persistDb();
+        return sendJson(res, 200, {
+          ok: true,
+          restored: {
+            staff: next.staff.length,
+            days: Object.keys(next.days).length,
+            groups: next.groups.length,
+            clients: next.driverClients.length,
+            routes: next.driverRoutes.length,
+            log: next.log.length,
+          },
+        });
+      } catch (err) {
+        console.error("restore (bulk) failed:", err);
+        return sendJson(res, 500, { error: "Ошибка восстановления: " + (err && err.message ? err.message : String(err)) });
+      }
+    }
+
     if (urlPath === "/api/admin/backup/auto" && method === "GET") {
       if (!admin) return sendJson(res, 403, { error: "forbidden" });
       return sendJson(res, 200, {

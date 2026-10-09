@@ -56,16 +56,26 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
+  // respondWith() требует гарантированно Response: если fetch/promise вернули
+  // undefined (например, кэша ещё нет и сеть упала) — браузер кидает
+  // «Failed to convert value to 'Response'» и весь Service Worker ломается
+  // (из-за этого пользователи не получали свежий app.js). Оборачиваем так,
+  // чтобы любой результат, не являющийся Response, стал заглушкой 503.
+  const WITH_FALLBACK = new Response("", { status: 503, statusText: "Service Unavailable", headers: { "Content-Type": "text/plain; charset=utf-8" } });
+  const withFallback = (p) => Promise.resolve(p).then((r) => (r instanceof Response ? r : WITH_FALLBACK));
+
   // Навигация (HTML) — network-first.
   if (req.mode === "navigate") {
     event.respondWith(
-      fetch(req)
-        .then((res) => {
-          const copy = res.clone();
-          caches.open(CACHE).then((cache) => cache.put("./index.html", copy));
-          return res;
-        })
-        .catch(() => caches.match("./index.html"))
+      withFallback(
+        fetch(req)
+          .then((res) => {
+            const copy = res.clone();
+            caches.open(CACHE).then((cache) => cache.put("./index.html", copy));
+            return res;
+          })
+          .catch(() => caches.match("./index.html"))
+      )
     );
     return;
   }
@@ -76,31 +86,35 @@ self.addEventListener("fetch", (event) => {
   // ПК автоматически, и старый закэшированный app.js не «застревает».
   if (url.pathname.endsWith("/app.js")) {
     event.respondWith(
-      fetch(req)
-        .then((res) => {
-          if (res && res.ok) {
-            const copy = res.clone();
-            caches.open(CACHE).then((cache) => cache.put(req, copy));
-          }
-          return res;
-        })
-        .catch(() => caches.match(req))
+      withFallback(
+        fetch(req)
+          .then((res) => {
+            if (res && res.ok) {
+              const copy = res.clone();
+              caches.open(CACHE).then((cache) => cache.put(req, copy));
+            }
+            return res;
+          })
+          .catch(() => caches.match(req))
+      )
     );
     return;
   }
 
   event.respondWith(
-    caches.match(req).then((cached) => {
-      const fresh = fetch(req)
-        .then((res) => {
-          if (res && res.ok) {
-            const copy = res.clone();
-            caches.open(CACHE).then((cache) => cache.put(req, copy));
-          }
-          return res;
-        })
-        .catch(() => cached);
-      return cached || fresh;
-    })
+    withFallback(
+      caches.match(req).then((cached) => {
+        const fresh = fetch(req)
+          .then((res) => {
+            if (res && res.ok) {
+              const copy = res.clone();
+              caches.open(CACHE).then((cache) => cache.put(req, copy));
+            }
+            return res;
+          })
+          .catch(() => cached);
+        return cached || fresh;
+      })
+    )
   );
 });

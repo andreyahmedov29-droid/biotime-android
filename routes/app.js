@@ -45,7 +45,7 @@ module.exports = function createAppHandler({
       let detail = "";
       try {
         const ctrl = new AbortController();
-        const to = setTimeout(() => ctrl.abort(), 20000);
+        const to = setTimeout(() => ctrl.abort(), 8000);
         let res2;
         try {
           res2 = await fetch(url, {
@@ -109,14 +109,16 @@ module.exports = function createAppHandler({
         { Accept: "application/json", "Content-Type": "application/json" },
         auth ? { Authorization: auth } : {}
       );
-      const out = [];
-      for (const c of clients) {
+      // Параллельно (Promise.all) с коротким таймаутом: если 1С медленная/недоступна,
+      // суммарно ответ не «висит» минутами (последовательно N×6с, а раньше ~N×20с —
+      // это превышало таймаут шлюза, и платформа перезапускала контейнер → BH_APP_STARTING).
+      const fetchOne = async (c) => {
         const inn = String((c && c.inn) || "").trim();
         const login = String((c && c.login) || "").trim();
-        if (!inn) { out.push({ ok: false, reason: "no_inn" }); continue; }
+        if (!inn) return { ok: false, reason: "no_inn" };
         try {
           const ctrl = new AbortController();
-          const to = setTimeout(() => ctrl.abort(), 20000);
+          const to = setTimeout(() => ctrl.abort(), 6000);
           let r;
           try {
             r = await fetch(target, {
@@ -126,12 +128,9 @@ module.exports = function createAppHandler({
               signal: ctrl.signal,
             });
           } finally { clearTimeout(to); }
-          if (!r || !r.ok) { out.push({ ok: false, reason: "http_" + (r ? r.status : "?") }); continue; }
+          if (!r || !r.ok) return { ok: false, reason: "http_" + (r ? r.status : "?") };
           const data = await r.json().catch(() => null);
           const arr = Array.isArray(data) ? data : (data ? [data] : []);
-          // Собираем ВСЕ отгрузки контрагента из ответа 1С и «стакаем» их в одну
-          // накладную клиента. Защита: отгрузка, номер которой уже «забран»
-          // (ok-запись в журнале), не стакается повторно.
           const alreadyLog = getOnecPullLog ? getOnecPullLog() : [];
           const shipments = [];
           for (const d of arr) {
@@ -173,17 +172,26 @@ module.exports = function createAppHandler({
             if (pushOnecPullLog) pushOnecPullLog({ source: "button", inn, login, ok: true, number: buyer, posCount: items.length, items });
           }
           if (shipments.length) {
-            out.push({
+            return {
               ok: true,
               buyer: shipments.map((s) => s.buyer).join(" | "),
               items: shipments.reduce((acc, s) => acc.concat(s.items), []),
-            });
-          } else {
-            out.push({ ok: false, reason: "empty" });
+            };
           }
+          return { ok: false, reason: "empty" };
         } catch (e) {
-          out.push({ ok: false, reason: "err" });
+          return { ok: false, reason: "err" };
         }
+      };
+      // Ограничиваем параллельность (по 3 за раз): тяжёлые ответы 1С по всем клиентам
+      // одновременно могли съедать память контейнера и ронять его (OOM → рестарт →
+      // экран «Приложение запускается»). Достаточно быстро, но безопасно для памяти.
+      const CONCURRENT = 3;
+      const out = [];
+      for (let i = 0; i < clients.length; i += CONCURRENT) {
+        const chunk = clients.slice(i, i + CONCURRENT);
+        const res = await Promise.all(chunk.map(fetchOne));
+        out.push(...res);
       }
       const filled = out.filter((o) => o.ok).length;
       const noInn = out.filter((o) => o.reason === "no_inn").length;
