@@ -3223,6 +3223,12 @@ async function fetchOnecRealization(inn, login) {
     // (может прийти и массивом). Нормализуем в список накладных.
     const arr = Array.isArray(data) ? data : [data];
     for (const d of arr) {
+      // Каждая накладная несёт поле inn (кому принадлежит). Забираем её только
+      // если это ИНН запрошенного контрагента (или поле не указано). Иначе
+      // общий список 1С «прилипал» к первому запросившему — все накладные
+      // уходили в одного клиента.
+      const docInn = String((d && (d.inn != null ? d.inn : "")) || "").trim();
+      if (docInn && docInn !== innV) continue;
       const list = Array.isArray(d && d.id_partstiker_list)
         ? d.id_partstiker_list
         : (Array.isArray(d && d.items) ? d.items : []);

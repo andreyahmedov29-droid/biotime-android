@@ -142,6 +142,62 @@ test("POST /api/waybills/from-1c: пустой ответ 1С фиксирует
   }
 });
 
+test("БАГ: /api/waybills/from-1c отдаёт клиенту накладные с ЧУЖИМ ИНН (не сверяет d.inn), если 1С возвращает общий список", async () => {
+  // 1С возвращает на ЛЮБОЙ запрос одну и ту же накладную, которая по полю
+  // «inn» принадлежит ДРУГОМУ клиенту (везде d.inn = 222), а не запросившему.
+  // Правильное поведение: сервер должен распределить накладную клиенту, чей
+  // ИНН совпадает с d.inn (222), а не тому, кто запросил (111). Сейчас он
+  // отдаёт её первому запросившему — поэтому «все накладные уходят одному».
+  const srv = http.createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify([{
+      shipment_number: "88YT-000111",
+      inn: "2229999999", // принадлежит другому контрагенту (NOT запросившему)
+      id_partstiker_list: [
+        { id_partstiker: "0001/1", articul_number: "ART1", name: "Деталь", quantity: 1 },
+      ],
+    }]));
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  const port = srv.address().port;
+  const oldBase = process.env.ONEC_API_URL, oldUser = process.env.ONEC_API_USER, oldPass = process.env.ONEC_API_PASS;
+  process.env.ONEC_API_URL = `http://127.0.0.1:${port}/shipment`;
+  delete process.env.ONEC_API_USER; delete process.env.ONEC_API_PASS;
+  const logged = [];
+  const h = make({
+    getOnecPullLog: () => logged,
+    pushOnecPullLog: (e) => logged.push(e),
+    readBody: async () => ({
+      clients: [
+        { inn: "1111111111", login: "FROZ", client: "Фроза" },
+        { inn: "2229999999", login: "LXTT", client: "ЛюксТрейд" },
+      ],
+    }),
+  });
+  const res = {};
+  try {
+    await h({ headers: {} }, res, "/api/waybills/from-1c", "POST", { id: "1" }, true);
+    assert.strictEqual(res._json.status, 200);
+    const wb = res._json.obj.waybills;
+    // Накладная по полю inn принадлежит второму клиенту (2229999999).
+    // Сервер должен положить её второму клиенту, а не первому (1111111111).
+    // Если баг воспроизведён — оба клиента получат одну и ту же чужую накладную.
+    const firstGetsItems = wb[0] && wb[0].ok === true && Array.isArray(wb[0].items) && wb[0].items.length > 0;
+    const secondGetsItems = wb[1] && wb[1].ok === true && Array.isArray(wb[1].items) && wb[1].items.length > 0;
+    assert.strictEqual(
+      firstGetsItems,
+      false,
+      "БАГ ПОДТВЕРЖДЁН: сервер отдал накладную с ИНН 2229999999 первому клиенту (1111111111), не сверив d.inn с ИНН клиента — все накладные уходят одному из-за этого"
+    );
+    assert.strictEqual(secondGetsItems, true, "Накладная должна попасть клиенту с ИНН 2229999999");
+  } finally {
+    if (oldBase === undefined) delete process.env.ONEC_API_URL; else process.env.ONEC_API_URL = oldBase;
+    if (oldUser === undefined) delete process.env.ONEC_API_USER; else process.env.ONEC_API_USER = oldUser;
+    if (oldPass === undefined) delete process.env.ONEC_API_PASS; else process.env.ONEC_API_PASS = oldPass;
+    await new Promise((r) => srv.close(r));
+  }
+});
+
 test("POST /api/app/update c неверным токеном -> 401", async () => {
   const h = make();
   const res = {};

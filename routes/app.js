@@ -151,6 +151,13 @@ module.exports = function createAppHandler({
           const alreadyLog = getOnecPullLog ? getOnecPullLog() : [];
           const shipments = [];
           for (const d of arr) {
+            // Каждая накладная из 1С несёт поле inn (кому она принадлежит).
+            // Забираем её клиенту ТОЛЬКО если это его ИНН (или поле не указано).
+            // Иначе, если 1С отдаёт по запросу чужие накладные, они не должны
+            // «прилипать» к первому запросившему (баг: все накладные уходили
+            // в одного клиента).
+            const docInn = String((d && (d.inn != null ? d.inn : "")) || "").trim();
+            if (docInn && docInn !== inn) continue;
             const list = Array.isArray(d && d.id_partstiker_list) ? d.id_partstiker_list : [];
             if (!list.length) continue;
             const items = list
