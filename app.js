@@ -648,6 +648,7 @@
     state.canEditStatus = !!s.canEditStatus;
     state.canManageShipment = !!s.canManageShipment;
     state.canSeeLogs = !!s.canSeeLogs;
+    state.canSeeReports = !!s.canSeeReports;
     // Latch: если раздел «Отгрузка» уже был доступен — держим его на этом устройстве,
     // чтобы транзиентный `false` при перезапросе состояния (напр. при нескольких
     // открытых устройствах) не прятал вкладку до перезагрузки страницы.
@@ -1483,7 +1484,7 @@
     pageMyRoutes: $("page-myroutes"), myroutesList: $("myroutesList"), myroutesCount: $("myroutesCount"), myroutesDateFilter: $("myroutesDateFilter"),
     pageShipment: $("page-shipment"),
     pageScanlog: $("page-scanlog"),
-    pageNotfound: $("page-notfound"), pageLogs: $("page-logs"),
+    pageNotfound: $("page-notfound"), pageLogs: $("page-logs"), pageReports: $("page-reports"), reportsHost: $("reportsHost"),
     nfdModal: $("notfoundDetailModal"), nfdModalBody: $("nfdModalBody"), nfdModalClose: $("nfdModalClose"),
     nfTabs: $("nfTabs"),
     nfSummary: $("nfSummary"),
@@ -1550,6 +1551,7 @@
     notfoundUsersGroups: $("notfoundUsersGroups"),
     logUsersGroups: $("logUsersGroups"), logUsersSearch: $("logUsersSearch"), logUsersCount: $("logUsersCount"),
     notfoundTab: $("notfoundTab"),
+    reportsTab: $("reportsTab"),
     allowDriverStartWithoutShipment: $("allowDriverStartWithoutShipment"),
     allowFinishUnloadIncomplete: $("allowFinishUnloadIncomplete"),
     allowDriverReorderPoints: $("allowDriverReorderPoints"),
@@ -2954,6 +2956,8 @@
     if (name === "notfound" && !canSeeNotfound()) name = "calendar";
     // Вкладка «Логи» — админ, модератор или сотрудник из «Параметры → Доступ к “Логи”».
     if (name === "logs" && !canSeeLogs()) name = "calendar";
+    // Вкладка «Отчёты» — админ, модератор или сотрудник из «Параметры → Доступ к “Отчёты”».
+    if (name === "reports" && !canSeeReports()) name = "calendar";
     el.pageTimer.hidden = name !== "timer";
     el.pageCalendar.hidden = name !== "calendar";
     el.pageLive.hidden = name !== "live";
@@ -2964,8 +2968,10 @@
     el.pageScanlog.hidden = name !== "scanlog";
     el.pageNotfound.hidden = name !== "notfound";
     if (el.pageLogs) el.pageLogs.hidden = name !== "logs";
+    if (el.pageReports) el.pageReports.hidden = name !== "reports";
     el.pageDelivery.hidden = name !== "delivery";
     if (name === "logs") renderScansLog();
+    if (name === "reports") renderReports();
     document.body.classList.remove("report-full", "live-full");
     // Отчёт — полноширинный на больших дисплеях: табель занимает весь экран.
     if (name === "report") document.body.classList.add("report-full");
@@ -10169,6 +10175,32 @@
     el.logUsersSearch.addEventListener("input", () =>
       el.logUsersGroups && renderLogUsersChecks(el.logUsersGroups));
   }
+  function renderReportsUsersChecks(container) {
+    if (!container) return;
+    const staff = state.staff || [];
+    const sel = state.params.reportsUsers || [];
+    if (el.reportsUsersCount) el.reportsUsersCount.textContent = sel.length ? `· выбрано: ${sel.length}` : "";
+    const q = (el.reportsUsersSearch ? el.reportsUsersSearch.value : "").toLowerCase().trim();
+    const filtered = staff.filter((s) => !q || String(s.name || "").toLowerCase().includes(q));
+    if (!filtered.length) {
+      container.innerHTML = `<span class="group-scope-empty">Сотрудники не найдены.</span>`;
+      return;
+    }
+    container.innerHTML = filtered.map((s) => {
+      const checked = sel.some((x) => String(x) === String(s.id)) ? "checked" : "";
+      return `<label class="group-check">
+        <input type="checkbox" value="${escapeHtml(String(s.id))}" ${checked} />
+        <span>${escapeHtml(s.name)}</span>
+      </label>`;
+    }).join("");
+    container.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+      cb.addEventListener("change", () => applyParams());
+    });
+  }
+  if (el.reportsUsersSearch) {
+    el.reportsUsersSearch.addEventListener("input", () =>
+      el.reportsUsersGroups && renderReportsUsersChecks(el.reportsUsersGroups));
+  }
 
   // Client-side replica of the server's group-scoped overtime visibility, used to
   // refresh the "me"/staff flags right after an admin saves the params.
@@ -10216,6 +10248,22 @@
     if (ids.length === 0) return false;
     return state.me && state.me.id != null && ids.some((x) => String(x) === String(state.me.id));
   }
+  function canSeeReports() {
+    if (state.isAdmin || state.isModerator) return true;
+    if (typeof state.canSeeReports === "boolean") return state.canSeeReports;
+    const ids = state.params.reportsUsers || [];
+    if (ids.length === 0) return false;
+    return state.me && state.me.id != null && ids.some((x) => String(x) === String(state.me.id));
+  }
+  // Отрисовка вкладки «Отчёты». Пока модуль АБЦП не перенесён — заглушка; после
+  // интеграции здесь монтируется его интерфейс (вариант 2 — прямая встройка).
+  function renderReports() {
+    const host = el.reportsHost;
+    if (!host) return;
+    if (host.dataset.ready) return;
+    host.dataset.ready = "1";
+    host.innerHTML = `<div style="padding:48px 16px;text-align:center;opacity:.7">Модуль «Отчёты» будет подключён в этот раздел.</div>`;
+  }
   function recomputeOverVisibility() {
     const pH = state.params.showOverHoursGroups || [];
     const pS = state.params.showOverSumGroups || [];
@@ -10248,6 +10296,7 @@
     renderGroupChecks(el.shipmentGroups, state.params.shipmentGroups || []);
     renderNotfoundUsersChecks(el.notfoundUsersGroups);
     renderLogUsersChecks(el.logUsersGroups);
+    renderReportsUsersChecks(el.reportsUsersGroups);
     if (el.normVal) el.normVal.value = state.norm;
     if (el.updateVersionCode) el.updateVersionCode.value = state.params.updateVersionCode != null ? state.params.updateVersionCode : "";
     if (el.updateVersionName) el.updateVersionName.value = state.params.updateVersionName || "";
@@ -10494,6 +10543,7 @@
       shipmentGroups: collectGroupChecks(el.shipmentGroups),
       notfoundUsers: collectGroupChecks(el.notfoundUsersGroups),
       logUsers: collectGroupChecks(el.logUsersGroups),
+      reportsUsers: collectGroupChecks(el.reportsUsersGroups),
     };
     // Множитель теперь управляется только через вкладку «Множитель» (multRules):
     // старые поля params.multiplier/multFrom/multTo не редактируются здесь и
@@ -12964,7 +13014,9 @@
     // The "Отчёт" tab is visible to admins and moderators.
     el.tabs.querySelectorAll(".tab.admin-only").forEach((t) =>
       t.classList.toggle("admin-visible",
-        (t.id === "logsTab") ? canSeeLogs() : (state.isAdmin || state.isModerator))
+        (t.id === "logsTab") ? canSeeLogs()
+          : (t.id === "reportsTab") ? canSeeReports()
+          : (state.isAdmin || state.isModerator))
     );
     // Вкладка «Отчёт не найдено» дополнительно доступна отмеченным сотрудникам.
     if (el.notfoundTab) el.notfoundTab.classList.toggle("admin-visible", canSeeNotfound());

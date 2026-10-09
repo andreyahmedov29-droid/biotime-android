@@ -32,6 +32,9 @@ module.exports = function createParamsHandler({ getDb, persistDb, sendJson, read
       if (Array.isArray(body.logUsers)) {
         p.logUsers = keepStaffParamIds(body.logUsers, db);
       }
+      if (Array.isArray(body.reportsUsers)) {
+        p.reportsUsers = keepStaffParamIds(body.reportsUsers, db);
+      }
       if (typeof body.allowDriverStartWithoutShipment === "boolean") {
         p.allowDriverStartWithoutShipment = body.allowDriverStartWithoutShipment;
       }

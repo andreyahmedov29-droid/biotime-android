@@ -80,6 +80,7 @@
       <button class="tab" data-tab="scanlog">Журнал</button>
       <button class="tab admin-only" id="notfoundTab" data-tab="notfound">Проблемы со склада</button>
       <button class="tab admin-only" id="logsTab" data-tab="logs">Логи</button>
+      <button class="tab admin-only" id="reportsTab" data-tab="reports">Отчёты</button>
     </nav>
     <div class="topbar-right">
       <div class="user-chip" id="userChip" hidden>
@@ -839,6 +840,19 @@
         </div>
       </section>
     </section>
+
+    <!-- Отчёты (встроенный модуль АБЦП) — доступ через params.reportsUsers -->
+    <section class="tab-page" id="page-reports" hidden>
+      <section class="cal-card">
+        <div class="sub-head">
+          <div class="sub-title-wrap">
+            <h4 class="sub-title">Отчёты</h4>
+            <p class="sub-note">Аналитика и отчёты по поставкам, ценам, отказам и срокам</p>
+          </div>
+        </div>
+        <div id="reportsHost"><!-- сюда монтируется модуль АБЦП --></div>
+      </section>
+    </section>
   </main>
 
   <!-- Печать этикеток отгрузки: выбор клиента и количества мест -->
@@ -1187,6 +1201,16 @@
                 <input id="logUsersSearch" class="text-input group-search" type="text" placeholder="Найти сотрудника..." autocomplete="off" />
                 <div class="group-check-list" id="logUsersGroups"></div>
                 <span class="group-scope-hint">Вкладку «Логи» видят отмеченные сотрудники (админ и модератор — всегда). Галочки сохраняются сразу.</span>
+              </div>
+            </details>
+          </div>
+          <div class="group-scope">
+            <details class="group-collapse">
+              <summary>Доступ к «Отчёты» <span class="group-collapse-count" id="reportsUsersCount"></span></summary>
+              <div class="group-access">
+                <input id="reportsUsersSearch" class="text-input group-search" type="text" placeholder="Найти сотрудника..." autocomplete="off" />
+                <div class="group-check-list" id="reportsUsersGroups"></div>
+                <span class="group-scope-hint">Вкладку «Отчёты» видят отмеченные сотрудники (админ и модератор — всегда). Галочки сохраняются сразу.</span>
               </div>
             </details>
           </div>

@@ -538,6 +538,7 @@ function defaultDb() {
       allowWaybill: false,
       notfoundUsers: [], // кто (кроме админа) видит «Отчёт не найдено»
       logUsers: [], // кто (кроме админа/модератора) видит вкладку «Логи»
+      reportsUsers: [], // кто (кроме админа/модератора) видит вкладку «Отчёты» (АБЦП)
       // Версия обновления Android-APK, управляемая из «Параметры» приложения.
       // Пусто = берутся значения из окружения APP_UPDATE_* (или жёсткие дефолты ниже).
       updateVersionCode: null,
@@ -2094,6 +2095,20 @@ function canSeeLogs(user, dbData) {
   if (isModerator(user, dbData)) return true;
   const ids = Array.isArray(dbData && dbData.params && dbData.params.logUsers)
     ? dbData.params.logUsers
+    : [];
+  if (ids.length === 0) return false;
+  return user.id != null && ids.some((x) => String(x) === String(user.id));
+}
+
+// Кто (кроме админа и модератора) видит вкладку «Отчёты» (модуль АБЦП): сотрудники
+// из «Параметры → Доступ к “Отчёты”» (reportsUsers). Сервер тоже пускает именно
+// этих сотрудников в /reports/api/* — иначе вкладка видна, а данные не отдаются.
+function canSeeReports(user, dbData) {
+  if (!user) return false;
+  if (isAdmin(user, dbData)) return true;
+  if (isModerator(user, dbData)) return true;
+  const ids = Array.isArray(dbData && dbData.params && dbData.params.reportsUsers)
+    ? dbData.params.reportsUsers
     : [];
   if (ids.length === 0) return false;
   return user.id != null && ids.some((x) => String(x) === String(user.id));
@@ -3845,6 +3860,7 @@ const handleMeStateRoutes = require("./routes/me-state")({
   canSeeShipment,
   canSeeNotfound,
   canSeeLogs,
+  canSeeReports,
 });
 // Системные маршруты (/api/log, /api/heartbeat, /api/live, /api/log/clear).
 const handleSystemRoutes = require("./routes/system")({

@@ -22,6 +22,7 @@ module.exports = function createMeStateHandler({
   canSeeShipment,
   canSeeNotfound,
   canSeeLogs,
+  canSeeReports,
 } = {}) {
   return async function handleMeStateRoutes(req, res, urlPath, method, user, admin) {
     const db = getDb ? getDb() : {};
@@ -78,6 +79,7 @@ module.exports = function createMeStateHandler({
         canSeeShipment: canSeeShipment(user, db),
         canSeeNotfound: canSeeNotfound(user, db),
         canSeeLogs: canSeeLogs(user, db),
+        canSeeReports: (canSeeReports || (() => false))(user, db),
         staff: staffView,
         days: visibleDays(user, db),
         log: visibleLog(user, db),
