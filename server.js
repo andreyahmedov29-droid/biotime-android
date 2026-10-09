@@ -1352,6 +1352,7 @@ function normalizeRouteClient(c) {
     logoText: String((c && c.logoText) || "").toUpperCase().slice(0, 5),
     bundleName: String((c && c.bundleName) || "").slice(0, 200),
     inn: String((c && c.inn) || "").trim(),
+    login: String((c && c.login) || "").trim(),
   };
   if (members && members.length > 0) base.members = members;
   return base;
@@ -3140,24 +3141,34 @@ function artNorm(s) {
 //   GET {url}/realizations?inn=<ИНН>
 //   -> [ { id, number, taken: false, items: [{ article, name, qty }] } ]  (или { realizations: [...] })
 function innForClient(routeClient, dbData) {
-  if (routeClient && String((routeClient && routeClient.inn) || "").trim()) {
-    return String(routeClient.inn).trim();
-  }
+  // Приоритет — АКТУАЛЬНАЯ карточка контрагента (db.driverClients): там ИНН может
+  // измениться после создания маршрута, а копия в точке маршрута — устареть
+  // (раньше вся партия разноса брала один общий ИНН из первых точек маршрута).
+  // Точка маршрута остаётся фолбэком только если контрагента в карточке нет.
   const byName = (dbData && dbData.driverClients || []).find(
     (c) => String(c.client) === String(routeClient && routeClient.client)
   );
-  return byName ? String(byName.inn || "").trim() : "";
+  if (byName && String(byName.inn || "").trim()) {
+    return String(byName.inn).trim();
+  }
+  if (routeClient && String((routeClient && routeClient.inn) || "").trim()) {
+    return String(routeClient.inn).trim();
+  }
+  return "";
 }
 
 // Буквенный логин контрагента в 1С (нужен для сопоставления реализации).
 function loginForClient(routeClient, dbData) {
-  if (routeClient && String((routeClient && routeClient.login) || "").trim()) {
-    return String(routeClient.login).trim();
-  }
   const byName = (dbData && dbData.driverClients || []).find(
     (c) => String(c.client) === String(routeClient && routeClient.client)
   );
-  return byName ? String(byName.login || "").trim() : "";
+  if (byName && String(byName.login || "").trim()) {
+    return String(byName.login).trim();
+  }
+  if (routeClient && String((routeClient && routeClient.login) || "").trim()) {
+    return String(routeClient.login).trim();
+  }
+  return "";
 }
 
 async function fetchOnecRealization(inn, login) {

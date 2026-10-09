@@ -38,10 +38,13 @@ module.exports = function createRouteCreateHandler({
       if (!route) return sendJson(res, 404, { error: "Маршрут не найден" });
       const clients = Array.isArray(route.clients) ? route.clients : [];
       const clientInn = (rc) => {
+        // Приоритет — актуальная карточка контрагента (иначе вся партия разноса
+        // брала бы общий ИНН из точек маршрута, устаревший после правок карточки).
+        const by = (db.driverClients || []).find((c) => String(c.client) === String(rc && rc.client));
+        if (by && String(by.inn || "").trim()) return String(by.inn).trim();
         const own = rc && String(rc.inn || "").trim();
         if (own) return own;
-        const by = (db.driverClients || []).find((c) => String(c.client) === String(rc && rc.client));
-        return by ? String(by.inn || "").trim() : "";
+        return "";
       };
       const wbObj = route.waybills && typeof route.waybills === "object" ? route.waybills : {};
       const waybillsArr = Object.entries(wbObj).map(([k, w]) => ({
