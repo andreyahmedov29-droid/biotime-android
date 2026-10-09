@@ -187,7 +187,8 @@ class LocationTrackingService : Service() {
         // Фоновый keepalive сессии: каждый координатный POST в фоне идёт на домен
         // приложения через платформенный Gateway. Чтобы Gateway признал запрос и
         // продлил сессию (_vibe_gw), передаём накопленную WebView-куку сессии так же,
-        // как это делает активная вкладка.
+        // как это делает активная вкладка. Пока рабочий день активен, трекер работает
+        // в фоне каждые ~15 c — значит Gateway-сессия не протухает за время простоя.
         try {
             val cookie = CookieManager.getInstance().getCookie(url.toString())
             if (!cookie.isNullOrEmpty()) conn.setRequestProperty("Cookie", cookie)
