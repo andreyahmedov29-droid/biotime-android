@@ -243,7 +243,7 @@ thead th {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  max-width: 1120px;
+  max-width: none;
   margin: 0 auto;
   padding: 18px 28px;
 }
@@ -319,12 +319,29 @@ thead th {
   font-weight: 600;
   font-size: 13px;
   letter-spacing: 0.03em;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
   padding: 8px 10px;
   border-radius: 8px;
   border-bottom: 2px solid transparent;
   cursor: pointer;
   white-space: nowrap;
   transition: color var(--t-fast) var(--ease), background var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
+}
+
+/* Автоадаптация вкладок под ширину экрана: на узких экранах вкладки компактнее.
+   Перенос (flex-wrap) уже включён у nav.tabs, чтобы ничего не обрезалось. */
+@media (max-width: 860px) {
+  .tab { padding: 7px 8px; font-size: 12px; letter-spacing: 0.02em; }
+  nav.tabs { gap: 2px; }
+}
+@media (max-width: 560px) {
+  .tab { padding: 6px 7px; font-size: 11.5px; }
+  .reports-tab .reports-tab-icon { width: 14px; height: 14px; }
 }
 
 .tab:hover {
@@ -965,7 +982,8 @@ body.state-working .clock-card {
 .dial-time {
   font-family: var(--font-mono);
   font-weight: 800;
-  font-size: clamp(46px, 8vw, 80px);
+  /* Автоподстройка под разрешение: масштаб и по ширине, и по высоте экрана */
+  font-size: clamp(38px, min(9vw, 11vh), 120px);
   line-height: 1;
   letter-spacing: 0.01em;
   font-variant-numeric: tabular-nums;
@@ -3704,6 +3722,7 @@ select.text-input option {
 .admin-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
   background: var(--panel-soft);
   border: 1px solid var(--line);
@@ -3711,6 +3730,10 @@ select.text-input option {
   padding: 12px 14px;
   transition: border-color var(--t-fast), background var(--t-fast), transform var(--t-med) var(--ease), box-shadow var(--t-med) var(--ease);
 }
+
+.admin-row .admin-row-main { flex: 1 1 200px; min-width: 0; }
+.admin-row .row-action { flex: 0 0 auto; margin-left: auto; }
+.admin-row .row-acct { flex: 1 0 100%; }
 
 .admin-row:hover {
   border-color: rgba(255, 171, 56, 0.4);
@@ -3774,6 +3797,20 @@ select.text-input option {
   gap: 8px;
   align-items: center;
 }
+
+/* Блок учётной записи внутри строки «Сотрудники»: логин/пароль + Сохранить + Войти */
+.admin-row .row-acct {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 6px;
+  width: 100%;
+  padding-top: 6px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.08);
+}
+.admin-row .row-acct .acct-login,
+.admin-row .row-acct .acct-pass { flex: 1 1 140px; min-width: 120px; }
 
 .mini-btn {
   background: rgba(255, 255, 255, 0.05);
@@ -7909,6 +7946,11 @@ button.icon-btn svg,
 .wb-log-details.wb-tbl .wbl-name { white-space: normal; }
 /* Журнал «Логи»: вкладки по клиентам (Клиент → его сканы) */
 .scans-client { margin-bottom: 8px; border: 1px solid rgba(255,255,255,0.09); border-radius: 9px; overflow: hidden; }
+.reports-tab { display: inline-flex; flex-direction: row; align-items: center; justify-content: center; gap: 8px; }
+.reports-tab svg { display: block; flex: 0 0 auto; margin: 0; }
+.reports-tab span { line-height: 1; }
+.reports-tab-icon { flex-shrink: 0; border-radius: 6px; }
+.reports-tab .reports-tab-icon { width: 16px; height: 16px; display: block; }
 .scans-client-head {
   display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none;
   padding: 8px 10px; background: rgba(0,0,0,0.18); font-weight: 700; font-size: 13px;
@@ -7926,6 +7968,33 @@ button.icon-btn svg,
 .scans-client-body td { padding: 4px 8px; border-bottom: 1px dashed rgba(255,255,255,0.07); white-space: nowrap; }
 .reports-embed { padding: 0; }
 .reports-embed iframe { display: block; }
+/* Полноэкранное модальное окно «Отчёты» */
+.reports-modal {
+  width: 100vw;
+  max-width: none;
+  height: 100vh;
+  margin: 0;
+  padding: 0;
+  background: #0d1117;
+  border: 0;
+  border-radius: 0;
+}
+.reports-modal::backdrop { background: rgba(0,0,0,.6); }
+.reports-modal .modal-close { font-size: 26px; color: #93a0ad; width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; }
+.reports-modal .modal-close:hover { color: #ffb020; background: rgba(255,171,56,.12); }
+.reports-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(90deg, rgba(255,171,56,.08), rgba(255,255,255,.02));
+  backdrop-filter: blur(8px);
+}
+.reports-modal-title { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 15px; color: #e9eef4; }
+.reports-modal-title::before { content: ""; width: 4px; height: 18px; border-radius: 2px; background: #ffb020; }
+.reports-modal-body { height: calc(100vh - 49px); }
+.reports-modal-body iframe { width: 100%; height: 100%; border: 0; display: block; background: #0d1117; }
 .wbl-count {
   margin-left: auto; opacity: .65; font-size: 12px; font-weight: 600;
   font-variant-numeric: tabular-nums; /* ровные цифры: 1 / 12 не «пляшут» по ширине */

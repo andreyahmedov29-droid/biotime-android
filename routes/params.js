@@ -35,6 +35,23 @@ module.exports = function createParamsHandler({ getDb, persistDb, sendJson, read
       if (Array.isArray(body.reportsUsers)) {
         p.reportsUsers = keepStaffParamIds(body.reportsUsers, db);
       }
+      if (body.reportsSections && typeof body.reportsSections === "object") {
+        const out = {};
+        for (const [key, ids] of Object.entries(body.reportsSections)) {
+          if (!Array.isArray(ids)) continue;
+          out[key] = ids.map((x) => String(x));
+        }
+        p.reportsSections = out;
+      }
+      if (Array.isArray(body.sverkiUsers)) {
+        p.sverkiUsers = keepStaffParamIds(body.sverkiUsers, db);
+      }
+      if (Array.isArray(body.procenkaUsers)) {
+        p.procenkaUsers = keepStaffParamIds(body.procenkaUsers, db);
+      }
+      if (Array.isArray(body.parserUsers)) {
+        p.parserUsers = keepStaffParamIds(body.parserUsers, db);
+      }
       if (typeof body.allowDriverStartWithoutShipment === "boolean") {
         p.allowDriverStartWithoutShipment = body.allowDriverStartWithoutShipment;
       }

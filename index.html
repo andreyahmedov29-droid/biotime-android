@@ -42,7 +42,12 @@
       <button class="tab" data-tab="scanlog">Журнал</button>
       <button class="tab admin-only" id="notfoundTab" data-tab="notfound">Проблемы со склада</button>
       <button class="tab admin-only" id="logsTab" data-tab="logs">Логи</button>
-      <button class="tab admin-only" id="reportsTab" data-tab="reports">Отчёты</button>
+      <button class="tab admin-only reports-tab" id="reportsTab" data-tab="reports">
+        <span>Отчеты ПрофМаркет</span>
+      </button>
+      <button class="tab admin-only" id="sverkiTab" data-tab="sverki">Сверки</button>
+      <button class="tab admin-only" id="procenkaTab" data-tab="procenka">Проценка</button>
+      <button class="tab admin-only" id="parserTab" data-tab="parser">Парсер почты</button>
     </nav>
     <div class="topbar-right">
       <div class="user-chip" id="userChip" hidden>
@@ -815,6 +820,60 @@
         <div id="reportsHost"><!-- сюда монтируется модуль АБЦП --></div>
       </section>
     </section>
+
+    <!-- Отчёты: полноэкранное модальное окно с модулем /reports/ -->
+    <dialog class="modal reports-modal" id="reportsModal">
+      <div class="reports-modal-head">
+        <span class="reports-modal-title">Отчеты ПрофМаркет</span>
+        <button type="button" class="icon-btn modal-close" id="reportsModalClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <div class="reports-modal-body" id="reportsModalFrame"></div>
+    </dialog>
+
+    <!-- Сверки: полноэкранное модальное окно с модулем /sverki/ -->
+    <dialog class="modal reports-modal" id="sverkiModal">
+      <div class="reports-modal-head">
+        <span class="reports-modal-title">Сверки</span>
+        <button type="button" class="icon-btn modal-close" id="sverkiModalClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <div class="reports-modal-body" id="sverkiModalFrame"></div>
+    </dialog>
+
+    <!-- Проценка: полноэкранное модальное окно с модулем /procenka/ -->
+    <dialog class="modal reports-modal" id="procenkaModal">
+      <div class="reports-modal-head">
+        <span class="reports-modal-title">Проценка</span>
+        <button type="button" class="icon-btn modal-close" id="procenkaModalClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <div class="reports-modal-body" id="procenkaModalFrame"></div>
+    </dialog>
+
+    <!-- Парсер почты: полноэкранное модальное окно с модулем /parser/ -->
+    <dialog class="modal reports-modal" id="parserModal">
+      <div class="reports-modal-head">
+        <span class="reports-modal-title">Парсер почты</span>
+        <button type="button" class="icon-btn modal-close" id="parserModalClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <div class="reports-modal-body" id="parserModalFrame"></div>
+    </dialog>
+
+    <!-- Проблемы со склада: полноэкранное модальное окно -->
+    <dialog class="modal reports-modal" id="notfoundModal">
+      <div class="reports-modal-head">
+        <span class="reports-modal-title">Проблемы со склада</span>
+        <button type="button" class="icon-btn modal-close" id="notfoundModalClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <div class="reports-modal-body" id="notfoundModalBody"></div>
+    </dialog>
+
+    <!-- Зарплата: полноэкранное модальное окно -->
+    <dialog class="modal reports-modal" id="salaryModal">
+      <div class="reports-modal-head">
+        <span class="reports-modal-title">Зарплата</span>
+        <button type="button" class="icon-btn modal-close" id="salaryModalClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <div class="reports-modal-body" id="salaryModalBody"></div>
+    </dialog>
   </main>
 
   <!-- Печать этикеток отгрузки: выбор клиента и количества мест -->
@@ -916,6 +975,8 @@
         <button class="atab" data-sub="multiplier">Множитель</button>
         <button class="atab" data-sub="log">Журнал</button>
         <button class="atab" data-sub="settings">Параметры</button>
+        <button class="atab" data-sub="access">Доступ к разделам</button>
+        <button class="atab" data-sub="backup">Бекап</button>
       </nav>
 
       <!-- Все сотрудники -->
@@ -927,7 +988,6 @@
           </div>
         </div>
         <div class="action-bar">
-          <input id="newStaffName" class="text-input" placeholder="ФИО сотрудника" />
           <button class="ctrl ctrl-primary" id="addStaffBtn">Добавить</button>
         </div>
         <div class="admin-list" id="staffList"></div>
@@ -1059,6 +1119,116 @@
       </div>
 
       <!-- Настройки -->
+      <div class="asub" data-sub="access" hidden>
+        <div class="sub-head">
+          <div class="sub-title-wrap">
+            <h4 class="sub-title">Доступ к разделам</h4>
+            <p class="sub-note">Настройте, какие сотрудники видят разделы приложения (админ и модератор — всегда). Галочки сохраняются сразу.</p>
+          </div>
+        </div>
+        <div class="group-scope">
+          <details class="group-collapse">
+            <summary>Доступ к «Проблемы со склада» <span class="group-collapse-count" id="notfoundUsersCount"></span></summary>
+            <div class="group-access">
+              <input id="notfoundUsersSearch" class="text-input group-search" type="text" placeholder="Найти сотрудника..." autocomplete="off" />
+              <div class="group-check-list" id="notfoundUsersGroups"></div>
+              <span class="group-scope-hint">Вкладку «Проблемы со склада» видят отмеченные сотрудники (админ — всегда). Галочки сохраняются сразу.</span>
+            </div>
+          </details>
+        </div>
+        <div class="group-scope">
+          <details class="group-collapse">
+            <summary>Доступ к «Логи» <span class="group-collapse-count" id="logUsersCount"></span></summary>
+            <div class="group-access">
+              <input id="logUsersSearch" class="text-input group-search" type="text" placeholder="Найти сотрудника..." autocomplete="off" />
+              <div class="group-check-list" id="logUsersGroups"></div>
+              <span class="group-scope-hint">Вкладку «Логи» видят отмеченные сотрудники (админ и модератор — всегда). Галочки сохраняются сразу.</span>
+            </div>
+          </details>
+        </div>
+        <div class="group-scope">
+          <details class="group-collapse">
+            <summary>Доступ к «Отчёты» <span class="group-collapse-count" id="reportsUsersCount"></span></summary>
+            <div class="group-access">
+              <input id="reportsUsersSearch" class="text-input group-search" type="text" placeholder="Найти сотрудника..." autocomplete="off" />
+              <div class="group-check-list" id="reportsUsersGroups"></div>
+              <span class="group-scope-hint">Вкладку «Отчёты» видят отмеченные сотрудники (админ — всегда). Галочки сохраняются сразу.</span>
+            </div>
+          </details>
+          <div class="group-section">
+            <div class="group-section-title">Разделы «Отчётов» — видимость вкладок</div>
+            <div id="reportsSectionsWrap"></div>
+          </div>
+        </div>
+        <div class="group-scope">
+          <details class="group-collapse">
+            <summary>Доступ к «Сверки» <span class="group-collapse-count" id="sverkiUsersCount"></span></summary>
+            <div class="group-access">
+              <input id="sverkiUsersSearch" class="text-input group-search" type="text" placeholder="Найти сотрудника..." autocomplete="off" />
+              <div class="group-check-list" id="sverkiUsersGroups"></div>
+              <span class="group-scope-hint">Вкладку «Сверки» видят отмеченные сотрудники (админ — всегда). Галочки сохраняются сразу.</span>
+            </div>
+          </details>
+        </div>
+        <div class="group-scope">
+          <details class="group-collapse">
+            <summary>Доступ к «Проценка» <span class="group-collapse-count" id="procenkaUsersCount"></span></summary>
+            <div class="group-access">
+              <input id="procenkaUsersSearch" class="text-input group-search" type="text" placeholder="Найти сотрудника..." autocomplete="off" />
+              <div class="group-check-list" id="procenkaUsersGroups"></div>
+              <span class="group-scope-hint">Вкладку «Проценка» видят отмеченные сотрудники (админ — всегда). Галочки сохраняются сразу.</span>
+            </div>
+          </details>
+        </div>
+        <div class="group-scope">
+          <details class="group-collapse">
+            <summary>Доступ к «Парсер почты» <span class="group-collapse-count" id="parserUsersCount"></span></summary>
+            <div class="group-access">
+              <input id="parserUsersSearch" class="text-input group-search" type="text" placeholder="Найти сотрудника..." autocomplete="off" />
+              <div class="group-check-list" id="parserUsersGroups"></div>
+              <span class="group-scope-hint">Вкладку «Парсер почты» видят отмеченные сотрудники (админ — всегда). Галочки сохраняются сразу.</span>
+            </div>
+          </details>
+        </div>
+      </div>
+      <div class="asub" data-sub="backup" hidden>
+        <div class="sub-head">
+          <div class="sub-title-wrap">
+            <h4 class="sub-title">Бекап</h4>
+            <p class="sub-note">Резервное копирование и восстановление данных приложения.</p>
+          </div>
+        </div>
+        <div class="params-section">
+          <h5 class="params-heading">Резервная копия данных</h5>
+          <p class="toggle-sub">Скачайте полную базу (сотрудники, оклады, время работы, группы, клиенты, маршруты, параметры) в файл и восстановите её на любом сервере — например, при переносе приложения на новый адрес. Перед восстановлением текущая база автоматически сохраняется отдельным файлом.</p>
+          <div class="backup-row">
+            <button type="button" class="ctrl ctrl-primary" id="backupExportBtn">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+              <span>Скачать бэкап</span>
+            </button>
+            <label class="ctrl ctrl-soft backup-import-label" for="backupImportFile">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 15V3m0 0 4 4m-4-4L8 7M4 17v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+              <span>Восстановить из файла</span>
+            </label>
+            <input type="file" id="backupImportFile" accept="application/json,.json" hidden />
+            <button type="button" class="ctrl ctrl-soft" id="backupAppBtn" title="Исходный код приложения + полная база данных в одном файле">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>
+              <span>Копия приложения (код + данные)</span>
+            </button>
+          </div>
+          <div class="backup-status" id="backupStatus"></div>
+          <div class="backup-auto">
+            <div class="backup-auto-head">
+              <span class="backup-auto-title">Автоматические копии</span>
+              <span class="backup-auto-note" id="backupAutoNote"></span>
+            </div>
+            <p class="toggle-sub">Приложение само делает резервную копию базы примерно каждые 6 часов и хранит последние 30 копий в надёжном хранилище сервера. Копию можно скачать в любой момент и восстановить на любом сервере.</p>
+            <div class="backup-auto-list" id="backupAutoList">
+              <div class="empty-hint">Автоматических копий пока нет — первая появится при следующем запуске сервера.</div>
+            </div>
+          </div>
+        </div>
+      </div>
       <div class="asub" data-sub="settings" hidden>
         <div class="sub-head">
           <div class="sub-title-wrap">
@@ -1144,36 +1314,6 @@
             <div class="group-check-list" id="shipmentGroups"></div>
             <span class="group-scope-hint">Раздел «Отгрузка» видят только сотрудники отмеченных групп. Если ничего не отмечено — раздел скрыт у всех.</span>
           </div>
-          <div class="group-scope">
-            <details class="group-collapse">
-              <summary>Доступ к «Проблемы со склада» <span class="group-collapse-count" id="notfoundUsersCount"></span></summary>
-              <div class="group-access">
-                <input id="notfoundUsersSearch" class="text-input group-search" type="text" placeholder="Найти сотрудника..." autocomplete="off" />
-                <div class="group-check-list" id="notfoundUsersGroups"></div>
-                <span class="group-scope-hint">Вкладку «Проблемы со склада» видят отмеченные сотрудники (админ — всегда). Галочки сохраняются сразу.</span>
-              </div>
-            </details>
-          </div>
-          <div class="group-scope">
-            <details class="group-collapse">
-              <summary>Доступ к «Логи» <span class="group-collapse-count" id="logUsersCount"></span></summary>
-              <div class="group-access">
-                <input id="logUsersSearch" class="text-input group-search" type="text" placeholder="Найти сотрудника..." autocomplete="off" />
-                <div class="group-check-list" id="logUsersGroups"></div>
-                <span class="group-scope-hint">Вкладку «Логи» видят отмеченные сотрудники (админ и модератор — всегда). Галочки сохраняются сразу.</span>
-              </div>
-            </details>
-          </div>
-          <div class="group-scope">
-            <details class="group-collapse">
-              <summary>Доступ к «Отчёты» <span class="group-collapse-count" id="reportsUsersCount"></span></summary>
-              <div class="group-access">
-                <input id="reportsUsersSearch" class="text-input group-search" type="text" placeholder="Найти сотрудника..." autocomplete="off" />
-                <div class="group-check-list" id="reportsUsersGroups"></div>
-                <span class="group-scope-hint">Вкладку «Отчёты» видят отмеченные сотрудники (админ и модератор — всегда). Галочки сохраняются сразу.</span>
-              </div>
-            </details>
-          </div>
           <div class="toggle-row">
             <div class="toggle-info">
               <div class="toggle-title">Начинать маршрут без отгрузки</div>
@@ -1233,14 +1373,14 @@
           </div>
         </div>
 
-        <div class="params-section">
+        <div class="params-section" hidden>
           <h5 class="params-heading">Множитель подработки</h5>
           <p class="toggle-sub">Правила повышенного тарифа (по сотрудникам, группам и дням недели) настраиваются на отдельной вкладке «Множитель».</p>
           <button type="button" class="ctrl" id="goToMultiplierTab">Открыть настройки множителя</button>
           <div class="multiplier-status" id="multiplierStatus">—</div>
         </div>
 
-        <div class="params-section">
+        <div class="params-section" hidden>
           <h5 class="params-heading">Обновление Android-приложения</h5>
           <p class="toggle-sub">Номер версии, которую приложение считает актуальной. Когда он станет <b>больше</b> установленного на телефоне, при запуске появится предложение обновиться. Пустые поля = значения из окружения/дефолты сервера.</p>
           <div class="field">
@@ -1258,38 +1398,6 @@
           <div class="field">
             <label for="updateNotes">Описание изменений</label>
             <input id="updateNotes" class="text-input" type="text" placeholder="например, Исправления и улучшения" />
-          </div>
-        </div>
-
-        <div class="params-section">
-          <h5 class="params-heading">Резервная копия данных</h5>
-          <p class="toggle-sub">Скачайте полную базу (сотрудники, оклады, время работы, группы, клиенты, маршруты, параметры) в файл и восстановите её на любом сервере — например, при переносе приложения на новый адрес. Перед восстановлением текущая база автоматически сохраняется отдельным файлом.</p>
-          <div class="backup-row">
-            <button type="button" class="ctrl ctrl-primary" id="backupExportBtn">
-              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
-              <span>Скачать бэкап</span>
-            </button>
-            <label class="ctrl ctrl-soft backup-import-label" for="backupImportFile">
-              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 15V3m0 0 4 4m-4-4L8 7M4 17v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
-              <span>Восстановить из файла</span>
-            </label>
-            <input type="file" id="backupImportFile" accept="application/json,.json" hidden />
-            <button type="button" class="ctrl ctrl-soft" id="backupAppBtn" title="Исходный код приложения + полная база данных в одном файле">
-              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>
-              <span>Копия приложения (код + данные)</span>
-            </button>
-          </div>
-          <div class="backup-status" id="backupStatus"></div>
-
-          <div class="backup-auto">
-            <div class="backup-auto-head">
-              <span class="backup-auto-title">Автоматические копии</span>
-              <span class="backup-auto-note" id="backupAutoNote"></span>
-            </div>
-            <p class="toggle-sub">Приложение само делает резервную копию базы примерно каждые 6 часов и хранит последние 30 копий в надёжном хранилище сервера. Копию можно скачать в любой момент и восстановить на любом сервере.</p>
-            <div class="backup-auto-list" id="backupAutoList">
-              <div class="empty-hint">Автоматических копий пока нет — первая появится при следующем запуске сервера.</div>
-            </div>
           </div>
         </div>
 
@@ -1337,6 +1445,34 @@
     </div>
   </dialog>
 
+  <!-- Добавить сотрудника: ФИО + группа + логин + пароль -->
+  <dialog class="modal" id="addStaffModal">
+    <div class="account-card">
+      <div class="modal-head">
+        <h3>Добавить сотрудника</h3>
+        <button class="icon-btn modal-close" id="addStaffClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <div class="auth-form" style="display:flex;flex-direction:column;gap:12px;">
+        <label>ФИО
+          <input class="text-input" id="asName" type="text" placeholder="Фамилия Имя Отчество" autocomplete="off" />
+        </label>
+        <label>Группа
+          <select class="text-input" id="asGroup"></select>
+        </label>
+        <label>Логин
+          <input class="text-input" id="asLogin" type="text" placeholder="логин" autocomplete="off" />
+        </label>
+        <label>Пароль
+          <input class="text-input" id="asPass" type="password" placeholder="пароль" autocomplete="new-password" />
+        </label>
+        <div style="display:flex;gap:8px;justify-content:flex-end;">
+          <button type="button" class="mini-btn" id="addStaffCancel">Отмена</button>
+          <button type="button" class="ctrl ctrl-primary" id="addStaffSubmit">Добавить</button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
   <!-- Учётная запись: виден любому вошедшему (в т.ч. тем, кто на мобильном не видит панель администратора) -->
   <dialog class="modal" id="accountModal">
     <div class="account-card">
@@ -1349,8 +1485,8 @@
         <div class="account-row"><span class="account-label">Идентификатор</span><span class="account-value" id="acctId">—</span></div>
         <div class="account-row"><span class="account-label">Тип id</span><span class="account-value" id="acctIdKind">—</span></div>
         <div class="account-row"><span class="account-label">Роль</span><span class="account-value" id="acctRole">—</span></div>
-        <div class="account-row"><span class="account-label">Администратор</span><span class="account-value" id="acctAdmin">—</span></div>
-        <div class="account-row"><span class="account-label">Версия</span><span class="account-value" id="acctVersion">—</span></div>
+        <div class="account-row" id="acctAdminRow"><span class="account-label">Администратор</span><span class="account-value" id="acctAdmin">—</span></div>
+        <div class="account-row" id="acctVersionRow"><span class="account-label">Версия</span><span class="account-value" id="acctVersion">—</span></div>
         <div class="account-row" id="acctIpRow" hidden><span class="account-label">IP-адрес</span><span class="account-value" id="acctIp">—</span></div>
         <div class="account-row" id="acctHostRow" hidden><span class="account-label">Адрес приложения</span><span class="account-value" id="acctHost">—</span></div>
         <div class="account-row" id="onecPingRow" hidden>

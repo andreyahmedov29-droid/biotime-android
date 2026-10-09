@@ -35,6 +35,16 @@ module.exports = function createReportsHandler({ canSeeReports, getDb } = {}) {
       role: user ? String(user.role || '') : '',
       isExternal: true,
     };
+    // Доступ к внутренним разделам «Отчётов»: админ — все (null), остальные —
+    // списки разделов, где он отмечен в «Настройки → Доступ к разделам → Отчёты».
+    if (user) {
+      const isAdm = String(user.role || "").toUpperCase() === "ADMIN";
+      const db = getDb ? getDb() : {};
+      const sec = (db.params && db.params.reportsSections) || {};
+      const keys = Object.keys(sec).filter((k) =>
+        Array.isArray(sec[k]) && sec[k].some((x) => String(x) === String(user.id)));
+      req._biotimeSections = isAdm ? null : keys;
+    }
     loadAbcp()(req, res);
     return true;
   };

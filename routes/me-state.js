@@ -23,6 +23,9 @@ module.exports = function createMeStateHandler({
   canSeeNotfound,
   canSeeLogs,
   canSeeReports,
+  canSeeSverki,
+  canSeeProcenka,
+  canSeeParser,
 } = {}) {
   return async function handleMeStateRoutes(req, res, urlPath, method, user, admin) {
     const db = getDb ? getDb() : {};
@@ -80,6 +83,9 @@ module.exports = function createMeStateHandler({
         canSeeNotfound: canSeeNotfound(user, db),
         canSeeLogs: canSeeLogs(user, db),
         canSeeReports: (canSeeReports || (() => false))(user, db),
+        canSeeSverki: (canSeeSverki || (() => false))(user, db),
+        canSeeProcenka: (canSeeProcenka || (() => false))(user, db),
+        canSeeParser: (canSeeParser || (() => false))(user, db),
         staff: staffView,
         days: visibleDays(user, db),
         log: visibleLog(user, db),

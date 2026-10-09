@@ -51,6 +51,7 @@ self.addEventListener("fetch", (event) => {
   // Не трогаем API и внешние ресурсы (шрифты Google и т.п.).
   if (
     url.pathname.startsWith("/api/") ||
+    url.pathname.startsWith("/reports/") ||
     url.origin !== self.location.origin
   ) {
     return;

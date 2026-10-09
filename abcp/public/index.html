@@ -8,52 +8,6 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">
-      <span class="brand-mark">
-        <svg viewBox="0 0 44 44" width="31" height="31" aria-hidden="true">
-          <defs>
-            <linearGradient id="bDoc" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0" stop-color="#fffdf6"/><stop offset="1" stop-color="#ffdd94"/>
-            </linearGradient>
-            <linearGradient id="bRed" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stop-color="#ff8a6c"/><stop offset="1" stop-color="#e23a2c"/>
-            </linearGradient>
-            <linearGradient id="bGrn" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stop-color="#66df98"/><stop offset="1" stop-color="#1ba05f"/>
-            </linearGradient>
-            <linearGradient id="bAmb" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stop-color="#ffd66b"/><stop offset="1" stop-color="#f0971a"/>
-            </linearGradient>
-            <radialGradient id="bChk" cx="0.35" cy="0.28" r="1.15">
-              <stop offset="0" stop-color="#9ff3fc"/><stop offset="1" stop-color="#159cc4"/>
-            </radialGradient>
-            <filter id="sd" x="-30%" y="-30%" width="170%" height="170%">
-              <feDropShadow dx="0" dy="1.6" stdDeviation="1.7" flood-color="#000" flood-opacity="0.45"/>
-            </filter>
-            <linearGradient id="bGloss" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stop-color="#fff" stop-opacity="0.5"/>
-              <stop offset="1" stop-color="#fff" stop-opacity="0"/>
-            </linearGradient>
-          </defs>
-          <g filter="url(#sd)">
-            <path d="M22.5 6.5 H30.5 L34.5 10.5 V34 A3.2 3.2 0 0 1 31.3 37.2 H22.5 A3.2 3.2 0 0 1 19.3 34 V9.7 A3.2 3.2 0 0 1 22.5 6.5 Z" fill="url(#bDoc)"/>
-            <path d="M30.5 6.5 L30.5 10.5 L34.5 10.5 Z" fill="rgba(255,176,32,.5)"/>
-          </g>
-          <line x1="23" y1="15.5" x2="32.6" y2="15.5" stroke="#df8f2b" stroke-width="2.4" stroke-linecap="round"/>
-          <line x1="23" y1="20.5" x2="30.2" y2="20.5" stroke="#e6a34a" stroke-width="2.4" stroke-linecap="round" opacity=".75"/>
-          <line x1="23" y1="25.5" x2="27" y2="25.5" stroke="#e6a34a" stroke-width="2.4" stroke-linecap="round" opacity=".5"/>
-          <g stroke="#0e141f" stroke-width="1.6">
-            <path d="M16 24 L25.5 14.5 A13.5 13.5 0 0 1 25.5 33.5 Z" fill="url(#bRed)"/>
-            <path d="M16 24 L25.5 33.5 A13.5 13.5 0 0 1 6.5 33.5 Z" fill="url(#bGrn)"/>
-            <path d="M16 24 L6.5 33.5 A13.5 13.5 0 0 1 25.5 14.5 Z" fill="url(#bAmb)"/>
-          </g>
-          <ellipse cx="12" cy="16" rx="7" ry="5" fill="url(#bGloss)" transform="rotate(-30 12 16)"/>
-          <circle cx="31" cy="30" r="5.4" fill="url(#bChk)" stroke="#0c7894" stroke-width="1.1"/>
-          <path d="M28 30 l2.1 2.1 l3.8 -4.2" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </span>
-      <div class="brand-text"><b>Отчеты ПрофМаркет</b></div>
-    </div>
     <nav class="tabs">
       <button class="tab is-active" data-tab="dashboard" type="button">Дашборд</button>
       <button class="tab" data-tab="terms" type="button">Сроки по поставщикам</button>
@@ -65,12 +19,11 @@
 <button class="tab" data-tab="europe" type="button">Отчет Европа</button>
 <button class="tab" data-tab="client-config" type="button">Конфигуратор сроков поставки</button>
 <button class="tab" data-tab="manual-automat" type="button">Ручной автомат</button>
-      <button class="tab" data-tab="supplier-emails" type="button">Почты поставщиков</button>
-      <button class="tab" data-tab="users" type="button">Пользователи</button>
-      <button class="tab" data-tab="logs" type="button">Логи</button>
+<button class="tab" data-tab="supplier-emails" type="button">Почты поставщиков</button>
+<button class="tab" data-tab="logs" type="button">Логи</button>
       <button class="tab" data-tab="settings" type="button">Настройки</button>
     </nav>
-    <div class="userbar">
+    <div class="userbar" hidden>
       <span id="avatar" class="avatar"></span>
       <div class="user-meta">
         <b id="current-user" class="current-user"></b>

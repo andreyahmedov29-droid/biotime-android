@@ -649,6 +649,9 @@
     state.canManageShipment = !!s.canManageShipment;
     state.canSeeLogs = !!s.canSeeLogs;
     state.canSeeReports = !!s.canSeeReports;
+    state.canSeeSverki = !!s.canSeeSverki;
+    state.canSeeProcenka = !!s.canSeeProcenka;
+    state.canSeeParser = !!s.canSeeParser;
     // Latch: если раздел «Отгрузка» уже был доступен — держим его на этом устройстве,
     // чтобы транзиентный `false` при перезапросе состояния (напр. при нескольких
     // открытых устройствах) не прятал вкладку до перезагрузки страницы.
@@ -1485,6 +1488,12 @@
     pageShipment: $("page-shipment"),
     pageScanlog: $("page-scanlog"),
     pageNotfound: $("page-notfound"), pageLogs: $("page-logs"), pageReports: $("page-reports"), reportsHost: $("reportsHost"),
+    notfoundModal: $("notfoundModal"), notfoundModalBody: $("notfoundModalBody"), notfoundModalClose: $("notfoundModalClose"),
+    salaryModal: $("salaryModal"), salaryModalBody: $("salaryModalBody"), salaryModalClose: $("salaryModalClose"),
+    reportsModal: $("reportsModal"), reportsModalFrame: $("reportsModalFrame"), reportsModalClose: $("reportsModalClose"),
+    sverkiModal: $("sverkiModal"), sverkiModalFrame: $("sverkiModalFrame"), sverkiModalClose: $("sverkiModalClose"),
+    procenkaModal: $("procenkaModal"), procenkaModalFrame: $("procenkaModalFrame"), procenkaModalClose: $("procenkaModalClose"),
+    parserModal: $("parserModal"), parserModalFrame: $("parserModalFrame"), parserModalClose: $("parserModalClose"),
     nfdModal: $("notfoundDetailModal"), nfdModalBody: $("nfdModalBody"), nfdModalClose: $("nfdModalClose"),
     nfTabs: $("nfTabs"),
     nfSummary: $("nfSummary"),
@@ -1537,7 +1546,9 @@
     updateClose: $("updateClose"), updateLater: $("updateLater"), updateDownload: $("updateDownload"),
     postponeModal: $("postponeModal"), postponeClose: $("postponeClose"), postponeTiles: $("postponeTiles"),
     adminClose: $("adminClose"), adminTabs: $("adminTabs"),
-    staffCountNote: $("staffCountNote"), newStaffName: $("newStaffName"), addStaffBtn: $("addStaffBtn"),
+    staffCountNote: $("staffCountNote"), addStaffBtn: $("addStaffBtn"),
+    addStaffModal: $("addStaffModal"), addStaffClose: $("addStaffClose"), addStaffCancel: $("addStaffCancel"), addStaffSubmit: $("addStaffSubmit"),
+    asName: $("asName"), asGroup: $("asGroup"), asLogin: $("asLogin"), asPass: $("asPass"),
     staffList: $("staffList"), salariesBody: $("salariesBody"), salMonth: $("salMonth"),
     scansLogList: $("scansLogList"), scansLogRefresh: $("scansLogRefresh"), scansOnlyFailed: $("scansOnlyFailed"), scansLogClear: $("scansLogClear"), scansDate: $("scansDate"), scansAllDays: $("scansAllDays"), scansSummary: $("scansSummary"),
     todayList: $("todayList"), todayDateNote: $("todayDateNote"),
@@ -1551,8 +1562,15 @@
     notfoundUsersGroups: $("notfoundUsersGroups"),
     logUsersGroups: $("logUsersGroups"), logUsersSearch: $("logUsersSearch"), logUsersCount: $("logUsersCount"),
     reportsUsersGroups: $("reportsUsersGroups"), reportsUsersSearch: $("reportsUsersSearch"), reportsUsersCount: $("reportsUsersCount"),
+    reportsSectionsWrap: $("reportsSectionsWrap"),
     notfoundTab: $("notfoundTab"),
     reportsTab: $("reportsTab"),
+    sverkiTab: $("sverkiTab"),
+    sverkiUsersGroups: $("sverkiUsersGroups"), sverkiUsersSearch: $("sverkiUsersSearch"), sverkiUsersCount: $("sverkiUsersCount"),
+    procenkaTab: $("procenkaTab"),
+    procenkaUsersGroups: $("procenkaUsersGroups"), procenkaUsersSearch: $("procenkaUsersSearch"), procenkaUsersCount: $("procenkaUsersCount"),
+    parserTab: $("parserTab"),
+    parserUsersGroups: $("parserUsersGroups"), parserUsersSearch: $("parserUsersSearch"), parserUsersCount: $("parserUsersCount"),
     allowDriverStartWithoutShipment: $("allowDriverStartWithoutShipment"),
     allowFinishUnloadIncomplete: $("allowFinishUnloadIncomplete"),
     allowDriverReorderPoints: $("allowDriverReorderPoints"),
@@ -9231,6 +9249,22 @@
     else if (name === "settings") renderParams();
     else if (name === "multiplier") renderMultRules();
     else if (name === "admins") renderAdmins();
+    else if (name === "access") renderAccess();
+    else if (name === "backup") renderBackup();
+  }
+  function renderBackup() {
+    if (el.backupAutoList) loadAutoBackups();
+  }
+
+  // Раздел «Доступ к разделам»: чекбоксы сотрудников для Проблем/Логов/Отчётов.
+  function renderAccess() {
+    if (el.notfoundUsersGroups) renderNotfoundUsersChecks(el.notfoundUsersGroups);
+    if (el.logUsersGroups) renderLogUsersChecks(el.logUsersGroups);
+    if (el.reportsUsersGroups) renderReportsUsersChecks(el.reportsUsersGroups);
+    renderReportsSections();
+    if (el.sverkiUsersGroups) renderSverkiUsersChecks(el.sverkiUsersGroups);
+    if (el.procenkaUsersGroups) renderProcenkaUsersChecks(el.procenkaUsersGroups);
+    if (el.parserUsersGroups) renderParserUsersChecks(el.parserUsersGroups);
   }
 
   let _adminUsersMap = null;
@@ -9239,7 +9273,7 @@
     try {
       const r = await api("/api/admin/users");
       const m = new Map();
-      ((r && r.list) || []).forEach((u) => m.set(String(u.id), u));
+      ((r && (r.users || r.list)) || []).forEach((u) => m.set(String(u.id), u));
       _adminUsersMap = m;
     } catch (_e) {
       _adminUsersMap = new Map();
@@ -9277,17 +9311,21 @@
         <div class="avatar">${letter}</div>
         <div class="admin-row-main">
           <div class="admin-row-name">${escapeHtml(s.name)}${isMe ? ' <span class="badge">вы</span>' : ""}</div>
-          <div class="admin-row-sub">
-            ${isAdminUser ? '<span class="badge">админ</span> ' : ""}
-            ${acct && acct.login ? `учётка: <b>${escapeHtml(acct.login)}</b>` : "нет учётной записи"}
-          </div>
+          <div class="admin-row-sub"></div>
         </div>
         <div class="row-action">
+          ${isAdminUser ? '<span class="badge">админ</span>' : ""}
           ${ownerCanToggle
             ? `<button class="mini-btn ${isAdminUser ? "on" : ""}" data-admin="${s.id}" data-on="${isAdminUser}">${isAdminUser ? "Снять админа" : "Сделать админом"}</button>`
             : '<span class="disabled-note">это вы</span>'}
           ${!isMe ? `<button class="mini-btn on" data-id="${s.id}">Удалить</button>` : ""}
         </div>
+        ${state.isAdmin ? `
+        <div class="row-acct">
+          <input class="text-input acct-login" data-login-for="${s.id}" value="${acct && acct.login ? escapeHtml(acct.login) : ""}" placeholder="логин" autocomplete="off" />
+          <input class="text-input acct-pass" data-pass-for="${s.id}" type="password" placeholder="пароль" autocomplete="new-password" />
+          <button class="mini-btn" data-masq="${s.id}" title="Войти под этим пользователем">Войти</button>
+        </div>` : ""}
       `;
       return row;
     };
@@ -9324,6 +9362,45 @@
     });
     el.staffList.querySelectorAll(".mini-btn[data-id]").forEach((btn) => {
       btn.addEventListener("click", () => removeStaff(btn.dataset.id));
+    });
+    // Учётные записи: автосохранение логина/пароля при вводе (без кнопки «Сохранить»).
+    const debounceCreds = {};
+    el.staffList.querySelectorAll("input[data-login-for], input[data-pass-for]").forEach((inp) => {
+      inp.addEventListener("change", () => {
+        const id = inp.getAttribute("data-login-for") || inp.getAttribute("data-pass-for");
+        if (!id) return;
+        clearTimeout(debounceCreds[id]);
+        debounceCreds[id] = setTimeout(async () => {
+          const loginInp = el.staffList.querySelector(`[data-login-for="${id}"]`);
+          const passInp = el.staffList.querySelector(`[data-pass-for="${id}"]`);
+          const login = loginInp ? String(loginInp.value).trim() : "";
+          const pass = passInp ? String(passInp.value) : "";
+          try {
+            await apiAuth("POST", "/api/admin/users/credentials", { userId: id, login, password: pass });
+            _adminUsersMap = null;
+            toast("Учётная запись сохранена");
+          } catch (e) {
+            toast((e && e.message) || "Не удалось сохранить учётную запись");
+          }
+        }, 600);
+      });
+    });
+    // Вход под пользователем (имперсонация) — только админ.
+    el.staffList.querySelectorAll("[data-masq]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        try {
+          await apiAuth("POST", "/api/auth/masquerade", { userId: btn.dataset.masq });
+          // Имперсонация: сбрасываем личный кэш прежнего пользователя, чтобы
+          // в новом сеансе таймер/день соответствовали тому, под кем вошли,
+          // а не времени администратора.
+          try { localStorage.clear(); } catch (_e) {}
+          try { sessionStorage.clear(); } catch (_e) {}
+          toast("Вошли под пользователем");
+          location.reload();
+        } catch (e) {
+          toast((e && e.message) || "Не удалось войти под пользователем");
+        }
+      });
     });
 
     // Blocked employees (access closed). Admin can restore access.
@@ -9678,17 +9755,54 @@
     }
   }
 
+  function openAddStaffModal() {
+    if (!el.addStaffModal) return;
+    const sel = el.asGroup;
+    if (sel) {
+      sel.innerHTML = '<option value="">Без группы</option>'
+        + (state.groups || []).map((g) => `<option value="${escapeHtml(g.id)}">${escapeHtml(g.name)}</option>`).join("");
+    }
+    if (el.asName) el.asName.value = "";
+    if (el.asLogin) el.asLogin.value = "";
+    if (el.asPass) el.asPass.value = "";
+    if (el.asGroup) el.asGroup.value = "";
+    if (el.addStaffModal.showModal) el.addStaffModal.showModal();
+  }
+  function closeAddStaffModal() {
+    if (el.addStaffModal && el.addStaffModal.close) el.addStaffModal.close();
+  }
   async function addStaff() {
-    const name = el.newStaffName.value.trim();
+    const name = String((el.asName && el.asName.value || "")).trim();
     if (!name) { toast("Введите ФИО сотрудника"); return; }
+    const groupId = String((el.asGroup && el.asGroup.value) || "");
+    const login = String((el.asLogin && el.asLogin.value) || "").trim();
+    const pass = String((el.asPass && el.asPass.value) || "");
     try {
       const r = await api("/api/staff", { method: "POST", body: JSON.stringify({ name }) });
       state.staff = r.staff;
-      el.newStaffName.value = "";
+      const created = (r.staff || []).find((s) => s.name === name);
+      // Привязка к группе (если выбрана).
+      if (groupId && created) {
+        const g = (state.groups || []).find((x) => String(x.id) === String(groupId));
+        if (g) {
+          const memberIds = Array.from(new Set([...(g.memberIds || []), created.id]));
+          await api("/api/groups/" + encodeURIComponent(g.id), {
+            method: "PUT",
+            body: JSON.stringify({ moderatorId: g.moderatorId || null, memberIds }),
+          });
+        }
+      }
+      // Учётная запись (логин/пароль).
+      if (created && login) {
+        await apiAuth("POST", "/api/admin/users/credentials", { userId: created.id, login, password: pass });
+      }
+      closeAddStaffModal();
+      await loadState();
+      render();
       renderAdminSub("staff");
       toast("Сотрудник добавлен");
     } catch (e) {
-      toast(e.message);
+      toast((e && e.message) || "Не удалось добавить сотрудника");
     }
   }
 
@@ -10183,6 +10297,18 @@
     if (!container) return [];
     return [...container.querySelectorAll('input[type="checkbox"]:checked')].map((c) => c.value);
   }
+  // Собрать матрицу доступа к разделам «Отчётов»: { раздел: [userId, ...] }.
+  function collectReportsSections() {
+    const out = {};
+    if (el.reportsSectionsWrap) {
+      el.reportsSectionsWrap.querySelectorAll('input[type="checkbox"]:checked').forEach((cb) => {
+        const key = cb.getAttribute("data-section-key");
+        if (!key) return;
+        (out[key] = out[key] || []).push(cb.value);
+      });
+    }
+    return out;
+  }
   // Чекбоксы сотрудников для доступа к «Отчёту не найдено» (кто видит вкладку).
   function renderNotfoundUsersChecks(container) {
     if (!container) return;
@@ -10264,6 +10390,91 @@
     el.reportsUsersSearch.addEventListener("input", () =>
       el.reportsUsersGroups && renderReportsUsersChecks(el.reportsUsersGroups));
   }
+  // Внутренние разделы «Отчётов» (ключ вкладки модуля → русское название).
+  const REPORTS_SECTIONS = [
+    ["dashboard", "Дашборд"],
+    ["terms", "Сроки по поставщикам"],
+    ["pricing", "Проценка"],
+    ["report", "Отчет"],
+    ["rejections", "Отказы поставщики"],
+    ["client-rejections", "Отказ клиенты"],
+    ["client-analysis", "Анализ заказов клиентов"],
+    ["europe", "Отчет Европа"],
+    ["client-config", "Конфигуратор сроков"],
+    ["manual-automat", "Ручной автомат"],
+    ["supplier-emails", "Почты поставщиков"],
+    ["logs", "Логи"],
+    ["settings", "Настройки"],
+  ];
+  function renderReportsSections() {
+    const wrap = el.reportsSectionsWrap;
+    if (!wrap) return;
+    const staff = state.staff || [];
+    const sec = state.params && state.params.reportsSections || {};
+    wrap.innerHTML = REPORTS_SECTIONS.map(([key, name]) => {
+      const ids = sec[key] || [];
+      const checks = staff.map((s) => {
+        const on = ids.some((x) => String(x) === String(s.id));
+        return `<label class="group-check"><input type="checkbox" data-section-key="${key}" value="${escapeHtml(String(s.id))}" ${on ? "checked" : ""} /><span>${escapeHtml(s.name)}</span></label>`;
+      }).join("");
+      return `<details class="group-collapse"><summary>${escapeHtml(name)}</summary><div class="group-access group-check-list">${checks}</div></details>`;
+    }).join("");
+    wrap.querySelectorAll('input[type="checkbox"]').forEach((cb) => cb.addEventListener("change", () => applyParams()));
+  }
+  function renderSverkiUsersChecks(container) {
+    if (!container) return;
+    const staff = state.staff || [];
+    const sel = state.params.sverkiUsers || [];
+    if (el.sverkiUsersCount) el.sverkiUsersCount.textContent = sel.length ? `· выбрано: ${sel.length}` : "";
+    const q = (el.sverkiUsersSearch ? el.sverkiUsersSearch.value : "").toLowerCase().trim();
+    const filtered = staff.filter((s) => !q || String(s.name || "").toLowerCase().includes(q));
+    if (!filtered.length) { container.innerHTML = `<span class="group-scope-empty">Сотрудники не найдены.</span>`; return; }
+    container.innerHTML = filtered.map((s) => {
+      const checked = sel.some((x) => String(x) === String(s.id)) ? "checked" : "";
+      return `<label class="group-check"><input type="checkbox" value="${escapeHtml(String(s.id))}" ${checked} /><span>${escapeHtml(s.name)}</span></label>`;
+    }).join("");
+    container.querySelectorAll('input[type="checkbox"]').forEach((cb) => cb.addEventListener("change", () => applyParams()));
+  }
+  if (el.sverkiUsersSearch) {
+    el.sverkiUsersSearch.addEventListener("input", () =>
+      el.sverkiUsersGroups && renderSverkiUsersChecks(el.sverkiUsersGroups));
+  }
+  function renderProcenkaUsersChecks(container) {
+    if (!container) return;
+    const staff = state.staff || [];
+    const sel = state.params.procenkaUsers || [];
+    if (el.procenkaUsersCount) el.procenkaUsersCount.textContent = sel.length ? `· выбрано: ${sel.length}` : "";
+    const q = (el.procenkaUsersSearch ? el.procenkaUsersSearch.value : "").toLowerCase().trim();
+    const filtered = staff.filter((s) => !q || String(s.name || "").toLowerCase().includes(q));
+    if (!filtered.length) { container.innerHTML = `<span class="group-scope-empty">Сотрудники не найдены.</span>`; return; }
+    container.innerHTML = filtered.map((s) => {
+      const checked = sel.some((x) => String(x) === String(s.id)) ? "checked" : "";
+      return `<label class="group-check"><input type="checkbox" value="${escapeHtml(String(s.id))}" ${checked} /><span>${escapeHtml(s.name)}</span></label>`;
+    }).join("");
+    container.querySelectorAll('input[type="checkbox"]').forEach((cb) => cb.addEventListener("change", () => applyParams()));
+  }
+  if (el.procenkaUsersSearch) {
+    el.procenkaUsersSearch.addEventListener("input", () =>
+      el.procenkaUsersGroups && renderProcenkaUsersChecks(el.procenkaUsersGroups));
+  }
+  function renderParserUsersChecks(container) {
+    if (!container) return;
+    const staff = state.staff || [];
+    const sel = state.params.parserUsers || [];
+    if (el.parserUsersCount) el.parserUsersCount.textContent = sel.length ? `· выбрано: ${sel.length}` : "";
+    const q = (el.parserUsersSearch ? el.parserUsersSearch.value : "").toLowerCase().trim();
+    const filtered = staff.filter((s) => !q || String(s.name || "").toLowerCase().includes(q));
+    if (!filtered.length) { container.innerHTML = `<span class="group-scope-empty">Сотрудники не найдены.</span>`; return; }
+    container.innerHTML = filtered.map((s) => {
+      const checked = sel.some((x) => String(x) === String(s.id)) ? "checked" : "";
+      return `<label class="group-check"><input type="checkbox" value="${escapeHtml(String(s.id))}" ${checked} /><span>${escapeHtml(s.name)}</span></label>`;
+    }).join("");
+    container.querySelectorAll('input[type="checkbox"]').forEach((cb) => cb.addEventListener("change", () => applyParams()));
+  }
+  if (el.parserUsersSearch) {
+    el.parserUsersSearch.addEventListener("input", () =>
+      el.parserUsersGroups && renderParserUsersChecks(el.parserUsersGroups));
+  }
 
   // Client-side replica of the server's group-scoped overtime visibility, used to
   // refresh the "me"/staff flags right after an admin saves the params.
@@ -10320,6 +10531,27 @@
     if (ids.length === 0) return false;
     return state.me && state.me.id != null && ids.some((x) => String(x) === String(state.me.id));
   }
+  function canSeeSverki() {
+    if (state.isAdmin) return true;
+    if (typeof state.canSeeSverki === "boolean") return state.canSeeSverki;
+    const ids = state.params.sverkiUsers || [];
+    if (ids.length === 0) return false;
+    return state.me && state.me.id != null && ids.some((x) => String(x) === String(state.me.id));
+  }
+  function canSeeProcenka() {
+    if (state.isAdmin) return true;
+    if (typeof state.canSeeProcenka === "boolean") return state.canSeeProcenka;
+    const ids = state.params.procenkaUsers || [];
+    if (ids.length === 0) return false;
+    return state.me && state.me.id != null && ids.some((x) => String(x) === String(state.me.id));
+  }
+  function canSeeParser() {
+    if (state.isAdmin) return true;
+    if (typeof state.canSeeParser === "boolean") return state.canSeeParser;
+    const ids = state.params.parserUsers || [];
+    if (ids.length === 0) return false;
+    return state.me && state.me.id != null && ids.some((x) => String(x) === String(state.me.id));
+  }
   // Отрисовка вкладки «Отчёты». Пока модуль АБЦП не перенесён — заглушка; после
   // интеграции здесь монтируется его интерфейс (вариант 2 — прямая встройка).
   function renderReports() {
@@ -10330,6 +10562,108 @@
     host.classList.add("reports-embed");
     host.innerHTML = `<iframe src="/reports/" style="width:100%;height:calc(100vh - 150px);min-height:480px;border:0;border-radius:12px;background:#101010;" title="Отчёты"></iframe>`;
   }
+  // Полноэкранное модальное окно «Отчёты».
+  function openReportsModal() {
+    if (!canSeeReports()) return;
+    if (!el.reportsModal || !el.reportsModalFrame) return;
+    if (!el.reportsModalFrame.querySelector("iframe")) {
+      const ifr = document.createElement("iframe");
+      ifr.src = "/reports/";
+      ifr.setAttribute("title", "Отчеты ПрофМаркет");
+      el.reportsModalFrame.appendChild(ifr);
+    }
+    if (el.reportsModal.showModal) el.reportsModal.showModal();
+  }
+  function closeReportsModal() {
+    if (el.reportsModal && el.reportsModal.close) el.reportsModal.close();
+    if (el.reportsModalFrame) el.reportsModalFrame.innerHTML = "";
+  }
+  if (el.reportsModalClose) el.reportsModalClose.addEventListener("click", closeReportsModal);
+  // Полноэкранное модальное окно «Сверки».
+  function openSverkiModal() {
+    if (!canSeeSverki()) return;
+    if (!el.sverkiModal || !el.sverkiModalFrame) return;
+    if (!el.sverkiModalFrame.querySelector("iframe")) {
+      const ifr = document.createElement("iframe");
+      ifr.src = "/sverki/";
+      ifr.setAttribute("title", "Сверки");
+      el.sverkiModalFrame.appendChild(ifr);
+    }
+    if (el.sverkiModal.showModal) el.sverkiModal.showModal();
+  }
+  function closeSverkiModal() {
+    if (el.sverkiModal && el.sverkiModal.close) el.sverkiModal.close();
+    if (el.sverkiModalFrame) el.sverkiModalFrame.innerHTML = "";
+  }
+  if (el.sverkiModalClose) el.sverkiModalClose.addEventListener("click", closeSverkiModal);
+  // Полноэкранное модальное окно «Проценка».
+  function openProcenkaModal() {
+    if (!canSeeProcenka()) return;
+    if (!el.procenkaModal || !el.procenkaModalFrame) return;
+    if (!el.procenkaModalFrame.querySelector("iframe")) {
+      const ifr = document.createElement("iframe");
+      ifr.src = "/procenka/";
+      ifr.setAttribute("title", "Проценка");
+      el.procenkaModalFrame.appendChild(ifr);
+    }
+    if (el.procenkaModal.showModal) el.procenkaModal.showModal();
+  }
+  function closeProcenkaModal() {
+    if (el.procenkaModal && el.procenkaModal.close) el.procenkaModal.close();
+    if (el.procenkaModalFrame) el.procenkaModalFrame.innerHTML = "";
+  }
+  if (el.procenkaModalClose) el.procenkaModalClose.addEventListener("click", closeProcenkaModal);
+  // Полноэкранное модальное окно «Парсер почты».
+  function openParserModal() {
+    if (!canSeeParser()) return;
+    if (!el.parserModal || !el.parserModalFrame) return;
+    if (!el.parserModalFrame.querySelector("iframe")) {
+      const ifr = document.createElement("iframe");
+      ifr.src = "/parser/";
+      ifr.setAttribute("title", "Парсер почты");
+      el.parserModalFrame.appendChild(ifr);
+    }
+    if (el.parserModal.showModal) el.parserModal.showModal();
+  }
+  function closeParserModal() {
+    if (el.parserModal && el.parserModal.close) el.parserModal.close();
+    if (el.parserModalFrame) el.parserModalFrame.innerHTML = "";
+  }
+  if (el.parserModalClose) el.parserModalClose.addEventListener("click", closeParserModal);
+  // Проблемы со склада — полноэкранное модальное окно (переносим содержимое раздела).
+  function openNotfoundModal() {
+    if (!el.notfoundModal || !el.notfoundModalBody) return;
+    while (el.pageNotfound && el.pageNotfound.firstChild) {
+      el.notfoundModalBody.appendChild(el.pageNotfound.firstChild);
+    }
+    if (el.notfoundModal.showModal) el.notfoundModal.showModal();
+    renderNotfound();
+  }
+  function closeNotfoundModal() {
+    if (el.notfoundModal && el.notfoundModal.close) el.notfoundModal.close();
+    if (el.pageNotfound && el.notfoundModalBody) {
+      while (el.notfoundModalBody.firstChild) {
+        el.pageNotfound.appendChild(el.notfoundModalBody.firstChild);
+      }
+    }
+  }
+  if (el.notfoundModalClose) el.notfoundModalClose.addEventListener("click", closeNotfoundModal);
+  // Зарплата — полноэкранное модальное окно.
+  function openSalaryModal() {
+    const page = el.pageCalendar || document.getElementById("page-calendar");
+    if (!el.salaryModal || !el.salaryModalBody || !page) return;
+    while (page.firstChild) el.salaryModalBody.appendChild(page.firstChild);
+    if (el.salaryModal.showModal) el.salaryModal.showModal();
+    if (typeof renderCalendar === "function") renderCalendar();
+  }
+  function closeSalaryModal() {
+    if (el.salaryModal && el.salaryModal.close) el.salaryModal.close();
+    const page = el.pageCalendar || document.getElementById("page-calendar");
+    if (page && el.salaryModalBody) {
+      while (el.salaryModalBody.firstChild) page.appendChild(el.salaryModalBody.firstChild);
+    }
+  }
+  if (el.salaryModalClose) el.salaryModalClose.addEventListener("click", closeSalaryModal);
   function recomputeOverVisibility() {
     const pH = state.params.showOverHoursGroups || [];
     const pS = state.params.showOverSumGroups || [];
@@ -10610,6 +10944,10 @@
       notfoundUsers: collectGroupChecks(el.notfoundUsersGroups),
       logUsers: collectGroupChecks(el.logUsersGroups),
       reportsUsers: collectGroupChecks(el.reportsUsersGroups),
+      reportsSections: collectReportsSections(),
+      sverkiUsers: collectGroupChecks(el.sverkiUsersGroups),
+      procenkaUsers: collectGroupChecks(el.procenkaUsersGroups),
+      parserUsers: collectGroupChecks(el.parserUsersGroups),
     };
     // Множитель теперь управляется только через вкладку «Множитель» (multRules):
     // старые поля params.multiplier/multFrom/multTo не редактируются здесь и
@@ -10674,7 +11012,10 @@
 
   el.settingsBtn.addEventListener("click", openSettings);
   el.adminClose.addEventListener("click", closeSettings);
-  el.addStaffBtn.addEventListener("click", addStaff);
+  el.addStaffBtn.addEventListener("click", openAddStaffModal);
+  el.addStaffSubmit && el.addStaffSubmit.addEventListener("click", addStaff);
+  el.addStaffClose && el.addStaffClose.addEventListener("click", closeAddStaffModal);
+  el.addStaffCancel && el.addStaffCancel.addEventListener("click", closeAddStaffModal);
   el.addGroupBtn.addEventListener("click", addGroup);
   el.newGroupName.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
@@ -11575,12 +11916,6 @@
       t.addEventListener("click", () => switchLogKind(t.dataset.jkind));
     });
   }
-  el.newStaffName.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      addStaff();
-    }
-  });
   el.reportMonth.addEventListener("change", () => { state.reportMonthKey = el.reportMonth.value; renderReport(); });
   el.reportShowOver.addEventListener("change", renderReport);
   // Переключение разделов вкладки «Отчёт» (Табель / Расчёты ЗП).
@@ -12387,8 +12722,11 @@
     el.acctAdmin.textContent = d.isAdmin ? "Да" : "Нет";
     el.acctAdmin.style.color = d.isAdmin ? "var(--ok, #16a34a)" : "var(--danger, #dc2626)";
     // Технические данные (IP-адрес, адрес приложения) показываем только админу.
+    if (el.acctAdminRow) el.acctAdminRow.hidden = !d.isAdmin;
+    if (el.acctVersionRow) el.acctVersionRow.hidden = !d.isAdmin;
     if (el.acctIpRow) el.acctIpRow.hidden = !d.isAdmin;
     if (el.acctHostRow) el.acctHostRow.hidden = !d.isAdmin;
+    if (el.accountLogout) el.accountLogout.hidden = !d.isAdmin;
     // Кнопка диагностики связи с 1С — только админу.
     if (el.onecPingRow) el.onecPingRow.hidden = !d.isAdmin;
     // Поправка времени устройства (компенсация рассинхрона часов ТСД/сканера).
@@ -12538,7 +12876,16 @@
     t.addEventListener("click", () => switchAdminSub(t.dataset.sub));
   });
   el.tabs.querySelectorAll(".tab").forEach((t) => {
-    t.addEventListener("click", () => switchTab(t.dataset.tab));
+    t.addEventListener("click", () => {
+      // Вкладка «Отчёты» открывает полноэкранное модальное окно вместо страницы.
+      if (t.dataset.tab === "reports") { openReportsModal(); return; }
+      if (t.dataset.tab === "sverki") { openSverkiModal(); return; }
+      if (t.dataset.tab === "procenka") { openProcenkaModal(); return; }
+      if (t.dataset.tab === "parser") { openParserModal(); return; }
+      if (t.dataset.tab === "notfound") { openNotfoundModal(); return; }
+      if (t.dataset.tab === "calendar") { openSalaryModal(); return; }
+      switchTab(t.dataset.tab);
+    });
   });
   if (el.scanlogFilters) {
     el.scanlogFilters.querySelectorAll(".scanlog-filter").forEach((btn) => {
@@ -13069,7 +13416,7 @@
     // Вкладки, видимые ТОЛЬКО администраторам. Модератор входит только в свои
     // группы, поэтому управление группами/окладами/настройками/множителем и
     // списком админов — только для ADMIN. «Оклады» (salaries) уже здесь.
-    const adminOnlySubs = ["groups", "salaries", "settings", "admins", "multiplier"];
+    const adminOnlySubs = ["groups", "salaries", "settings", "admins", "multiplier", "access", "backup"];
     el.adminTabs.querySelectorAll(".atab").forEach((t) => {
       let visible;
       if (t.dataset.sub === "log") visible = state.isAdmin || state.isModerator;
@@ -13082,6 +13429,9 @@
       t.classList.toggle("admin-visible",
         (t.id === "logsTab") ? canSeeLogs()
           : (t.id === "reportsTab") ? canSeeReports()
+          : (t.id === "sverkiTab") ? canSeeSverki()
+          : (t.id === "procenkaTab") ? canSeeProcenka()
+          : (t.id === "parserTab") ? canSeeParser()
           : (state.isAdmin || state.isModerator))
     );
     // Вкладка «Отчёт не найдено» дополнительно доступна отмеченным сотрудникам.

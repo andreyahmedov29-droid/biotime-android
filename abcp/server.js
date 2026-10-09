@@ -213,6 +213,18 @@ function publicUser(u) {
 }
 
 function getSession(req) {
+  // Встроенный в BIOTIME режим: сессию даёт BIOTIME через req._biotimeSession.
+  // Возвращаем её как админ-сессию модуля, чтобы проверки ролей (например для
+  // сохранения настроек) не падали из-за отсутствия собственной ap_sid-сессии.
+  if (req && req._biotimeSession) {
+    return {
+      userId: String(req._biotimeSession.userId || ''),
+      login: String(req._biotimeSession.name || '') || ('user' + String(req._biotimeSession.userId || '')),
+      name: String(req._biotimeSession.name || 'Пользователь'),
+      role: 'admin',
+      expires: Date.now() + SESSION_TTL_MS,
+    };
+  }
   const token = parseCookies(req)[SESSION_COOKIE];
   if (!token) return null;
   const s = sessions.get(token);
@@ -319,11 +331,27 @@ async function impersonateEndpoint(req, res) {
 }
 
 function authMeEndpoint(req, res) {
-  const s = getSession(req);
+  const s = req._biotimeSession || getSession(req);
   if (!s) {
     const needsSetup = storage.readUsers().length === 0;
     const isHeaderSuper = isSuperAdmin(identity(req), storage.readSettings());
     return sendJson(res, 401, { error: 'login_required', needsSetup, isSuper: isHeaderSuper });
+  }
+  // Встроенный в BIOTIME режим: пользователь пришёл с сессии BIOTIME
+  // (_biotimeSession), в базе пользователей АБЦП его записи нет. Доступ к самому
+  // модулю уже ограничен canSeeReports, поэтому внутри отдаём все разделы сразу.
+  if (req._biotimeSession) {
+    return sendJson(res, 200, {
+      user: {
+        id: s.userId,
+        login: String(s.name || '') || ('user' + String(s.userId || '')),
+        name: String(s.name || 'Пользователь'),
+        role: 'admin',
+      },
+      // Разрешения на внутренние разделы из BIOTIME (null — все для админа,
+      // массив — только отмеченные разделы для остальных).
+      sections: (req._biotimeSections !== undefined) ? req._biotimeSections : null,
+    });
   }
   const users = storage.readUsers();
   const u = users.find((x) => String(x.id) === s.userId);

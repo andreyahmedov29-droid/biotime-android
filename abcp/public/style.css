@@ -1,13 +1,13 @@
 :root {
-  --bg: #0d1117;
-  --bg-elev: #151b23;
-  --bg-panel: #161d26;
-  --line: #262e3a;
-  --line-soft: #1f2732;
-  --text: #e9eef4;
-  --muted: #93a0ad;
-  --accent: #ffb020;
-  --accent-strong: #ff8a00;
+  --bg: #08090d;
+  --bg-elev: #11131a;
+  --bg-panel: #13141c;
+  --line: rgba(255,255,255,0.08);
+  --line-soft: rgba(255,255,255,0.05);
+  --text: #f6f3ea;
+  --muted: #9aa0ad;
+  --accent: #ffab38;
+  --accent-strong: #ffc470;
 --green: #3dd68c;
 --red: #ff5c5c;
 --gold: #ffd24d;
@@ -677,6 +677,30 @@ body.modal-open { overflow: hidden; }
 .login-title { font-size: 18px; margin: 0 0 4px; }
 .logout-tab { opacity: .85; }
 .userbar { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex: 0 0 auto; margin-left: auto; white-space: nowrap; }
+.userbar[hidden] { display: none !important; }
+
+/* ---- Единый стиль BIOTIME (задник + вкладки) ---- */
+body {
+  background:
+    radial-gradient(1200px 600px at 85% -10%, rgba(255,171,56,.07), transparent 60%),
+    radial-gradient(900px 500px at -10% 110%, rgba(80,120,255,.06), transparent 55%),
+    var(--bg);
+}
+.tabs .tab {
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  border-radius: 10px;
+  border-bottom: 2px solid transparent;
+  transition: color .15s, border-color .15s, background .15s;
+}
+.tabs .tab:hover { color: var(--accent); }
+.tabs .tab.is-active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  background: rgba(255,255,255,.04);
+}
 .current-user { color: var(--text); font-size: 13px; font-weight: 600; white-space: nowrap; }
 .btn-danger-small { padding: 6px 10px; font-size: 12px; }
 .btn-danger-small:disabled { opacity: .45; cursor: not-allowed; }

@@ -14,11 +14,13 @@
   "engines": {
     "node": ">=18"
   },
-  "dependencies": {},
+  "dependencies": {
+    "express": "^4.19.2"
+  },
   "devDependencies": {},
   "build": {
     "appId": "com.biotime.worklogger",
-    "productName": "BIOTIME",
+    "productName": "Личный кабинет",
     "asar": false,
     "publish": [
       {

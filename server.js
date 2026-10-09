@@ -539,6 +539,10 @@ function defaultDb() {
       notfoundUsers: [], // кто (кроме админа) видит «Отчёт не найдено»
       logUsers: [], // кто (кроме админа/модератора) видит вкладку «Логи»
       reportsUsers: [], // кто (кроме админа/модератора) видит вкладку «Отчёты» (АБЦП)
+      reportsSections: {}, // доступ к внутренним разделам «Отчётов»: { раздел: [userId, ...] }
+      sverkiUsers: [], // кто (кроме админа) видит вкладку «Сверки»
+      procenkaUsers: [], // кто (кроме админа) видит вкладку «Проценка»
+      parserUsers: [], // кто (кроме админа) видит вкладку «Парсер почты»
       // Версия обновления Android-APK, управляемая из «Параметры» приложения.
       // Пусто = берутся значения из окружения APP_UPDATE_* (или жёсткие дефолты ниже).
       updateVersionCode: null,
@@ -2106,9 +2110,40 @@ function canSeeLogs(user, dbData) {
 function canSeeReports(user, dbData) {
   if (!user) return false;
   if (isAdmin(user, dbData)) return true;
-  if (isModerator(user, dbData)) return true;
   const ids = Array.isArray(dbData && dbData.params && dbData.params.reportsUsers)
     ? dbData.params.reportsUsers
+    : [];
+  if (ids.length === 0) return false;
+  return user.id != null && ids.some((x) => String(x) === String(user.id));
+}
+
+// Доступ к модулю «Сверки»: админ всегда, остальные — из «Доступ к разделам»
+// (sverkiUsers). Сервер тоже пускает только этих сотрудников в /sverki/*.
+function canSeeSverki(user, dbData) {
+  if (!user) return false;
+  if (isAdmin(user, dbData)) return true;
+  const ids = Array.isArray(dbData && dbData.params && dbData.params.sverkiUsers)
+    ? dbData.params.sverkiUsers
+    : [];
+  if (ids.length === 0) return false;
+  return user.id != null && ids.some((x) => String(x) === String(user.id));
+}
+
+function canSeeProcenka(user, dbData) {
+  if (!user) return false;
+  if (isAdmin(user, dbData)) return true;
+  const ids = Array.isArray(dbData && dbData.params && dbData.params.procenkaUsers)
+    ? dbData.params.procenkaUsers
+    : [];
+  if (ids.length === 0) return false;
+  return user.id != null && ids.some((x) => String(x) === String(user.id));
+}
+
+function canSeeParser(user, dbData) {
+  if (!user) return false;
+  if (isAdmin(user, dbData)) return true;
+  const ids = Array.isArray(dbData && dbData.params && dbData.params.parserUsers)
+    ? dbData.params.parserUsers
     : [];
   if (ids.length === 0) return false;
   return user.id != null && ids.some((x) => String(x) === String(user.id));
@@ -3888,6 +3923,19 @@ const handleReportsRoutes = require("./routes/reports")({
   canSeeReports,
   getDb: () => db,
 });
+// Модуль «Сверки», смонтированный под /sverki/*.
+const handleReconcileRoutes = require("./routes/sverki")({
+  canSeeSverki,
+  getDb: () => db,
+});
+const handleProcenkaRoutes = require("./routes/procenka")({
+  canSeeProcenka,
+  getDb: () => db,
+});
+const handleParserRoutes = require("./routes/parser")({
+  canSeeParser,
+  getDb: () => db,
+});
 
 async function handleApi(req, res, urlPath) {
   ensureLoaded();
@@ -4138,6 +4186,18 @@ const server = http.createServer(async (req, res) => {
     if (urlPath === "/reports" || urlPath.startsWith("/reports/")) {
       const ruser = sessionUserFromCookie(req.headers.cookie || "") || identity(req.headers);
       if (handleReportsRoutes(req, res, urlPath, ruser) !== false) return;
+    }
+    if (urlPath === "/sverki" || urlPath.startsWith("/sverki/")) {
+      const suser = sessionUserFromCookie(req.headers.cookie || "") || identity(req.headers);
+      if (handleReconcileRoutes(req, res, urlPath, suser) !== false) return;
+    }
+    if (urlPath === "/procenka" || urlPath.startsWith("/procenka/")) {
+      const puser = sessionUserFromCookie(req.headers.cookie || "") || identity(req.headers);
+      if (handleProcenkaRoutes(req, res, urlPath, puser) !== false) return;
+    }
+    if (urlPath === "/parser" || urlPath.startsWith("/parser/")) {
+      const pu = sessionUserFromCookie(req.headers.cookie || "") || identity(req.headers);
+      if (handleParserRoutes(req, res, urlPath, pu) !== false) return;
     }
     if (urlPath.startsWith("/api/")) {
       return await handleApi(req, res, urlPath);

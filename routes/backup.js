@@ -24,18 +24,37 @@ module.exports = function createBackupHandler({
   collectExtraBackup,
   applyExtraBackup,
 } = {}) {
+  // Собрать JSON-настройки встроенных модулей (Отчёты/Сверки/Проценка/Парсер),
+  // которые живут в общем /data. Собираем верхний уровень *.json (кроме логов и
+  // тяжёлых/динамических) — это «все данные» интеграций для полного бэкапа.
+  function collectModulesJson(dir) {
+    const out = {};
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+    for (const e of entries) {
+      if (!e.isFile() || !e.name.endsWith(".json")) continue;
+      if (/^logs(-.*)?$/.test(e.name) || /^sessions/.test(e.name)) continue;
+      if (e.name === "db.json") continue;
+      try {
+        out[e.name] = JSON.parse(fs.readFileSync(path.join(dir, e.name), "utf8"));
+      } catch (_) { /* пропускаем нечитаемые */ }
+    }
+    return out;
+  }
   return async function handleBackupRoutes(req, res, urlPath, method, admin) {
     const db = getDb ? getDb() : {};
 
     if (urlPath === "/api/admin/backup" && method === "GET") {
       if (!admin) return sendJson(res, 403, { error: "forbidden" });
       const extra = collectExtraBackup ? collectExtraBackup() : {};
+      const modulesJson = DATA_DIR ? collectModulesJson(DATA_DIR) : {};
       const payload = JSON.stringify({
         app: "biotime",
         version: 1,
         exportedAt: new Date().toISOString(),
         data: db,
         extra: Object.keys(extra).length ? extra : undefined,
+        modules: Object.keys(modulesJson).length ? modulesJson : undefined,
       }, null, 2);
       const stamp = dayKey(Date.now());
       const fname = `biotime-backup-${stamp}.json`;

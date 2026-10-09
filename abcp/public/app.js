@@ -359,7 +359,10 @@ async function api(path, opts) {
   const res = await fetch(outPath, { ...(opts || {}), cache: 'no-store' });
   const data = await res.json().catch(() => ({}));
   if (res.status === 401 && !path.startsWith('/api/auth/')) {
-    showLoginGate();
+    // Во встроенном режиме (модуль смонтирован в BIOTIME под /reports/) окно входа
+    // не показываем: доступ уже обеспечен через BIOTIME (canSeeReports). Если бы
+    // 401 всё же пришёл — это отсутствие прав, а не повод грузить форму входа.
+    if (!API_BASE) showLoginGate();
     const e = new Error('Требуется вход');
     e.authRequired = true;
     throw e;

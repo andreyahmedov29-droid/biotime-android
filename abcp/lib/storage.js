@@ -66,7 +66,9 @@ function resolveDataDir() {
 }
 
 function settingsFile() {
-  return path.join(resolveDataDir(), 'settings.json');
+  // Отдельный файл, чтобы настройки «Отчётов» (ABCP/SMTP) не конфликтовали
+  // с настройками других встроенных модулей (у «Парсера» свой файл).
+  return path.join(resolveDataDir(), 'abcp-settings.json');
 }
 
 function reportPath(name) {
@@ -370,7 +372,7 @@ function setCurrentUser(userId) {
 }
 
 function globalSettingsFile() {
-  return path.join(resolveDataDir(), 'settings.json');
+  return path.join(resolveDataDir(), 'abcp-settings.json');
 }
 
 function userSettingsFile(uid) {

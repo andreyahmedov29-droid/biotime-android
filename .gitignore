@@ -4,6 +4,7 @@ biotime.config.json
 .data/
 data-test/
 before-restore-*.json
+parser/settings.seed.json
 
 # ---- Node ----
 node_modules/
@@ -56,3 +57,6 @@ Thumbs.db
 # ---- Инструменты ----
 .opencode/
 opencode.jsonc
+
+sverki/.env
+
