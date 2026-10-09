@@ -21,17 +21,21 @@ module.exports = function createBackupHandler({
   listAutoBackups,
   migrateDays,
   normalizeGroup,
+  collectExtraBackup,
+  applyExtraBackup,
 } = {}) {
   return async function handleBackupRoutes(req, res, urlPath, method, admin) {
     const db = getDb ? getDb() : {};
 
     if (urlPath === "/api/admin/backup" && method === "GET") {
       if (!admin) return sendJson(res, 403, { error: "forbidden" });
+      const extra = collectExtraBackup ? collectExtraBackup() : {};
       const payload = JSON.stringify({
         app: "biotime",
         version: 1,
         exportedAt: new Date().toISOString(),
         data: db,
+        extra: Object.keys(extra).length ? extra : undefined,
       }, null, 2);
       const stamp = dayKey(Date.now());
       const fname = `biotime-backup-${stamp}.json`;
@@ -80,6 +84,7 @@ module.exports = function createBackupHandler({
         note: "Полная резервная копия приложения: исходный код + база данных. Храните в надёжном месте.",
         files,
         data: db,
+        extra: collectExtraBackup ? collectExtraBackup() : {},
       }, null, 2);
       const stamp = dayKey(Date.now());
       const fname = `biotime-app-${stamp}.json`;
@@ -135,6 +140,9 @@ module.exports = function createBackupHandler({
         migrateDays(next);
         next.groups = next.groups.map((g) => normalizeGroup(g, next.staff));
         await persistDb();
+        // Восстанавливаем дополнительные durable-данные (треки, статусы, журнал
+        // 1С, архив сканов), которые шли в бэкапе рядом с data.
+        if (applyExtraBackup) applyExtraBackup(body && body.extra);
         return sendJson(res, 200, {
           ok: true,
           restored: {
@@ -144,6 +152,7 @@ module.exports = function createBackupHandler({
             clients: next.driverClients.length,
             routes: next.driverRoutes.length,
             log: next.log.length,
+            extra: !!(body && body.extra && typeof body.extra === "object"),
           },
         });
       } catch (err) {
@@ -246,6 +255,8 @@ module.exports = function createBackupHandler({
         migrateDays(next);
         next.groups = next.groups.map((g) => normalizeGroup(g, next.staff));
         await persistDb();
+        // Восстанавливаем дополнительные durable-данные из общего envelope.
+        if (applyExtraBackup) applyExtraBackup(parsed && parsed.extra);
         return sendJson(res, 200, {
           ok: true,
           restored: {
@@ -255,6 +266,7 @@ module.exports = function createBackupHandler({
             clients: next.driverClients.length,
             routes: next.driverRoutes.length,
             log: next.log.length,
+            extra: !!(parsed && parsed.extra && typeof parsed.extra === "object"),
           },
         });
       } catch (err) {

@@ -61,6 +61,25 @@ test("POST /api/admin/backup/restore c мусором -> 422", async () => {
   assert.strictEqual(res._json.status, 422);
 });
 
+test("restore: extra-данные (треки/статусы/журнал 1С) передаются в applyExtraBackup", async () => {
+  let applied = null;
+  const h = make({
+    readBody: async () => ({
+      data: { staff: [{ id: "1" }], groups: [] },
+      extra: { tracksByDay: { "2026-10-03": { d1: [[1, 2]] } }, notFound: { x: 1 }, onecPullLog: [{ id: "a" }] },
+    }),
+    applyExtraBackup: (extra) => { applied = extra; },
+  });
+  const res = {};
+  await h({ headers: {} }, res, "/api/admin/backup/restore", "POST", true);
+  assert.strictEqual(res._json.status, 200);
+  assert.strictEqual(res._json.obj.restored.extra, true);
+  assert.ok(applied, "applyExtraBackup вызван с extra");
+  assert.ok(applied.tracksByDay && applied.tracksByDay["2026-10-03"].d1, "треки переданы");
+  assert.ok(applied.notFound, "статусы переданы");
+  assert.ok(Array.isArray(applied.onecPullLog), "журнал 1С передан");
+});
+
 test("bulk restore: части собираются в /restore-complete и БД заменяется", async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "biotime-bulk-"));
   let current = { staff: [{ id: "1" }] };

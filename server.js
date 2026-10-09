@@ -764,7 +764,13 @@ function writeAutoBackup(envelope) {
     const pad = (n) => String(n).padStart(2, "0");
     const name = `biotime-backup-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.json`;
     const payload = envelope
-      ? JSON.stringify({ app: "biotime", version: 1, exportedAt: new Date().toISOString(), data: db }, null, 2)
+      ? JSON.stringify({
+          app: "biotime",
+          version: 1,
+          exportedAt: new Date().toISOString(),
+          data: db,
+          extra: collectExtraBackup ? collectExtraBackup() : {},
+        }, null, 2)
       : JSON.stringify(db);
     const tmp = path.join(BACKUP_DIR, ".tmp-" + name);
     fs.writeFileSync(tmp, payload);
@@ -812,6 +818,94 @@ function maybeAutoBackup(now) {
   // Don't snapshot an empty/new database — nothing worth keeping yet.
   if (!db || db.staff.length === 0) return null;
   return writeAutoBackup(true);
+}
+
+// Собирает ДОПОЛНИТЕЛЬНЫЕ durable-данные приложения, которые лежат в /data
+// отдельными файлами и НЕ входят в объект db (а значит раньше не попадали в
+// бэкап и терялись при восстановлении): GPS-треки, карта-привязанные треки,
+// «Проблемы со склада», журнал заборов 1С и архив сканов. Возвращает объект,
+// который кладётся в бэкап рядом с data, а при restore записывается обратно.
+function collectExtraBackup() {
+  const extra = {};
+  if (Object.keys(tracksByDay || {}).length) extra.tracksByDay = tracksByDay;
+  if (Object.keys(snappedTracks || {}).length) extra.snappedTracks = snappedTracks;
+  if (db && db.notFound && typeof db.notFound === "object" && Object.keys(db.notFound).length) {
+    extra.notFound = db.notFound;
+  }
+  if (Array.isArray(onecPullLog) && onecPullLog.length) extra.onecPullLog = onecPullLog;
+  // Архив сканов (<день>.jsonl в /data/barcode-archive) читаем построчно в
+  // { "<дата>": [entries] } — это полная история сканов, независимая от db.barcodeLog.
+  try {
+    if (fs.existsSync(BCODE_ARCHIVE_DIR)) {
+      const arc = {};
+      for (const fn of (fs.readdirSync(BCODE_ARCHIVE_DIR) || [])) {
+        if (!/^\d{4}-\d{2}-\d{2}\.jsonl$/.test(fn)) continue;
+        const day = fn.slice(0, 10);
+        const lines = fs.readFileSync(path.join(BCODE_ARCHIVE_DIR, fn), "utf8").split("\n");
+        const rows = [];
+        for (const ln of lines) {
+          if (!ln.trim()) continue;
+          try { rows.push(JSON.parse(ln)); } catch { /* повреждённая строка */ }
+        }
+        if (rows.length) arc[day] = rows;
+      }
+      if (Object.keys(arc).length) extra.barcodeArchive = arc;
+    }
+  } catch { /* архив не критичен */ }
+  return extra;
+}
+
+// Восстанавливает дополнителные данные из бэкапа: пишет их в /data и обновляет
+// in-memory-копии, чтобы они сразу были видны (без перезапуска). Каждый файл
+// пишется атомарно (tmp + rename); сбой одного не роняет восстановление БД.
+function applyExtraBackup(extra) {
+  if (!extra || typeof extra !== "object") return;
+  const write = (file, obj, target) => {
+    try {
+      if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+      const tmp = file + ".tmp";
+      fs.writeFileSync(tmp, JSON.stringify(obj));
+      fs.renameSync(tmp, file);
+      if (target && typeof target === "object") {
+        Object.keys(target).forEach((k) => delete target[k]);
+        Object.assign(target, obj);
+      }
+    } catch (e) { console.error("extra restore (" + file + ") failed:", e); }
+  };
+  if (extra.tracksByDay && typeof extra.tracksByDay === "object") {
+    write(TRACKS_FILE, extra.tracksByDay, tracksByDay);
+  }
+  if (extra.snappedTracks && typeof extra.snappedTracks === "object") {
+    write(SNAPPED_FILE, extra.snappedTracks, snappedTracks);
+  }
+  if (extra.notFound && typeof extra.notFound === "object") {
+    if (db) db.notFound = extra.notFound;
+    write(NOTFOUND_FILE, extra.notFound);
+  }
+  if (Array.isArray(extra.onecPullLog) && extra.onecPullLog.length) {
+    onecPullLog.length = 0;
+    onecPullLog.push(...extra.onecPullLog);
+    try {
+      if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+      const tmp = ONEC_PULL_LOG_FILE + ".tmp";
+      fs.writeFileSync(tmp, JSON.stringify(onecPullLog));
+      fs.renameSync(tmp, ONEC_PULL_LOG_FILE);
+    } catch { /* ignore */ }
+  }
+  if (extra.barcodeArchive && typeof extra.barcodeArchive === "object") {
+    try {
+      if (!fs.existsSync(BCODE_ARCHIVE_DIR)) fs.mkdirSync(BCODE_ARCHIVE_DIR, { recursive: true });
+      for (const day of Object.keys(extra.barcodeArchive)) {
+        const rows = extra.barcodeArchive[day];
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !Array.isArray(rows)) continue;
+        const f = path.join(BCODE_ARCHIVE_DIR, day + ".jsonl");
+        const tmp = f + ".tmp";
+        const content = rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : "");
+        fs.writeFileSync(tmp, content, "utf8");
+        fs.renameSync(tmp, f);
+      }
+    } catch { /* ignore */ }
+  }
 }
 
 // Timestamp of the last millisecond (23:59:59.999) of the COMPANY day containing
@@ -3452,6 +3546,8 @@ const handleBackupRoutes = require("./routes/backup")({
   listAutoBackups,
   migrateDays,
   normalizeGroup,
+  collectExtraBackup,
+  applyExtraBackup,
 });
 
 // ---- Отгрузка маршрутов (склад) ----
