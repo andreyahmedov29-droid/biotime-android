@@ -3228,6 +3228,13 @@
       const ok = !!(e && e.ok);
       const time = e && e.ts ? new Date(Number(e.ts) + (3 * 3600000)).toISOString().slice(11, 19) : "—";
       const result = ok ? ("Хорошо · " + ((e.reason) || "забрано")) : ("Пусто · " + ((e && e.reason) || "нет данных"));
+      // Дополнительные пояснения: имя контрагента и человеко-читаемая причина
+      // (пусто по ИНН, HTTP-код 1С, ошибка сети и т.п.), чтобы было видно, по
+      // какому клиенту 1С ничего не нашла.
+      const detail = [];
+      if (e && e.clientName) detail.push("клиент: " + String(e.clientName));
+      if (e && e.message) detail.push(String(e.message));
+      const resultFull = detail.length ? (result + " (" + detail.join("; ") + ")") : result;
       const items = (e && Array.isArray(e.items) && e.items.length) ? e.items : [];
       // Успешная запись с составом — клик раскрывает список позиций.
       if (items.length) {
@@ -3243,7 +3250,7 @@
         `<td>${escapeHtml((e && e.login) || "—")}</td>` +
         `<td>${escapeHtml((e && e.number) || "—")}</td>` +
         `<td>${escapeHtml(String((e && e.posCount) != null ? e.posCount : "—"))}</td>` +
-        `<td>${escapeHtml(result)}</td>` +
+        `<td>${escapeHtml(resultFull)}</td>` +
         `<td style="width:38px;text-align:center;vertical-align:middle;padding:4px 6px"><button type="button" class="icon-btn" data-1clog-del="${escapeHtml(String((e && e.id) || ""))}" title="Удалить из лога (позволит забрать накладную повторно)">✕</button></td>`;
       frag.appendChild(tr);
       const sub = document.createElement("tr");

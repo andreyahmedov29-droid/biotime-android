@@ -3164,7 +3164,17 @@ async function fetchOnecRealization(inn, login) {
   const innV = String(inn || "").trim();
   const loginV = String(login || "").trim();
   const url = String(process.env.ONEC_API_URL || "").trim().replace(/\/+$/, "");
-  if (!url || !innV) return null;
+  const logEvt = (partial) => {
+    pushOnecPullLog(Object.assign({ source: "auto", inn: innV, login: loginV }, partial));
+  };
+  if (!url) {
+    logEvt({ ok: false, reason: "no_url", message: "ONEC_API_URL не настроен" });
+    return null;
+  }
+  if (!innV) {
+    logEvt({ ok: false, reason: "no_inn", message: "у контрагента не заполнен ИНН" });
+    return null;
+  }
   // Авторизация у реального HTTP-сервиса 1С — базовая (логин/пароль), как в
   // наших .env ONEC_API_USER / ONEC_API_PASS. Легаси X-Api-Key не используется.
   const user = String(process.env.ONEC_API_USER || "").trim();
@@ -3188,9 +3198,16 @@ async function fetchOnecRealization(inn, login) {
     } finally {
       clearTimeout(timer);
     }
-    if (!res || !res.ok) return null;
+    if (!res || !res.ok) {
+      const st = res ? res.status : "?";
+      logEvt({ ok: false, reason: "http_" + st, message: "1С вернула HTTP " + st });
+      return null;
+    }
     const data = await res.json().catch(() => null);
-    if (!data) return null;
+    if (!data) {
+      logEvt({ ok: false, reason: "bad_json", message: "1С вернула не-JSON ответ" });
+      return null;
+    }
     // Реальный ответ 1С: { shipment_number, inn, id_partstiker_list: [{id_partstiker, quantity}] }
     // (может прийти и массивом). Нормализуем в список накладных.
     const arr = Array.isArray(data) ? data : [data];
@@ -3219,15 +3236,17 @@ async function fetchOnecRealization(inn, login) {
         .filter((it) => it.art);
       if (!items.length) continue;
       const number = String((d && (d.shipment_number || d.number || d.номер)) || "").trim();
-      pushOnecPullLog({ source: "auto", inn: innV, login: loginV, ok: true, number, posCount: items.length, items });
+      pushOnecPullLog({ source: "auto", inn: innV, login: loginV, ok: true, number, posCount: items.length, items, message: "забрана накладная " + number });
       return {
         id: number || String((d && d.id) || ""),
         number,
         items,
       };
     }
+    logEvt({ ok: false, reason: "empty", message: "1С не вернула накладных по этому ИНН/логину" });
     return null;
   } catch {
+    logEvt({ ok: false, reason: "err", message: "ошибка запроса к 1С (timeout/сеть)" });
     return null;
   }
 }

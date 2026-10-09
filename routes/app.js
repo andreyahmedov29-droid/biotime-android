@@ -115,7 +115,16 @@ module.exports = function createAppHandler({
       const fetchOne = async (c) => {
         const inn = String((c && c.inn) || "").trim();
         const login = String((c && c.login) || "").trim();
-        if (!inn) return { ok: false, reason: "no_inn" };
+        const clientName = String((c && (c.client || c.address || c.bundleName)) || "").trim();
+        const logEvt = (partial) => {
+          if (pushOnecPullLog) pushOnecPullLog(Object.assign(
+            { source: "button", inn, login, clientName }, partial
+          ));
+        };
+        if (!inn) {
+          logEvt({ ok: false, reason: "no_inn", message: "у контрагента не заполнен ИНН" });
+          return { ok: false, reason: "no_inn" };
+        }
         try {
           const ctrl = new AbortController();
           const to = setTimeout(() => ctrl.abort(), 6000);
@@ -128,8 +137,16 @@ module.exports = function createAppHandler({
               signal: ctrl.signal,
             });
           } finally { clearTimeout(to); }
-          if (!r || !r.ok) return { ok: false, reason: "http_" + (r ? r.status : "?") };
+          if (!r || !r.ok) {
+            const st = r ? r.status : "?";
+            logEvt({ ok: false, reason: "http_" + st, message: "1С вернула HTTP " + st });
+            return { ok: false, reason: "http_" + st };
+          }
           const data = await r.json().catch(() => null);
+          if (data == null) {
+            logEvt({ ok: false, reason: "bad_json", message: "1С вернула не-JSON ответ" });
+            return { ok: false, reason: "bad_json" };
+          }
           const arr = Array.isArray(data) ? data : (data ? [data] : []);
           const alreadyLog = getOnecPullLog ? getOnecPullLog() : [];
           const shipments = [];
@@ -172,14 +189,22 @@ module.exports = function createAppHandler({
             if (pushOnecPullLog) pushOnecPullLog({ source: "button", inn, login, ok: true, number: buyer, posCount: items.length, items });
           }
           if (shipments.length) {
+            logEvt({
+              ok: true,
+              number: shipments.map((s) => s.buyer).join(" | "),
+              posCount: shipments.reduce((n, s) => n + s.items.length, 0),
+              message: "забрано накладных: " + shipments.length,
+            });
             return {
               ok: true,
               buyer: shipments.map((s) => s.buyer).join(" | "),
               items: shipments.reduce((acc, s) => acc.concat(s.items), []),
             };
           }
+          logEvt({ ok: false, reason: "empty", message: "1С не вернула накладных по этому ИНН/логину" });
           return { ok: false, reason: "empty" };
         } catch (e) {
+          logEvt({ ok: false, reason: "err", message: "ошибка запроса к 1С: " + (e && e.message ? e.message : String(e)) });
           return { ok: false, reason: "err" };
         }
       };

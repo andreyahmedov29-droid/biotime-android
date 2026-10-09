@@ -1,6 +1,7 @@
 // Юнит-тесты модуля routes/app.js — версия приложения и карта.
 const { test } = require("node:test");
 const assert = require("node:assert");
+const http = require("node:http");
 const createAppHandler = require("../routes/app");
 
 function make(overrides) {
@@ -96,6 +97,49 @@ test("POST /api/waybills/from-1c без настроенного URL -> не п�
   assert.strictEqual(res._json.status, 200);
   assert.strictEqual(res._json.obj.ok, false);
   assert.match(String(res._json.obj.error), /ONEC_API_URL/);
+});
+
+test("POST /api/waybills/from-1c: пустой ответ 1С фиксируется в журнале (ok:false + inn/clientName)", async () => {
+  // Мок 1С, который всегда возвращает пустой JSON — контрагент «не найден».
+  const srv = http.createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end("[]");
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  const port = srv.address().port;
+  const oldBase = process.env.ONEC_API_URL;
+  const oldUser = process.env.ONEC_API_USER;
+  const oldPass = process.env.ONEC_API_PASS;
+  process.env.ONEC_API_URL = `http://127.0.0.1:${port}/shipment`;
+  delete process.env.ONEC_API_USER;
+  delete process.env.ONEC_API_PASS;
+  const logged = [];
+  const h = make({
+    getOnecPullLog: () => logged,
+    pushOnecPullLog: (e) => { logged.push(e); },
+    readBody: async () => ({
+      clients: [
+        { inn: "5047254063", login: "SEV", client: "Рсервис Север" },
+        { inn: "7714345645", login: "DOC", client: "Автодок" },
+      ],
+    }),
+  });
+  const res = {};
+  try {
+    await h({ headers: {} }, res, "/api/waybills/from-1c", "POST", { id: "1" }, true);
+    assert.strictEqual(res._json.status, 200);
+    // Обе записи — пустые (1С вернула []), обе должны попасть в журнал с ИНН/логином.
+    assert.strictEqual(logged.length, 2, "в журнал попали оба обращения (включая пустые)");
+    const evs = logged.filter((e) => e.reason === "empty");
+    assert.strictEqual(evs.length, 2);
+    assert.ok(evs.some((e) => e.inn === "5047254063" && e.clientName === "Рсервис Север"));
+    assert.ok(evs.some((e) => e.inn === "7714345645" && e.login === "DOC"));
+  } finally {
+    if (oldBase === undefined) delete process.env.ONEC_API_URL; else process.env.ONEC_API_URL = oldBase;
+    if (oldUser === undefined) delete process.env.ONEC_API_USER; else process.env.ONEC_API_USER = oldUser;
+    if (oldPass === undefined) delete process.env.ONEC_API_PASS; else process.env.ONEC_API_PASS = oldPass;
+    await new Promise((r) => srv.close(r));
+  }
 });
 
 test("POST /api/app/update c неверным токеном -> 401", async () => {
