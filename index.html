@@ -30,44 +30,6 @@
 
   <header class="topbar">
     <div class="topbar-inner">
-    <div class="brand">
-      <span class="brand-mark" aria-hidden="true">
-        <svg class="brand-mark-svg" viewBox="0 0 48 48" width="30" height="30" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <defs>
-            <linearGradient id="biotimeFace" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0" stop-color="#98a4ad"/>
-              <stop offset="1" stop-color="#b9c3ca"/>
-            </linearGradient>
-            <linearGradient id="biotimeLeaf" x1="0" y1="1" x2="1" y2="0">
-              <stop offset="0" stop-color="#c3cdd3"/>
-              <stop offset="1" stop-color="#eef2f4"/>
-            </linearGradient>
-            <radialGradient id="biotimeGlow" cx="0.5" cy="0.42" r="0.6">
-              <stop offset="0" stop-color="#ffffff" stop-opacity="0.55"/>
-              <stop offset="0.6" stop-color="#ffffff" stop-opacity="0"/>
-            </radialGradient>
-          </defs>
-          <rect x="2" y="2" width="44" height="44" rx="14" fill="url(#biotimeFace)"/>
-          <rect x="2" y="2" width="44" height="44" rx="14" fill="url(#biotimeGlow)"/>
-          <circle cx="24" cy="24" r="16.6" stroke="#e9fff8" stroke-opacity="0.55" stroke-width="2.4"/>
-          <circle cx="24" cy="24" r="15.1" stroke="#0b2e33" stroke-opacity="0.35" stroke-width="1.2"/>
-          <g stroke="#e9fff8" stroke-linecap="round">
-            <path d="M24 13v2.2" stroke-width="2.6"/>
-            <path d="M24 32.8v2.2" stroke-width="2.6"/>
-            <path d="M13 24h2.2" stroke-width="2.6"/>
-            <path d="M32.8 24H35" stroke-width="2.6"/>
-          </g>
-          <path d="M24 34
-                   C 21.6 32 20.8 29.6 20.8 27
-                   C 22.6 28.2 23.9 28.7 25 28.7
-                   C 23.4 26.4 23.4 24 24.9 21.4
-                   C 27.2 23.4 28.5 25 27.7 27.8
-                   C 27.3 30.3 26.1 32.4 24 34 Z"
-                fill="url(#biotimeLeaf)"/>
-          <circle cx="24" cy="24" r="2.3" fill="#0b2e33" fill-opacity="0.35"/>
-        </svg>
-      </span>
-    </div>
     <nav class="tabs" id="tabs">
       <button class="tab active" data-tab="timer">Таймер</button>
       <button class="tab" data-tab="calendar">Зарплата</button>
@@ -947,15 +909,13 @@
       </div>
 
       <nav class="admin-tabs" id="adminTabs">
-        <button class="atab active" data-sub="staff">Все сотрудники</button>
+        <button class="atab active" data-sub="staff">Сотрудники</button>
         <button class="atab" data-sub="today">Время работы</button>
         <button class="atab" data-sub="groups">Группы</button>
         <button class="atab" data-sub="salaries">Оклады и дни</button>
         <button class="atab" data-sub="multiplier">Множитель</button>
         <button class="atab" data-sub="log">Журнал</button>
         <button class="atab" data-sub="settings">Параметры</button>
-        <button class="atab" data-sub="admins">Администраторы</button>
-        <button class="atab" data-sub="accounts">Учётные записи</button>
       </nav>
 
       <!-- Все сотрудники -->

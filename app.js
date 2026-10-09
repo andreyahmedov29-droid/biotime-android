@@ -1550,6 +1550,7 @@
     showShipment: $("showShipment"), shipmentGroups: $("shipmentGroups"),
     notfoundUsersGroups: $("notfoundUsersGroups"),
     logUsersGroups: $("logUsersGroups"), logUsersSearch: $("logUsersSearch"), logUsersCount: $("logUsersCount"),
+    reportsUsersGroups: $("reportsUsersGroups"), reportsUsersSearch: $("reportsUsersSearch"), reportsUsersCount: $("reportsUsersCount"),
     notfoundTab: $("notfoundTab"),
     reportsTab: $("reportsTab"),
     allowDriverStartWithoutShipment: $("allowDriverStartWithoutShipment"),
@@ -9232,32 +9233,94 @@
     else if (name === "admins") renderAdmins();
   }
 
-  function renderStaff() {
+  let _adminUsersMap = null;
+  async function loadAdminUsersMap() {
+    if (_adminUsersMap) return _adminUsersMap;
+    try {
+      const r = await api("/api/admin/users");
+      const m = new Map();
+      ((r && r.list) || []).forEach((u) => m.set(String(u.id), u));
+      _adminUsersMap = m;
+    } catch (_e) {
+      _adminUsersMap = new Map();
+    }
+    return _adminUsersMap;
+  }
+  async function renderStaff() {
     const meName = staffById(state.me.id) ? staffById(state.me.id).name : state.me.name;
     el.staffCountNote.textContent = `${state.staff.length} ${plural(state.staff.length, "сотрудник", "сотрудника", "сотрудников")} · вы — «${escapeHtml(meName)}»`;
     el.staffList.innerHTML = "";
-    state.staff.forEach((s) => {
+    const aMap = await loadAdminUsersMap();
+    // Разбивка по существующим группам: каждый сотрудник попадает в свою группу,
+    // без группы — в «Без группы». Одна строка на сотрудника, без дублей.
+    const byGroup = new Map();
+    const ungrouped = [];
+    (state.staff || []).forEach((s) => {
+      const gr = (state.groups || []).find((g) => (g.memberIds || []).includes(s.id));
+      if (gr) {
+        const name = gr.name || "Группа";
+        if (!byGroup.has(name)) byGroup.set(name, []);
+        byGroup.get(name).push(s);
+      } else {
+        ungrouped.push(s);
+      }
+    });
+    const renderRow = (s) => {
       const row = document.createElement("div");
       row.className = "admin-row";
       const isMe = s.id === state.me.id;
       const isAdminUser = state.admins.includes(s.id) || (s.id === state.me.id && state.isAdmin);
+      const ownerCanToggle = !isMe; // владельца нельзя снять с роли
+      const acct = aMap.get(String(s.id));
       const letter = (s.name || "?").trim().charAt(0).toUpperCase();
-      const sub = [];
-      if (isMe) sub.push('<span class="badge">вы</span>');
-      if (isAdminUser) sub.push('<span class="badge">админ</span>');
       row.innerHTML = `
         <div class="avatar">${letter}</div>
         <div class="admin-row-main">
-          <div class="admin-row-name">${escapeHtml(s.name)}</div>
-          <div class="admin-row-sub">${sub.join(" ") || "сотрудник"}</div>
+          <div class="admin-row-name">${escapeHtml(s.name)}${isMe ? ' <span class="badge">вы</span>' : ""}</div>
+          <div class="admin-row-sub">
+            ${isAdminUser ? '<span class="badge">админ</span> ' : ""}
+            ${acct && acct.login ? `учётка: <b>${escapeHtml(acct.login)}</b>` : "нет учётной записи"}
+          </div>
         </div>
         <div class="row-action">
-          ${isMe
-            ? '<span class="disabled-note">это вы</span>'
-            : `<button class="mini-btn on" data-id="${s.id}">Удалить</button>`}
+          ${ownerCanToggle
+            ? `<button class="mini-btn ${isAdminUser ? "on" : ""}" data-admin="${s.id}" data-on="${isAdminUser}">${isAdminUser ? "Снять админа" : "Сделать админом"}</button>`
+            : '<span class="disabled-note">это вы</span>'}
+          ${!isMe ? `<button class="mini-btn on" data-id="${s.id}">Удалить</button>` : ""}
         </div>
       `;
-      el.staffList.appendChild(row);
+      return row;
+    };
+    // Сначала блоки с группами, затем «Без группы».
+    for (const [title, items] of byGroup) {
+      const t = document.createElement("div");
+      t.className = "block-title";
+      t.textContent = title;
+      el.staffList.appendChild(t);
+      items.forEach((s) => el.staffList.appendChild(renderRow(s)));
+    }
+    if (ungrouped.length) {
+      const t = document.createElement("div");
+      t.className = "block-title";
+      t.textContent = "Без группы";
+      el.staffList.appendChild(t);
+      ungrouped.forEach((s) => el.staffList.appendChild(renderRow(s)));
+    }
+    // Назначение/снятие роли администратора (без дублей в db.admins).
+    el.staffList.querySelectorAll("[data-admin]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = btn.dataset.id;
+        const on = btn.dataset.on === "true";
+        try {
+          await api("/api/admins", { method: "POST", body: JSON.stringify({ id, on: !on }) });
+          if (on) state.admins = state.admins.filter((a) => a !== id);
+          else state.admins = state.admins.concat(id);
+          renderStaff();
+          toast(on ? "Роль администратора снята" : "Назначен администратором");
+        } catch (e) {
+          toast(e.message);
+        }
+      });
     });
     el.staffList.querySelectorAll(".mini-btn[data-id]").forEach((btn) => {
       btn.addEventListener("click", () => removeStaff(btn.dataset.id));
@@ -10249,7 +10312,9 @@
     return state.me && state.me.id != null && ids.some((x) => String(x) === String(state.me.id));
   }
   function canSeeReports() {
-    if (state.isAdmin || state.isModerator) return true;
+    // Вкладку «Отчёты» всегда видит только администратор; остальные — только если
+    // отмечены в «Параметры → Доступ к “Отчёты”» (модератор права не имеет).
+    if (state.isAdmin) return true;
     if (typeof state.canSeeReports === "boolean") return state.canSeeReports;
     const ids = state.params.reportsUsers || [];
     if (ids.length === 0) return false;
