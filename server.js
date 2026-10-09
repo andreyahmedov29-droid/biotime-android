@@ -3883,6 +3883,11 @@ const handleReportRoutes = require("./routes/report")({
   buildXlsx,
   MIME,
 });
+// Модуль «Отчёты» (АБЦП), смонтированный под /reports/*.
+const handleReportsRoutes = require("./routes/reports")({
+  canSeeReports,
+  getDb: () => db,
+});
 
 async function handleApi(req, res, urlPath) {
   ensureLoaded();
@@ -4126,6 +4131,13 @@ const server = http.createServer(async (req, res) => {
       urlPath = decodeURIComponent(new URL(req.url, `http://${req.headers.host}`).pathname);
     } catch {
       return sendJson(res, 400, { error: "bad url" });
+    }
+    // Модуль «Отчёты» (АБЦП) живёт под /reports/*: API и статика внутри самого
+    // модуля. Доступ — через canSeeReports (права BIOTIME), свою авторизацию
+    // АБЦП не используем.
+    if (urlPath === "/reports" || urlPath.startsWith("/reports/")) {
+      const ruser = sessionUserFromCookie(req.headers.cookie || "") || identity(req.headers);
+      if (handleReportsRoutes(req, res, urlPath, ruser) !== false) return;
     }
     if (urlPath.startsWith("/api/")) {
       return await handleApi(req, res, urlPath);

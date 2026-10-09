@@ -10262,7 +10262,8 @@
     if (!host) return;
     if (host.dataset.ready) return;
     host.dataset.ready = "1";
-    host.innerHTML = `<div style="padding:48px 16px;text-align:center;opacity:.7">Модуль «Отчёты» будет подключён в этот раздел.</div>`;
+    host.classList.add("reports-embed");
+    host.innerHTML = `<iframe src="/reports/" style="width:100%;height:calc(100vh - 150px);min-height:480px;border:0;border-radius:12px;background:#101010;" title="Отчёты"></iframe>`;
   }
   function recomputeOverVisibility() {
     const pH = state.params.showOverHoursGroups || [];
