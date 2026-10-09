@@ -10302,9 +10302,9 @@
     const out = {};
     if (el.reportsSectionsWrap) {
       el.reportsSectionsWrap.querySelectorAll('input[type="checkbox"]:checked').forEach((cb) => {
-        const key = cb.getAttribute("data-section-key");
+        const key = cb.getAttribute("data-rs-key");
         if (!key) return;
-        (out[key] = out[key] || []).push(cb.value);
+        (out[key] = out[key] || []).push(cb.getAttribute("data-rs-user"));
       });
     }
     return out;
@@ -10411,14 +10411,16 @@
     if (!wrap) return;
     const staff = state.staff || [];
     const sec = state.params && state.params.reportsSections || {};
-    wrap.innerHTML = REPORTS_SECTIONS.map(([key, name]) => {
-      const ids = sec[key] || [];
-      const checks = staff.map((s) => {
-        const on = ids.some((x) => String(x) === String(s.id));
-        return `<label class="group-check"><input type="checkbox" data-section-key="${key}" value="${escapeHtml(String(s.id))}" ${on ? "checked" : ""} /><span>${escapeHtml(s.name)}</span></label>`;
+    // Список сотрудников; напротив каждого — чекбоксы доступных разделов «Отчётов».
+    const rows = staff.map((s) => {
+      const checks = REPORTS_SECTIONS.map(([key, name]) => {
+        const on = (sec[key] || []).some((x) => String(x) === String(s.id));
+        const t = String(name).slice(0, 4) + "."; // компактная подпись (полное в title)
+        return `<label class="rs-check" title="${escapeHtml(name)}"><input type="checkbox" data-rs-user="${escapeHtml(String(s.id))}" data-rs-key="${key}" ${on ? "checked" : ""} /><span>${escapeHtml(t)}</span></label>`;
       }).join("");
-      return `<details class="group-collapse"><summary>${escapeHtml(name)}</summary><div class="group-access group-check-list">${checks}</div></details>`;
+      return `<div class="rs-row"><span class="rs-name">${escapeHtml(s.name)}</span><div class="rs-checks">${checks}</div></div>`;
     }).join("");
+    wrap.innerHTML = rows || `<div class="empty-hint">Сотрудники не заданы.</div>`;
     wrap.querySelectorAll('input[type="checkbox"]').forEach((cb) => cb.addEventListener("change", () => applyParams()));
   }
   function renderSverkiUsersChecks(container) {
