@@ -3007,14 +3007,35 @@
   let scanlogDateLoad = "";     // "YYYY-MM-DD" — дата отгрузки (погрузки); "" = все
   let scanlogDateUnload = "";   // "YYYY-MM-DD" — дата выгрузки; "" = все
   let scanlogEntries = [];      // последние записи, полученные с сервера
+  // Сигнатура последней отрисованной выборки журнала. Автообновление (раз в
+  // несколько секунд) НЕ перерисовывает дерево, если данные не изменились —
+  // иначе полная перерисовка DOM сбрасывала прокрутку и раскрытые боксы,
+  // и пользователь видел, что «бокс сам через пару секунд схлопнулся».
+  let scanlogSignature = null;
+  const scanlogSig = (entries) => {
+    const parts = [];
+    for (const e of entries) {
+      parts.push([
+        e && e.ts, e && e.action, e && e.client, e && e.bundleName, e && e.box,
+        e && e.code, e && e.name, e && e.missing ? 1 : 0, e && e.userName, e && e.qty,
+      ].join("|"));
+    }
+    parts.sort();
+    return parts.join("\n");
+  };
   async function loadScanLog() {
     try {
       const q = scanlogFilterAction ? `?action=${encodeURIComponent(scanlogFilterAction)}` : "";
       const r = await api(`/api/scanlog${q}`);
-      scanlogEntries = r.entries || [];
+      const fresh = r.entries || [];
+      const sig = scanlogSig(fresh);
+      if (sig === scanlogSignature) return; // данных не изменилось — DOM не трогаем
+      scanlogSignature = sig;
+      scanlogEntries = fresh;
       renderScanLog(applyScanlogFilters(scanlogEntries));
     } catch {
       scanlogEntries = [];
+      scanlogSignature = null;
       renderScanLog([]);
     }
   }
@@ -3075,13 +3096,14 @@
         const miss = !!e.missing;
         // Партстикер позиции — сокращённой формой, как в сборке (ведущие нули урезаем).
         const ps = (e && e.partsticker) ? escapeHtml(shortPs(e.partsticker)) : "";
-        return `<div class="wb-log-detail${miss ? " wb-missing" : ""}">
-          <span class="wbl-time">${e.ts ? fmtDateTimeSec(e.ts) : ""}</span>
-          ${ps ? `<span class="wbl-ps">${ps}</span>` : ""}
-          <span class="wbl-art">${escapeHtml(e.code || "—")}</span>
-          <span class="wbl-name">${escapeHtml(e.name || "")}</span>
-          <span class="wbl-qty">${miss ? "не найдено" : (Number(e.qty) || "—")}</span>
-        </div>`;
+        // Детали в виде таблицы по столбцам: Время | ID(партстикер) | Артикул | Наименование | Кол-во/статус.
+        return `<tr class="wb-log-detail${miss ? " wb-missing" : ""}">
+          <td class="wbl-time">${e.ts ? fmtDateTimeSec(e.ts) : ""}</td>
+          <td class="wbl-ps">${ps || "—"}</td>
+          <td class="wbl-art">${escapeHtml(e.code || "—")}</td>
+          <td class="wbl-name">${escapeHtml(e.name || "")}</td>
+          <td class="wbl-qty">${miss ? "не найдено" : (Number(e.qty) || "—")}</td>
+        </tr>`;
       }
       let html = "";
       let ci = 0;
@@ -3119,7 +3141,10 @@
             <span class="wbl-box">Бокс: ${escapeHtml(waybillBoxName(box))}</span>
             <span class="wbl-count">(${uniq.length})</span>
           </div>`;
-          html += `<div class="wb-log-details" id="wdet-${ci}-${bi}"${boxOpen ? "" : " hidden"}>${uniq.map(detailRow).join("")}</div>`;
+          html += `<div class="wb-log-details wb-tbl" id="wdet-${ci}-${bi}"${boxOpen ? "" : " hidden"}><table><thead><tr>
+            <th class="wbl-time">Время</th><th class="wbl-ps">ID</th><th class="wbl-art">Артикул</th>
+            <th class="wbl-name">Наименование</th><th class="wbl-qty">Кол-во</th>
+          </tr></thead><tbody>${uniq.map(detailRow).join("")}</tbody></table></div>`;
           bi++;
         }
         html += `</div>`;
@@ -5550,7 +5575,7 @@
           ? ` · оставалось ${remBefore} — засчитано ${remBefore}`
           : ` · осталось ${r.left} · готово ${done}/${waybillLocal.items.length}`;
         setWaybillStatus(`ХОРОШО · ${val}${tail}`);
-        logBarcodeScan("detail", val, true, clamped ? "засчитано полностью" : "успешно", it0 && it0.partsticker);
+        logBarcodeScan("detail", val, true, clamped ? "засчитано полностью" : "успешно", it0 && it0.partsticker, it0 && it0.art);
         renderWaybill();
         loadShipments();
         // Перечитываем накладную с сервера — чтобы при нескольких строках одного
@@ -5561,14 +5586,14 @@
         if (it0) it0.scanned = Math.max(0, Number(it0.scanned || 0) - scanQty);
         setWaybillStatus("ПЛОХО · " + ((r && r.error) || "Деталь не принята"));
         playScanFeedback(false, "Плохо");
-        logBarcodeScan("detail", val, false, (r && r.error) ? String(r.error) : "деталь не принята", it0 && it0.partsticker);
+        logBarcodeScan("detail", val, false, (r && r.error) ? String(r.error) : "деталь не принята", it0 && it0.partsticker, it0 && it0.art);
         renderWaybill();
       }
     } catch (e) {
       if (it0) it0.scanned = Math.max(0, Number(it0.scanned || 0) - scanQty);
       setWaybillStatus("ПЛОХО · " + ((e && e.message) || "Ошибка приёмки детали"));
       playScanFeedback(false, "Плохо");
-      logBarcodeScan("detail", val, false, (e && e.message) ? String(e.message) : "ошибка приёмки детали", it0 && it0.partsticker);
+      logBarcodeScan("detail", val, false, (e && e.message) ? String(e.message) : "ошибка приёмки детали", it0 && it0.partsticker, it0 && it0.art);
       renderWaybill();
     }
   }
@@ -8865,15 +8890,21 @@
       // клиенту, а в остановку попадают накладные лишь её клиентов. Иначе накладные
       // дублировались бы в каждую точку (позиций ×N = число клиентов адреса).
       const dedupeItems = (arr) => {
-        const seen = new Set();
-        const out = [];
+        // Объединяем одинаковые позиции (артикул + партстикер) СУММОЙ количества.
+        // Раньше дубль просто отбрасывался по ключу art|partsticker|qty — если 1С
+        // отдаёт артикул без партстикера (прочерк) несколькими строками по 1 шт
+        // (итого 2), вторая строка терялась и в сборку попадало 1 вместо 2.
+        const byKey = new Map();
         for (const it of arr) {
-          const k = String((it && it.art) || "") + "|" + String((it && it.partsticker) || "") + "|" + String((it && it.qty) || "");
-          if (seen.has(k)) continue;
-          seen.add(k);
-          out.push(it);
+          const k = String((it && it.art) || "") + "|" + String((it && it.partsticker) || "");
+          if (byKey.has(k)) {
+            const e = byKey.get(k);
+            e.qty = (Number(e.qty) || 0) + (Number(it.qty) || 0);
+          } else {
+            byKey.set(k, Object.assign({}, it));
+          }
         }
-        return out;
+        return [...byKey.values()];
       };
       for (let i = 0; i < stopGroups.length; i++) {
         const g = stopGroups[i];
@@ -9821,6 +9852,10 @@
   }
 
   // ---- Логи сканов деталей при сборке (вкладка «Логи», только админ) ----
+  // Раскрытые клиенты в журнале сканов («Логи»): состояние живёт между
+  // перерисовками (фильтр/обновление), чтобы раскрытая вкладка клиента сама
+  // не закрывалась.
+  let scansOpen = new Set();
   async function renderScansLog() {
     const list = el.scansLogList;
     if (!list) return;
@@ -9846,20 +9881,63 @@
         return;
       }
       renderScansSummary(rows.length, rows.filter((x) => x.ok === true).length, rows.filter((x) => x.ok !== true).length);
-      list.innerHTML = rows.map((x) => {
-        const ok = x.ok === true;
-        return `<tr class="${ok ? "scan-ok" : "scan-fail"}">
-          <td>${escapeHtml(x.ts ? fmtDateTimeSec(x.ts) : "")}</td>
-          <td>${escapeHtml(x.userName || "—")}</td>
-          <td>${escapeHtml(x.client || "—")}</td>
-          <td>${x.partsticker ? escapeHtml(shortPs(x.partsticker)) : "—"}</td>
-          <td><span class="scan-code">${escapeHtml(x.code || "—")}</span></td>
-          <td>${escapeHtml(x.box ? waybillBoxName(x.box) : "—")}</td>
-          <td>${x.ok === true ? "Да" : "Нет"}</td>
-          <td>${ok ? "успешно" : "неуспешно"}</td>
-          <td>${escapeHtml(x.reason || "")}</td>
-        </tr>`;
-      }).join("");
+      // Группируем строки по клиентам в раскрываемые вкладки (Клиент → его сканы).
+      const groups = new Map();
+      for (const x of rows) {
+        const c = String(x.client || "Без клиента");
+        if (!groups.has(c)) groups.set(c, []);
+        groups.get(c).push(x);
+      }
+      const frag = [];
+      for (const [client, items] of groups) {
+        const open = scansOpen.has(client);
+        frag.push(`<div class="scans-client" data-scans-client="${escapeHtml(client)}">
+          <div class="scans-client-head" title="Нажмите, чтобы раскрыть/свернуть сканы клиента">
+            <span class="scans-arrow">${open ? "▾" : "▸"}</span>
+            <span class="scans-client-name">${escapeHtml(client)}</span>
+            <span class="scans-client-count">(${items.length})</span>
+          </div>
+          <div class="scans-client-body"${open ? "" : " hidden"}>
+            <table>
+              <thead><tr>
+                <th>ВРЕМЯ</th><th>СОТРУДНИК</th><th>ПАРТСТИКЕР</th><th>КОД</th><th>БОКС</th>
+                <th>АРТИКУЛ В НАКЛАДНОЙ</th><th>СТАТУС</th><th>ПРИЧИНА</th>
+              </tr></thead>
+              <tbody>${items.map((x) => {
+                const ok = x.ok === true;
+                return `<tr class="${ok ? "scan-ok" : "scan-fail"}">
+                  <td>${escapeHtml(x.ts ? fmtDateTimeSec(x.ts) : "")}</td>
+                  <td>${escapeHtml(x.userName || "—")}</td>
+                  <td>${x.partsticker ? escapeHtml(shortPs(x.partsticker)) : "—"}</td>
+                  <td><span class="scan-code">${escapeHtml(x.art || x.code || "—")}</span></td>
+                  <td>${escapeHtml(x.box ? waybillBoxName(x.box) : "—")}</td>
+                  <td>${x.ok === true ? "Да" : "Нет"}</td>
+                  <td>${ok ? "успешно" : "неуспешно"}</td>
+                  <td>${escapeHtml(x.reason || "")}</td>
+                </tr>`;
+              }).join("")}</tbody>
+            </table>
+          </div>
+        </div>`);
+      }
+      list.innerHTML = frag.join("");
+      // Клик по заголовку клиента раскрывает/сворачивает его сканы; состояние
+      // сохраняем, чтобы раскрытая вкладка не закрывалась при повторных рендерах.
+      list.querySelectorAll("[data-scans-client]").forEach((block) => {
+        const head = block.querySelector(".scans-client-head");
+        if (!head) return;
+        head.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          const client = block.getAttribute("data-scans-client") || "";
+          const body = block.querySelector(".scans-client-body");
+          const arrow = block.querySelector(".scans-arrow");
+          if (!body) return;
+          const nowOpen = body.hidden;
+          body.hidden = !nowOpen;
+          if (arrow) arrow.textContent = nowOpen ? "▾" : "▸";
+          if (nowOpen) scansOpen.add(client); else scansOpen.delete(client);
+        });
+      });
     } catch (e) {
       list.innerHTML = `<tr><td colspan="9" class="num">Ошибка загрузки: ${escapeHtml((e && e.message) || String(e))}</td></tr>`;
     }
@@ -10769,8 +10847,31 @@
   // вместе с маршрутом при «Сохранить маршрут».
   if (el.fillFrom1CBtn) {
     el.fillFrom1CBtn.addEventListener("click", async () => {
-      const ids = routeOrderIds.length ? routeOrderIds.slice() : [...selectedRouteClientIds];
-      const chosen = ids.map((id) => driverClientsCache.find((x) => String(x.id) === String(id))).filter(Boolean);
+      // Раскрываем объединённого клиента (связку, несколько контрагентов на один
+      // адрес) на всех его членов: у каждого внутреннего клиента свой ИНН и логин,
+      // и каждый должен уйти в 1С со своими данными и появиться в «Логи 1C»
+      // отдельной строкой — иначе в логе виден только общий (STP) и непонятно,
+      // кто из внутренних получил данные, а кто нет.
+      const picked = routeOrderIds.length ? routeOrderIds.slice() : [...selectedRouteClientIds];
+      const ids = new Set();
+      for (const id of picked) {
+        const s = String(id);
+        ids.add(s);
+        const c = driverClientsCache.find((x) => String(x.id) === s);
+        // Раскрываем связку по ОБЩЕМУ АДРЕСУ (bundleAddress || address) — так связка
+        // схлопывается в одну остановку маршрута. На одном адресе может быть
+        // несколько контрагентов, у каждого свой ИНН и логин — каждый должен уйти
+        // в 1С со своими данными и появиться в «Логи 1C» отдельной строкой (ИНН и
+        // логин контрагента, по которому взят документ), а не общим STP.
+        const addrKey = String((c && (c.bundleAddress || c.address)) || "").trim().toLowerCase();
+        if (addrKey) {
+          driverClientsCache.forEach((m) => {
+            const mk = String((m && (m.bundleAddress || m.address)) || "").trim().toLowerCase();
+            if (mk && mk === addrKey) ids.add(String(m.id));
+          });
+        }
+      }
+      const chosen = [...ids].map((id) => driverClientsCache.find((x) => String(x.id) === id)).filter(Boolean);
       if (!chosen.length) { toast("Сначала выберите клиентов"); return; }
       const payload = chosen.map((c) => ({ inn: (c && c.inn) || "", login: (c && c.login) || "" }));
       try {
@@ -12530,6 +12631,20 @@
         if (el.nfDeleteSelected) el.nfDeleteSelected.disabled = nfSelected.size === 0;
       });
     });
+    // Вся ячейка галочки — отдельная зона: клик в любом её месте только
+    // переключает галочку и НЕ открывает модалку (промах мимо чекбокса больше
+    // не разворачивает детали). Сам чекбокс обрабатывается выше.
+    wrap.querySelectorAll("td.nf-check-cell").forEach((td) => {
+      td.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        if (ev.target && ev.target.closest && ev.target.closest("input[type=checkbox]")) return;
+        const cb = td.querySelector("input[data-nf-check]");
+        if (cb) {
+          cb.checked = !cb.checked;
+          cb.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      });
+    });
     // Кнопка «Удалить выбранные» в шапке — закреплена, видна админу.
     if (el.nfDeleteSelected) {
       el.nfDeleteSelected.hidden = !canDel;
@@ -12542,7 +12657,7 @@
   }
   // Логи скана деталей при сборке (вкладка «Логи» у админа): шлём НЕУСПЕШНЫЕ сканы
   // (ok:false), чтобы диспетчер видел, какие коды не находились/не принимались.
-  function logBarcodeScan(kind, code, ok, reason, partsticker) {
+  function logBarcodeScan(kind, code, ok, reason, partsticker, art) {
     try {
       api("/api/logs/barcode", { method: "POST", body: JSON.stringify({
         kind: String(kind || "detail"),
@@ -12550,6 +12665,7 @@
         ok: !!ok,
         reason: String(reason || ""),
         partsticker: String(partsticker || ""),
+        art: String(art || ""),
         client: String(waybillClientName || ""),
         box: String(waybillBox || ""),
         routeId: String(waybillRouteId || ""),

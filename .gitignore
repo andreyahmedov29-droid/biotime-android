@@ -3,6 +3,7 @@
 biotime.config.json
 .data/
 data-test/
+before-restore-*.json
 
 # ---- Node ----
 node_modules/

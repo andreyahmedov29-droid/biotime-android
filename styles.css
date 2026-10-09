@@ -547,6 +547,7 @@ thead th {
   width: 26px;
   height: 26px;
   border-radius: 50%;
+  object-fit: cover;
   flex-shrink: 0;
   font-size: 12px;
   font-weight: 700;
@@ -7893,6 +7894,36 @@ button.icon-btn svg,
 .wbl-name { flex: 1 1 auto; opacity: .9; }
 .wbl-client-sub { font-size: 12px; opacity: .65; font-weight: 600; }
 .wbl-qty { white-space: nowrap; opacity: .8; }
+/* Детали бокса таблицей по столбцам (Время | ID | Артикул | Наименование | Кол-во) */
+.wb-log-details.wb-tbl { display: block; padding-left: 16px; margin: 2px 0; overflow-x: auto; }
+.wb-log-details.wb-tbl table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.wb-log-details.wb-tbl th {
+  text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
+  color: #777; padding: 3px 8px; border-bottom: 1px solid rgba(255,255,255,0.12); white-space: nowrap;
+}
+.wb-log-details.wb-tbl td { padding: 4px 8px; border-bottom: 1px dashed rgba(255,255,255,0.07); vertical-align: top; }
+.wb-log-details.wb-tbl .wb-log-detail { display: table-row; gap: 0; }
+.wb-log-details.wb-tbl .wbl-time { min-width: 150px; }
+.wb-log-details.wb-tbl .wbl-art { min-width: 92px; }
+.wb-log-details.wb-tbl .wbl-qty { text-align: right; white-space: nowrap; }
+.wb-log-details.wb-tbl .wbl-name { white-space: normal; }
+/* Журнал «Логи»: вкладки по клиентам (Клиент → его сканы) */
+.scans-client { margin-bottom: 8px; border: 1px solid rgba(255,255,255,0.09); border-radius: 9px; overflow: hidden; }
+.scans-client-head {
+  display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none;
+  padding: 8px 10px; background: rgba(0,0,0,0.18); font-weight: 700; font-size: 13px;
+}
+.scans-client-head:hover { background: rgba(0,0,0,0.28); }
+.scans-client-arrow { width: 14px; text-align: center; color: var(--amber); }
+.scans-client-name { flex: 1 1 auto; }
+.scans-client-count { opacity: .6; font-variant-numeric: tabular-nums; }
+.scans-client-body { overflow-x: auto; }
+.scans-client-body table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.scans-client-body thead th {
+  text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
+  color: #777; padding: 5px 8px; border-bottom: 1px solid rgba(255,255,255,0.12); white-space: nowrap;
+}
+.scans-client-body td { padding: 4px 8px; border-bottom: 1px dashed rgba(255,255,255,0.07); white-space: nowrap; }
 .wbl-count {
   margin-left: auto; opacity: .65; font-size: 12px; font-weight: 600;
   font-variant-numeric: tabular-nums; /* ровные цифры: 1 / 12 не «пляшут» по ширине */

@@ -3237,12 +3237,14 @@ async function fetchOnecRealization(inn, login) {
           const part = String((it && (it.id_partstiker || it.partsticker)) || "").trim();
           const art = String((it && (it.articul_number || it.article || it.art)) || "").trim() || part;
           const shipmentQty = Number(it && it.shipment_quantity != null ? it.shipment_quantity : (it.quantity != null ? it.quantity : it.qty));
-          const partQty = Number(it && it.quantity != null ? it.quantity : shipmentQty);
+          // Без партстикера количество берём из shipment_quantity целиком.
+          let partQty = Number(it && it.quantity != null ? it.quantity : shipmentQty);
+          if (!part) partQty = Number.isFinite(shipmentQty) ? shipmentQty : partQty;
           const rawName = String((it && (it.name || it.наименование || it.id_partstiker)) || "").trim();
           return {
             art,
             name: cleanPartstickerName(rawName, art),
-            qty: partQty > 0 ? partQty : 1,                 // цель строки = кол-во этой порции (партисткера)
+            qty: partQty > 0 ? partQty : 1,                 // цель строки (= shipment_quantity без партстикера)
             scanned: 0,
             missing: false,
             partsticker: part,                              // храним внутри (не выводим)
@@ -3253,7 +3255,12 @@ async function fetchOnecRealization(inn, login) {
         .filter((it) => it.art);
       if (!items.length) continue;
       const number = String((d && (d.shipment_number || d.number || d.номер)) || "").trim();
-      pushOnecPullLog({ source: "auto", inn: innV, login: loginV, ok: true, number, posCount: items.length, items, message: "забрана накладная " + number });
+      // Успешный забор в журнал пишет ТОЛЬКО кнопочный запрос (from-1c, единый
+      // формат «забрано накладных: N»). Автоматический забор (autoPull при
+      // создании/заполнении маршрута) здесь НЕ дублирует ok-строку — иначе на
+      // одного клиента в «Логи 1C» падает по 2 строки («забрано накладных» +
+      // «забрана накладная»). Ошибки и «пусто» авто-забора логируются через
+      // logEvt выше — их видно.
       return {
         id: number || String((d && d.id) || ""),
         number,

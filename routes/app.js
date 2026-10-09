@@ -127,7 +127,9 @@ module.exports = function createAppHandler({
         }
         try {
           const ctrl = new AbortController();
-          const to = setTimeout(() => ctrl.abort(), 6000);
+          // 1С может отвечать медленно (особенно при параллельных запросах).
+          // Подняли до 25с, чтобы не обрывать на медленном ответе.
+          const to = setTimeout(() => ctrl.abort(), 25000);
           let r;
           try {
             r = await fetch(target, {
@@ -148,24 +150,36 @@ module.exports = function createAppHandler({
             return { ok: false, reason: "bad_json" };
           }
           const arr = Array.isArray(data) ? data : (data ? [data] : []);
-          const alreadyLog = getOnecPullLog ? getOnecPullLog() : [];
           const shipments = [];
+          // Диагностика «почему пусто»: 1С вернула документы, но ни один не прошёл
+          // дальше. Считаем, по какой причине каждый документ пропущен, чтобы в
+          // «Логи 1C» было видно настоящую причину, а не общее «пусто».
+          const diag = { docs: arr.length, skipLogin: 0, skipInn: 0, skipNoPos: 0, skipNoItems: 0, skipDup: 0 };
+          // Защита от повтора ОДНОЙ И ТОЙ ЖЕ накладной в рамках ОДНОГО ответа
+          // (1С может вернуть документ дважды). Глобальной сверки по журналу нет:
+          // 1С сама следит за тем, что уже отдала (ставит метку и не отдаёт снова),
+          // а разные клиенты могут получать накладные с одинаковым номером — такой
+          // дедуп раньше оставлял всех, кроме первого, «пустыми».
+          const seenBuyer = new Set();
           for (const d of arr) {
-            // Каждая накладная из 1С несёт поле inn (кому она принадлежит).
-            // Забираем её клиенту ТОЛЬКО если это его ИНН (или поле не указано).
-            // Иначе, если 1С отдаёт по запросу чужие накладные, они не должны
-            // «прилипать» к первому запросившему (баг: все накладные уходили
-            // в одного клиента).
+            // В каждой накладной 1С несёт свой login и inn. Разносим её клиенту
+            // ТОЛЬКО если login и inn накладной совпадают с данными этого клиента.
+            // Иначе (1С отдала накладные других/все активные) — не разносим.
+            const docLogin = String((d && (d.login != null ? d.login : "")) || "").trim();
             const docInn = String((d && (d.inn != null ? d.inn : "")) || "").trim();
-            if (docInn && docInn !== inn) continue;
+            if (docLogin && docLogin !== login) { diag.skipLogin++; continue; }
+            if (docInn && docInn !== inn) { diag.skipInn++; continue; }
             const list = Array.isArray(d && d.id_partstiker_list) ? d.id_partstiker_list : [];
-            if (!list.length) continue;
+            if (!list.length) { diag.skipNoPos++; continue; }
             const items = list
               .map((it) => {
                 const part = String((it && (it.id_partstiker || it.partsticker)) || "").trim();
                 const art = String((it && (it.articul_number || it.article || it.art)) || "").trim() || part;
                 const shipmentQty = Number(it && it.shipment_quantity != null ? it.shipment_quantity : (it.quantity != null ? it.quantity : it.qty));
-                const partQty = Number(it && it.quantity != null ? it.quantity : shipmentQty);
+                // Если партстикера нет (прочерк), количество берём из shipment_quantity
+                // целиком; при наличии партстикера — количество внутри стикера (quantity).
+                let partQty = Number(it && it.quantity != null ? it.quantity : shipmentQty);
+                if (!part) partQty = Number.isFinite(shipmentQty) ? shipmentQty : partQty;
                 const rawName = String((it && (it.name || it.наименование || it.id_partstiker)) || "").trim();
                 const name = String(rawName || "").trim();
                 const nm = (() => {
@@ -188,12 +202,12 @@ module.exports = function createAppHandler({
                 };
               })
               .filter((it) => it.art);
-            if (!items.length) continue;
+            if (!items.length) { diag.skipNoItems++; continue; }
             const buyer = String((d && (d.shipment_number || d.number)) || "").trim();
-            const dup = alreadyLog.some((e) => e && e.ok && String(e.number) === buyer);
-            if (dup) continue;
+            const dup = seenBuyer.has(buyer);
+            if (dup) { diag.skipDup++; continue; }
+            seenBuyer.add(buyer);
             shipments.push({ buyer, items });
-            if (pushOnecPullLog) pushOnecPullLog({ source: "button", inn, login, ok: true, number: buyer, posCount: items.length, items });
           }
           if (shipments.length) {
             logEvt({
@@ -201,6 +215,7 @@ module.exports = function createAppHandler({
               number: shipments.map((s) => s.buyer).join(" | "),
               posCount: shipments.reduce((n, s) => n + s.items.length, 0),
               message: "забрано накладных: " + shipments.length,
+              items: shipments.reduce((acc, s) => acc.concat(s.items), []),
             });
             return {
               ok: true,
@@ -208,25 +223,62 @@ module.exports = function createAppHandler({
               items: shipments.reduce((acc, s) => acc.concat(s.items), []),
             };
           }
-          logEvt({ ok: false, reason: "empty", message: "1С не вернула накладных по этому ИНН/логину" });
+          // Пустой результат (1С вернула 0 документов — повтор, метка уже стоит или
+          // на этот логин нет накладных) в лог не пишем: он только «сбивает» при
+          // повторном заборе. Диагностику оставляем лишь когда документы пришли,
+          // но были отфильтрованы — это реальная проблема, её надо видеть.
+          if (diag.docs > 0) {
+            logEvt({
+              ok: false,
+              reason: "empty",
+              message:
+                "док-ов: " + diag.docs +
+                "; пропущено: чужой ЛОГИН=" + diag.skipLogin +
+                ", чужой ИНН=" + diag.skipInn +
+                ", без позиций=" + diag.skipNoPos +
+                ", без артикулов=" + diag.skipNoItems +
+                ", уже забрано(дубль)=" + diag.skipDup,
+            });
+          }
           return { ok: false, reason: "empty" };
         } catch (e) {
           logEvt({ ok: false, reason: "err", message: "ошибка запроса к 1С: " + (e && e.message ? e.message : String(e)) });
           return { ok: false, reason: "err" };
         }
       };
-      // Обработка ПОСЛЕДОВАТЕЛЬНО, по одному клиенту за раз: берём клиента, его
-      // ИНН/логин, ищем в 1С и записываем результат — затем следующий. Это
-      // исключает гонки при дедупликации накладных по номеру (alreadyLog) и
-      // предсказуемо: каждая накладная попадает ровно своему клиенту. Плюс не
-      // нагружает 1С и контейнер одновременными тяжёлыми запросами (защита от
-      // OOM, как и раньше).
-      const out = [];
-      for (let i = 0; i < clients.length; i++) {
-        out.push(await fetchOne(clients[i]));
-      }
-      const filled = out.filter((o) => o.ok).length;
-      const noInn = out.filter((o) => o.reason === "no_inn").length;
+      // Группируем по (ИНН, логин): если несколько клиентов (например группа STP)
+      // ходят в 1С с ОДНИМ логином и ИНН, не шлём N одинаковых запросов — 1С после
+      // первого запроса ставит метку «получено» и на повторные (те же логин/ИНН)
+      // отвечает «док-ов: 0». Шлём ОДИН запрос на уникальную пару, а результат
+      // прикладываем всем клиентам группы.
+      const groups = new Map();
+      clients.forEach((c, i) => {
+        const inn = String((c && c.inn) || "").trim();
+        const login = String((c && c.login) || "").trim();
+        const key = inn + "\u0000" + login;
+        if (!groups.has(key)) groups.set(key, { inn, login, idxs: [] });
+        groups.get(key).idxs.push(i);
+      });
+      const entries = [...groups.values()];
+      // Параллельная отправка уникальных запросов (лимит одновременных — 20).
+      const CONCURRENCY = 20;
+      const out = new Array(clients.length);
+      let cursor = 0;
+      const worker = async () => {
+        while (cursor < entries.length) {
+          const g = entries[cursor++];
+          const head = clients[g.idxs[0]] || {};
+          const r = await fetchOne({
+            inn: g.inn,
+            login: g.login,
+            client: String((head.client || head.address || head.bundleName) || "").trim(),
+          });
+          for (const idx of g.idxs) out[idx] = r;
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, entries.length) }, () => worker()));
+      const filled = out.filter((o) => o && o.ok).length;
+      const noInn = out.filter((o) => o && o.reason === "no_inn").length;
       return sendJson(res, 200, { ok: true, filled, noInn, waybills: out });
     }
 

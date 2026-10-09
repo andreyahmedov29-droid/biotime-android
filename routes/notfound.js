@@ -146,6 +146,41 @@ module.exports = function createNotfoundHandler({
           db.scanLog = db.scanLog.filter((e) => !(e && e.action === "waybill" && e.missing
             && String(e.code || "").trim().toLowerCase() === art));
         }
+        // Помимо статуса и scanLog снимаем саму пометку «не найдено» (missing)
+        // с позиций накладных маршрутов этого клиента и артикула. Иначе отчёт
+        // «Проблемы склада» пересчитается и вернёт строку — «пишет Удалено, а нет».
+        const nfNorm2 = (s) => String(s || "").trim().replace(/\s+/g, " ").toLowerCase();
+        const nfClientDisplay2 = (src) => {
+          const b = String((src && src.bundleName) || "").trim();
+          if (b) return b;
+          const c = String((src && src.client) || "").trim();
+          if (c) return c;
+          const joined = (Array.isArray(src && src.members) ? src.members : [])
+            .map((m) => String((m && (m.client || m.bundleName)) || "").trim())
+            .filter(Boolean).join(", ");
+          if (joined) return joined;
+          return String((src && src.address) || "—");
+        };
+        const cNorm = String(key.slice(0, key.lastIndexOf("|")) || "").trim();
+        const aNorm = String(art || "").trim();
+        if (aNorm) {
+          for (const route of (Array.isArray(db.driverRoutes) ? db.driverRoutes : [])) {
+            alignWaybillsToClients(route);
+            const clients = Array.isArray(route.clients) ? route.clients : [];
+            clients.forEach((rc, ci) => {
+              const cname = nfNorm2(nfClientDisplay2(rc));
+              if (cNorm && cname !== cNorm) return;
+              const wb = route.waybills && route.waybills[ci];
+              const its = wb && Array.isArray(wb.items) ? wb.items : [];
+              for (const it of its) {
+                if (nfNorm2(String(it.art || "")) === aNorm && (it.missing || (Number(it.missingQty) || 0) > 0)) {
+                  it.missing = false;
+                  it.missingQty = 0;
+                }
+              }
+            });
+          }
+        }
         await persistDb();
         void persistNotFoundStatuses().catch(() => {});
         return sendJson(res, 200, { ok: true });
