@@ -185,14 +185,19 @@ class MainActivity : AppCompatActivity() {
             this,
             object : OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() {
-                    if (webView.canGoBack()) {
-                        // There is history inside the WebView - navigate back.
-                        webView.goBack()
-                    } else {
-                        // Нет истории — НИЧЕГО не делаем: свайп от края экрана не
-                        // должен сворачивать приложение и выбрасывать на рабочий
-                        // стол. Свернуть можно только кнопкой «Домой» или
-                        // системным жестом снизу вверх.
+                    // «Назад» отдаём самой странице: она знает свои экраны
+                    // (фото → раздел → меню → вкладка → таймер). Через историю
+                    // WebView идти нельзя — iframe-модули (Рекламации) держат
+                    // собственные записи, и goBack «застревал» в модуле.
+                    try {
+                        webView.evaluateJavascript(
+                            "(function(){try{return window.__btBack&&window.__btBack()?1:0}catch(e){return 0}})()"
+                        ) { result ->
+                            // 1 — шаг обработан внутри приложения, 0 — деваться некуда:
+                            // ничего не делаем, приложение не сворачиваем.
+                        }
+                    } catch (_: Exception) {
+                        // если страница ещё не готова — просто игнорируем жест
                     }
                 }
             }
