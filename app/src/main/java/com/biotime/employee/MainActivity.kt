@@ -123,9 +123,10 @@ class MainActivity : AppCompatActivity() {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
         }
-        // 3) Закреплённый режим (lock task / kiosk): кнопка «Домой» не сворачивает
-        //    приложение в фон на ТСД. Не требует прав администратора — пиннинг.
-        try { startLockTask() } catch (_: Exception) { /* OEM без поддержки пиннинга */ }
+        // 3) Закрепление экрана (startLockTask) БОЛЬШЕ НЕ ЗАПРАШИВАЕТСЯ: система
+        //    показывала диалог «Закрепить приложение?» при каждом запуске, а
+        //    защита от случайного выхода теперь живёт в веб-слое (история
+        //    навигации: свайп назад идёт по экранам приложения, а не наружу).
 
         configureWebView()
         // If the Activity was recreated (e.g. the system killed the background
@@ -188,10 +189,10 @@ class MainActivity : AppCompatActivity() {
                         // There is history inside the WebView - navigate back.
                         webView.goBack()
                     } else {
-                        // No history. Instead of closing the Activity (finish), move
-                        // the app to the background: Activity and WebView stay alive,
-                        // the page stays open on return and no re-login is needed.
-                        moveTaskToBack(true)
+                        // Нет истории — НИЧЕГО не делаем: свайп от края экрана не
+                        // должен сворачивать приложение и выбрасывать на рабочий
+                        // стол. Свернуть можно только кнопкой «Домой» или
+                        // системным жестом снизу вверх.
                     }
                 }
             }
@@ -597,12 +598,10 @@ class MainActivity : AppCompatActivity() {
             } catch (_: Exception) { /* не критично */ }
         }
 
-        // Выход из закреплённого режима (lock task / kiosk) и перезагрузка WebView.
-        // Нужно, если приложение зависло: веб-кнопка «Перезагрузить» снимает пиннинг
-        // (Home снова работает) и перезагружает страницу.
+        // Перезагрузка WebView из веб-кнопки «Перезагрузить». Закреплённый режим
+        // больше не включается, поэтому снимать нечего.
         @android.webkit.JavascriptInterface
         fun unfreezeApp() {
-            try { stopLockTask() } catch (_: Exception) { /* не был в закреплённом режиме */ }
             runOnUiThread {
                 try { webView.postDelayed({ webView.reload() }, 200) } catch (_: Exception) { /* ignore */ }
             }
