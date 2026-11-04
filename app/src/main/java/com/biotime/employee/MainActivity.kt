@@ -892,6 +892,10 @@ class MainActivity : AppCompatActivity() {
         // вошёл заново, свежая кука сессии подхватывается сразу (сервис START_STICKY
         // всё равно пережил бы фон, но после ручного входа стоп/старт не лишний).
         SessionKeepAliveService.start(this)
+        // Самообновление страницы: WebView может сутками держать старую сборку
+        // (страница не перезагружается), и правки до устройства не доезжают.
+        // Сверяем версию сборки из <meta app-version> с сервером и перезагружаем.
+        checkWebBuild()
         // Если при возврате из фона главный документ не загружен (WebView был
         // пересоздан, а restoreState не восстановил страницу) — возвращаемся на
         // приложение. Куки сессии к этому моменту уже записаны flush() в
@@ -906,6 +910,20 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {
             // восстановление — вспомогательное; сбой не критичен
         }
+    }
+
+    // Сверка версии веб-сборки: WebView может сутками держать старую страницу,
+    // и правки навигации до устройства не доезжают. Сравниваем <meta app-version>
+    // с сервером и перезагружаем страницу, если она устарела.
+    private fun checkWebBuild() {
+        if (!::webView.isInitialized) return
+        val js = "(function(){fetch('/api/app/web-version',{cache:'no-store'})" +
+            ".then(function(r){return r.ok?r.json():null})" +
+            ".then(function(j){if(!j||!j.ok||!j.version)return;" +
+            "var m=document.querySelector('meta[name=\"app-version\"]');" +
+            "var c=m&&m.getAttribute('content');" +
+            "if(c&&c!==String(j.version)){location.reload();}}).catch(function(){})})()"
+        try { webView.evaluateJavascript(js, null) } catch (_: Exception) {}
     }
 
     override fun onDestroy() {
